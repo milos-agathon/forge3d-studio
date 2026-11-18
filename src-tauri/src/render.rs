@@ -1200,7 +1200,7 @@ mod tests {
     #[test]
     #[ignore = "spawns the engine Python session and the GPU"]
     fn the_session_renders_a_frame_and_stops_cleanly() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let python = root.join(".venv/bin/python");
         let dem = root.join("assets/tif/Bryce_Canyon_1024.tif");
         if !python.exists() || !dem.exists() {
@@ -1243,7 +1243,7 @@ mod tests {
     #[test]
     #[ignore = "spawns the engine Python session and the GPU"]
     fn the_new_settings_reach_the_pixels() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let python = root.join(".venv/bin/python");
         let dem = root.join("assets/tif/Bryce_Canyon_1024.tif");
         if !python.exists() || !dem.exists() {
@@ -1325,7 +1325,7 @@ mod tests {
     #[test]
     #[ignore = "spawns the engine Python session and the GPU"]
     fn the_vector_layer_reaches_the_pixels() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let python = root.join(".venv/bin/python");
         let dem = root.join("assets/tif/luxembourg_dem.tif");
         let rail = root.join("assets/gpkg/luxembourg_rail.gpkg");
@@ -1380,7 +1380,7 @@ mod tests {
     #[test]
     #[ignore = "spawns the engine Python session and the GPU"]
     fn the_vector_labels_reach_the_pixels() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let python = root.join(".venv/bin/python");
         let dem = root.join("assets/tif/Mount_Fuji_30m.tif");
         let places = root.join("assets/gpkg/Mount_Fuji_places.gpkg");
@@ -1456,7 +1456,7 @@ mod tests {
     #[test]
     #[ignore = "spawns the engine Python session and the GPU"]
     fn the_clouds_reach_the_pixels() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let python = root.join(".venv/bin/python");
         let dem = root.join("assets/tif/Mount_Fuji_30m.tif");
         if !python.exists() || !dem.exists() {

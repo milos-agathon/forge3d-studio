@@ -131,14 +131,14 @@
     {
       "id": "745806cf-8fec-4ff9-81db-8ecf6fac112e",
       "name": "Bryce_Canyon_naip.tif",
-      "path": "../../assets/tif/Bryce_Canyon_naip.tif",
+      "path": "../assets/tif/Bryce_Canyon_naip.tif",
       "kind": "orthophoto",
       "byteSize": 11775186
     },
     {
       "id": "43a6c18b-ca90-4234-9d15-577cdf06f2bf",
       "name": "Bryce_Canyon_1024.tif",
-      "path": "../../assets/tif/Bryce_Canyon_1024.tif",
+      "path": "../assets/tif/Bryce_Canyon_1024.tif",
       "kind": "dem",
       "byteSize": 3321356
     },

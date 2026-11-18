@@ -66,7 +66,7 @@ fn bryce_terrain(dir: &Path) -> Project {
         Some(TerrainSeed {
             title: Some("Bryce Canyon".to_owned()),
             name: "Bryce_Canyon_1024.tif".to_owned(),
-            path: "../../assets/tif/Bryce_Canyon_1024.tif".to_owned(),
+            path: "../assets/tif/Bryce_Canyon_1024.tif".to_owned(),
             byte_size: 3_321_356,
             dimensions: Some([1024, 1024]),
             elevation_range: Some([2099.23, 2553.58]),
@@ -74,7 +74,7 @@ fn bryce_terrain(dir: &Path) -> Project {
             world_span_xz: Some([4000.0, 3800.0]),
             overlay: Some(TerrainSeedOverlay {
                 name: "Bryce_Canyon_naip.tif".to_owned(),
-                path: "../../assets/tif/Bryce_Canyon_naip.tif".to_owned(),
+                path: "../assets/tif/Bryce_Canyon_naip.tif".to_owned(),
                 byte_size: 11_775_186,
                 opacity: 0.82,
             }),
@@ -153,7 +153,7 @@ fn hdri_studio(dir: &Path) -> Project {
 fn main() {
     let dir = samples_dir();
     fs::create_dir_all(dir.join("media")).expect("create samples directory");
-    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../assets");
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
     if !assets.join("tif/Bryce_Canyon_1024.tif").is_file() {
         eprintln!(
             "note: the Bryce GeoTIFF is not in this checkout (Git LFS?); the sample still writes \

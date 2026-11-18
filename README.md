@@ -1,7 +1,7 @@
 # Forge3D Studio — Tauri shell
 
 The desktop shell for the renewed **Forge3D Studio** product described in
-[`../FORGE3D_STUDIO_IMPLEMENTATION_PLAN.md`](../FORGE3D_STUDIO_IMPLEMENTATION_PLAN.md):
+[`FORGE3D_STUDIO_IMPLEMENTATION_PLAN.md`](FORGE3D_STUDIO_IMPLEMENTATION_PLAN.md):
 a Tauri app around a canonical project model, with one project serving both the
 Studio workspace and (from Phase 3) the Forge3D workspace.
 
@@ -172,14 +172,17 @@ npm run dev          # UI only; the browser shows a "start the shell" notice
 npm run build        # typecheck + production bundle of the UI
 ```
 
+Run `git lfs pull` in the Studio checkout to download the sample and starter-scene rasters.
+
 ## Installing the deb (the stranger's path)
 
 The CI `bundle` job on `main` ships a `deb` artifact. Locally:
 
 ```bash
 npm run tauri:build -- --bundles deb
-sudo dpkg -i "src-tauri/target/release/bundle/deb/Forge3D Studio_0.1.0_amd64.deb"
-python3 -m pip install --user forge3d   # the engine — PyPI (1.49.0 verified 2026-11-16)
+sudo dpkg -i target/release/bundle/deb/*.deb
+GIT_LFS_SKIP_SMUDGE=1 python3 -m pip install --user \
+  'forge3d @ git+https://github.com/milos-agathon/forge3d.git@9804091086364a1824ea8bb0e7f9f2a172fddf45'
 ```
 
 The `deb` is the bundle CI audits (`deb-audit` job: builds the deb, installs
