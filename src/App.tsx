@@ -10,6 +10,7 @@ import { SceneTree } from "./components/SceneTree";
 import { StatusBar } from "./components/StatusBar";
 import { TopBar } from "./components/TopBar";
 import { Viewport3D } from "./viewport/Viewport3D";
+import type { RendererPreference } from "./viewport/forge3dWebMapping";
 import { CloseIcon } from "./components/icons";
 import { useSession } from "./state/session-context";
 
@@ -20,6 +21,18 @@ export default function App() {
   // The two workspaces: the scene (objects, materials, light) and the
   // cartography (the map's layer stack and the layer being edited).
   const [workspace, setWorkspace] = useState<"scene" | "cartography">("scene");
+  const [rendererPreference, setRendererPreference] = useState<RendererPreference>(() => {
+    try {
+      const saved = localStorage.getItem("studio.viewport.renderer");
+      if (saved === "three" || saved === "forge3d-web") return saved;
+    } catch { /* Storage may be disabled. */ }
+    return "auto";
+  });
+  const [rendererStatus, setRendererStatus] = useState("");
+  const chooseRenderer = (value: RendererPreference) => {
+    setRendererPreference(value);
+    try { localStorage.setItem("studio.viewport.renderer", value); } catch { /* Session preference still applies. */ }
+  };
   const cartography = workspace === "cartography";
   // One flag for both banner mounts (start screen, viewport): Restore swaps
   // the one for the other, and the snapshot stays on disk after restoring.
@@ -30,7 +43,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <TopBar workspace={workspace} onWorkspace={setWorkspace} />
+      <TopBar workspace={workspace} onWorkspace={setWorkspace} renderer={rendererPreference} onRenderer={chooseRenderer} />
 
       <main
         className={`workspace${state ? "" : " workspace--empty"}${
@@ -44,7 +57,7 @@ export default function App() {
             </aside>
             <section className="workspace__center">
               <RecoveryBanner dismissed={recoveryDismissed} onDismiss={dismissRecovery} />
-              <Viewport3D />
+              <Viewport3D preference={rendererPreference} onBackend={setRendererStatus} />
               <RenderQueue />
             </section>
             {sidebarOpen && (
@@ -68,7 +81,7 @@ export default function App() {
         )}
       </main>
 
-      <StatusBar />
+      <StatusBar viewport={state ? rendererStatus : ""} />
       <NewProjectDialog />
 
       <div className="toast-stack">

@@ -1238,6 +1238,10 @@ kbd {
   touch-action: none;
 }
 
+.viewport-canvas--terrain { pointer-events: none; }
+.viewport-canvas--terrain[hidden] { display: none; }
+.menu__heading { display: block; padding: 4px 10px; color: var(--text-secondary); }
+
 .viewport-canvas:active {
   cursor: grabbing;
 }
