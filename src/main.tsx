@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import { bridge } from "./bridge/env";
 import { SessionProvider } from "./state/session";
+import "./fonts.css";
 import "./styles.css";
 
 const root = document.getElementById("root");

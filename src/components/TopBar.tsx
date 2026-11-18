@@ -4,6 +4,7 @@ import { useSession } from "../state/session-context";
 import {
   FileIcon,
   FolderIcon,
+  ForgeMark,
   RedoIcon,
   SaveIcon,
   UndoIcon,
@@ -45,7 +46,7 @@ export function TopBar({
     <header className="topbar">
       <div className="brand">
         <span className="brand__mark" aria-hidden="true">
-          F3
+          <ForgeMark />
         </span>
         <span className="brand__name">Forge3D</span>
         <span className="brand__product">Studio</span>

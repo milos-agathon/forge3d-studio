@@ -20,6 +20,8 @@ import { DatasetPicker } from "./DatasetPicker";
 import { bridge } from "../bridge/env";
 import { base64ToArrayBuffer, listGltfNodes } from "../viewport/assets";
 import { useSession } from "../state/session-context";
+import { footprintLabel } from "../state/groundScale";
+import { useGroundScale } from "../state/groundScaleStore";
 import { CartographyProperties } from "./CartographyProperties";
 import { ChoiceField, NumberField, RangeField, Section, TextField, Toggle } from "./fields";
 import type { CloudSettings } from "../bridge/types";
@@ -532,7 +534,7 @@ export function RenderSettingsEditor() {
         </div>
       </Section>
 
-      <Section title="Output" id="render-output">
+      <Section title="Output" id="render-output" summary={`${render.width} × ${render.height} · EV ${render.exposure.toFixed(2)}`}>
         <div className="pair">
           {/* The render service caps a frame at 4096 px per side, so the
               field must not offer a size the renderer will refuse. */}
@@ -546,7 +548,7 @@ export function RenderSettingsEditor() {
         </p>
       </Section>
 
-      <Section title="Shadows" id="render-shadows">
+      <Section title="Shadows" id="render-shadows" summary={render.shadows ? `${render.shadowTechnique.toUpperCase()} · ${render.shadowResolution}` : "Off"}>
         <Toggle label="Sun shadows" checked={render.shadows} onChange={(shadows) => commit({ shadows })} />
         <ChoiceField
           label="Filter"
@@ -602,7 +604,7 @@ export function RenderSettingsEditor() {
         )}
       </Section>
 
-      <Section title="Post" id="render-post">
+      <Section title="Post" id="render-post" summary={render.bloom.enabled ? "Bloom" : "Off"}>
         <Toggle
           label="Bloom the highlights"
           checked={render.bloom.enabled}
@@ -657,7 +659,7 @@ export function RenderSettingsEditor() {
         </p>
       </Section>
 
-      <Section title="Stills" id="render-stills">
+      <Section title="Stills" id="render-stills" summary={[render.stillAov.albedo || render.stillAov.normal || render.stillAov.depth ? "AOV" : null, render.stillDenoise ? "OIDN" : null].filter(Boolean).join(" · ") || "Plain"}>
         <Toggle
           label="AOVs next to the still (albedo · normal · depth)"
           checked={render.stillAov.albedo || render.stillAov.normal || render.stillAov.depth}
@@ -684,7 +686,7 @@ export function RenderSettingsEditor() {
         </p>
 
       </Section>
-      <Section title="Fog" id="atmosphere-fog">
+      <Section title="Fog" id="atmosphere-fog" summary={render.fog.enabled ? `Density ${render.fog.density}` : "Off"}>
         <Toggle
           label="Haze"
           checked={render.fog.enabled}
@@ -755,7 +757,7 @@ export function RenderSettingsEditor() {
         )}
       </Section>
 
-      <Section title="Clouds" id="atmosphere-clouds">
+      <Section title="Clouds" id="atmosphere-clouds" summary={render.clouds.enabled ? `${Math.round(render.clouds.coverage * 100)} %` : "Off"}>
         <Toggle
           label="Clouds"
           checked={render.clouds.enabled}
@@ -843,7 +845,7 @@ export function AtmosphereSection() {
 
   return (
     <>
-      <Section title="Water" id="atmosphere-water">
+      <Section title="Water" id="atmosphere-water" summary={render.water.enabled ? `${Math.round(render.water.level).toLocaleString("en-US")} m` : "Off"}>
         <Toggle
           label="Flood the low ground"
           checked={render.water.enabled}
@@ -1152,10 +1154,16 @@ function TerrainEditor({
     terrain.elevationRange === null
       ? "—"
       : `${terrain.elevationRange[0].toFixed(0)}–${terrain.elevationRange[1].toFixed(0)} m`;
+  // worldSpanXz is in the DEM's own CRS unit: kilometres only through the
+  // sampled ground scale (the pixel size has its own row below).
+  const groundScale = useGroundScale(asset?.path ?? null);
   const footprint =
-    terrain.worldSpanXz === null
-      ? "—"
-      : terrain.worldSpanXz.map((value) => `${(value / 1000).toFixed(2)} km`).join(" × ");
+    footprintLabel(
+      terrain.worldSpanXz,
+      groundScale,
+      (metres) => `${(metres / 1000).toFixed(2)} km`,
+      { unknown: "ground scale unknown", pending: "—" },
+    ) ?? "—";
   const pixels =
     terrain.dimensions === null ? "—" : `${terrain.dimensions[0]} × ${terrain.dimensions[1]} px`;
 
@@ -1192,6 +1200,7 @@ function TerrainEditor({
           max={512}
           step={32}
           value={terrainResolution}
+          style={{ "--pct": `${((terrainResolution - 32) / 480) * 100}%` } as React.CSSProperties}
           onChange={(event) => setTerrainResolution(Number(event.target.value))}
         />
       </label>

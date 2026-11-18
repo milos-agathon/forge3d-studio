@@ -102,7 +102,7 @@ export function AxisGizmo({
                 textAnchor="middle"
                 fontSize="9"
                 fontWeight="600"
-                fill={dim ? handle.colour : "#10130f"}
+                fill={dim ? handle.colour : "#0B0E10"}
                 style={{ pointerEvents: "none", userSelect: "none" }}
               >
                 {handle.label}

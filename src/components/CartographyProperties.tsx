@@ -1,5 +1,7 @@
 import { useSession } from "../state/session-context";
 import { vectorLayers } from "../state/cartography";
+import { footprintLabel, reliefPercent } from "../state/groundScale";
+import { useGroundScale } from "../state/groundScaleStore";
 import type { CartographyLayer } from "../bridge/types";
 import { ChoiceField, NumberField, Section, TextField, Toggle } from "./fields";
 
@@ -378,13 +380,25 @@ function ReliefFacts() {
   );
   const terrain =
     terrainObject && terrainObject.kind.type === "terrain" ? terrainObject.kind : null;
+  const demPath = terrain
+    ? (state?.project.assets.find((asset) => asset.id === terrain.asset)?.path ?? null)
+    : null;
+  const groundScale = useGroundScale(demPath);
   if (!terrainObject || !terrain) return null;
-  const reliefPercent =
-    terrain.elevationRange && terrain.worldSpanXz
-      ? ((terrain.elevationRange[1] - terrain.elevationRange[0]) /
-          Math.max(terrain.worldSpanXz[0], terrain.worldSpanXz[1])) *
-        100
-      : null;
+  // worldSpanXz is in the DEM's own CRS unit; Footprint and Relief need
+  // ground metres, so both go through the sampled ground scale.
+  const relief = reliefPercent(terrain.elevationRange, terrain.worldSpanXz, groundScale);
+  const footprint = footprintLabel(
+    terrain.worldSpanXz,
+    groundScale,
+    (metres) => `${(metres / 1000).toFixed(1)} km`,
+    {
+      unknown: terrain.dimensions
+        ? `${terrain.dimensions[0]} × ${terrain.dimensions[1]} px (ground scale unknown)`
+        : "ground scale unknown",
+      pending: "—",
+    },
+  );
   return (
     <>
       <div className="readout readout--compact">
@@ -395,17 +409,9 @@ function ReliefFacts() {
             : `${terrain.elevationRange[0].toFixed(0)}–${terrain.elevationRange[1].toFixed(0)} m`}
         </dd>
         <dt>Footprint</dt>
-        <dd>
-          {terrain.worldSpanXz === null
-            ? "—"
-            : terrain.worldSpanXz
-                .map((value) => `${(value / 1000).toFixed(1)} km`)
-                .join(" × ")}
-        </dd>
+        <dd>{footprint ?? "—"}</dd>
         <dt>Relief</dt>
-        <dd>
-          {reliefPercent === null ? "—" : `${reliefPercent.toFixed(1)}% of the footprint`}
-        </dd>
+        <dd>{relief === null ? "—" : `${relief.toFixed(1)}% of the footprint`}</dd>
       </div>
       <NumberField
         label="Vertical scale"

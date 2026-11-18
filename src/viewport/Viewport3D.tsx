@@ -19,6 +19,9 @@ import type {
 import { ViewportToolbar } from "../components/ViewportToolbar";
 import { useSession } from "../state/session-context";
 import { AxisGizmo, type Axis } from "./AxisGizmo";
+import { NorthArrow } from "./NorthArrow";
+import { formatDistance, mapFrame } from "./mapGrid";
+import { buildMapGrid, type MapGridHandle } from "./mapGridLayer";
 import type { CartographyLayer, Material, Project, TerrainPreview } from "../bridge/types";
 import {
   base64ToArrayBuffer,
@@ -48,21 +51,23 @@ import {
 } from "./cartography";
 import { bakeSunVisibility, visibilityBytesToRgba } from "./sunVisibility";
 import { buildPolygonMesh } from "./polygonMesh";
+import { groundSpanMetres } from "../state/groundScale";
+import { publishGroundScale, useGroundScale } from "../state/groundScaleStore";
 
 const DEG = Math.PI / 180;
 /** Fly-camera keys: WASD in the view plane, Q/E down and up, Shift to sprint. */
 const FLY_KEYS = new Set(["w", "a", "s", "d", "q", "e", "shift"]);
-const ACCENT = 0xf0a94a;
+const ACCENT = 0xefa026;
 /**
  * Solid is a Blender-style clay view: no albedo, no textures, no material
  * colour. Shape comes from the scene light only.
  */
-const CLAY_COLOUR = 0x8b95a4;
-const CAMERA_COLOUR = 0x6fa8ff;
-const SOLID_BACKGROUND = 0x101318;
+const CLAY_COLOUR = 0x8a949a;
+const CAMERA_COLOUR = 0xc6ced2; // --text-secondary: cyan is reserved for measurement (the map grid)
+const SOLID_BACKGROUND = 0x0e1113;
 /** Material preview backdrop: the studio HDRI provides the light, this the
  *  neutral surround, so nothing hides the albedo. */
-const MATERIAL_BACKGROUND = 0x1c2129;
+const MATERIAL_BACKGROUND = 0x14181b;
 const SOLID_BG = new THREE.Color(SOLID_BACKGROUND);
 const MATERIAL_BG = new THREE.Color(MATERIAL_BACKGROUND);
 /** Built-in studio sky — the same gradient the render service writes as its
@@ -751,6 +756,9 @@ function buildTerrainMesh(
   // Whether this mesh carries an elevation ramp at all (the attribute is fixed
   // once built; the mode decides if it is shown).
   mesh.userData.ramp = colours !== null;
+  // Local Y is (elevation - min) * zScale * horizontal: what the cursor
+  // readout inverts to report the elevation under the pointer.
+  mesh.userData.elevation = { min: minElevation, scale: Math.max(1e-9, zScale * horizontal) };
   return mesh;
 }
 
@@ -844,6 +852,7 @@ function contentSignature(
   ramp: string,
   imagery: { asset: string; opacity: number } | null,
   sunVision: string | null,
+  demPath: string | null,
 ): string {
   switch (object.kind.type) {
     case "mesh":
@@ -854,7 +863,9 @@ function contentSignature(
       // what used to be ignored.
       // The elevation ramp is baked into the mesh's vertex colours, so a
       // colormap change is a rebuild — not just a shading swap.
-      return `terrain:${object.kind.asset}:${object.kind.zScale}:${terrainResolution}:${ladderRung}:${imagery?.asset ?? "none"}:${imagery?.opacity ?? ""}:${ramp}:${sunVision ?? ""}`;
+      // The resolved DEM path too: a relink keeps the asset id but can point
+      // at another file, and the ground scale is published per path.
+      return `terrain:${object.kind.asset}:${demPath ?? ""}:${object.kind.zScale}:${terrainResolution}:${ladderRung}:${imagery?.asset ?? "none"}:${imagery?.opacity ?? ""}:${ramp}:${sunVision ?? ""}`;
     case "camera":
       return `camera:${object.kind.fovDeg}`;
     case "light":
@@ -971,6 +982,8 @@ export function Viewport3D() {
   viewportModeRef.current = mode;
 
   const [quaternion, setQuaternion] = useState<Quaternion>([0, 0, 0, 1]);
+  /** Elevation (metres) of the terrain under the pointer, when over it. */
+  const [cursorElevation, setCursorElevation] = useState<number | null>(null);
   const [size, setSize] = useState({ width: 960, height: 600 });
   const [problem, setProblem] = useState<string | null>(null);
   /** Shown when the GPU probe had to downgrade a feature (see Runtime.glStep). */
@@ -994,6 +1007,18 @@ export function Viewport3D() {
    *  change; the group is rebuilt, cameras never refetch. */
   const anchorsRef = useRef<CartographyAnchor[]>([]);
   const labelDivsRef = useRef(new Map<string, HTMLDivElement>());
+  /** The map grid draped on the terrain (eastings/northings + edge rulers). */
+  const mapGridRef = useRef<MapGridHandle | null>(null);
+  const [mapGridOn, setMapGridOn] = useState(() => {
+    try {
+      return window.localStorage.getItem("studio.viewport.mapGrid") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const mapGridOnRef = useRef(mapGridOn);
+  mapGridOnRef.current = mapGridOn;
+  const [mapGridInterval, setMapGridInterval] = useState<number | null>(null);
   /** The camera transform the label occlusion pass last saw. */
   const occlusionCameraRef = useRef(new THREE.Vector3(Infinity, 0, 0));
   const occlusionQuatRef = useRef(new THREE.Quaternion(Infinity, 0, 0));
@@ -1270,7 +1295,7 @@ export function Viewport3D() {
       studioEnvironment = null;
     }
 
-    const grid = new THREE.GridHelper(20, 40, 0x2f3744, 0x1d222a);
+    const grid = new THREE.GridHelper(20, 40, 0x2a3238, 0x1b2024);
     const gridMaterial = grid.material as THREE.Material;
     gridMaterial.transparent = true;
     gridMaterial.opacity = 0.85;
@@ -1356,6 +1381,10 @@ export function Viewport3D() {
     // a drag does not queue frames it cannot finish.
     let lastRenderRequest = 0;
     orbit.addEventListener("change", () => {
+      // A wheel zoom is applied inside OrbitControls' own handler, so the
+      // frame loop's orbit.update() sees nothing left to do and would not
+      // redraw: the canvas stayed on the old view while overlays moved on.
+      runtime.needsRender = true;
       // A remote DEM's preview rung follows the orbit distance. Crossing a
       // rung changes the terrain signature below, which rebuilds the mesh
       // from the engine's next overview level.
@@ -1406,9 +1435,47 @@ export function Viewport3D() {
       }
     };
 
+    // Cursor readout: elevation of the terrain under the pointer, sampled at
+    // most every 60 ms and never while a drag is running. A move that lands
+    // inside the 60 ms window is sampled when the window closes, so the
+    // readout always ends on where the pointer stopped.
+    let hoverAt = 0;
+    let hoverTimer: number | undefined;
+    const sampleHover = (clientX: number, clientY: number) => {
+      hoverAt = performance.now();
+      const rect = canvas.getBoundingClientRect();
+      pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const terrains: THREE.Object3D[] = [];
+      // A hidden terrain is not under the cursor: traverseVisible skips it.
+      for (const object of runtime.objects.values()) {
+        object.traverseVisible((child) => {
+          if (child.userData.elevation) terrains.push(child);
+        });
+      }
+      const hit = terrains.length ? raycaster.intersectObjects(terrains, false)[0] : undefined;
+      if (!hit) {
+        setCursorElevation(null);
+        return;
+      }
+      const { min, scale } = hit.object.userData.elevation as { min: number; scale: number };
+      setCursorElevation(min + hit.object.worldToLocal(hit.point.clone()).y / scale);
+    };
     const onPointerMove = (event: PointerEvent) => {
       const look = flyLook.current;
-      if (!look) return;
+      if (!look) {
+        if (pressed) return;
+        window.clearTimeout(hoverTimer);
+        const wait = 60 - (performance.now() - hoverAt);
+        if (wait <= 0) {
+          sampleHover(event.clientX, event.clientY);
+        } else {
+          const { clientX, clientY } = event;
+          hoverTimer = window.setTimeout(() => sampleHover(clientX, clientY), wait);
+        }
+        return;
+      }
       flyAngles.current.yaw -= (event.clientX - look.x) * 0.0032;
       flyAngles.current.pitch = Math.max(
         -1.55,
@@ -1460,6 +1527,11 @@ export function Viewport3D() {
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointermove", onPointerMove);
     canvas.addEventListener("pointerup", onPointerUp);
+    const onPointerLeave = () => {
+      window.clearTimeout(hoverTimer);
+      setCursorElevation(null);
+    };
+    canvas.addEventListener("pointerleave", onPointerLeave);
 
     // Fly camera: WASD in the view plane, Q/E down and up, Shift to go faster.
     const onFlyKeyDown = (event: KeyboardEvent) => {
@@ -1625,6 +1697,17 @@ export function Viewport3D() {
           labelLayerEl.style.display = "none";
         }
       }
+      const mapGrid = mapGridRef.current;
+      if (mapGrid) {
+        if (!mapGrid.attachedTo(runtime.scene)) {
+          mapGrid.dispose();
+          mapGridRef.current = null;
+          setMapGridInterval(null);
+        } else {
+          mapGrid.setVisible(mapGridOnRef.current && viewportModeRef.current !== "rendered");
+          mapGrid.update(camera, container.clientWidth, container.clientHeight);
+        }
+      }
       for (const helper of runtime.helpers) helper.update();
       const q = camera.quaternion;
       if (
@@ -1660,6 +1743,8 @@ export function Viewport3D() {
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointerleave", onPointerLeave);
+      window.clearTimeout(hoverTimer);
       window.removeEventListener("keydown", onFlyKeyDown);
       window.removeEventListener("keyup", onFlyKeyUp);
       window.removeEventListener("blur", onWindowBlur);
@@ -1667,9 +1752,15 @@ export function Viewport3D() {
       gizmo.dispose();
       orbit.dispose();
       for (const group of runtime.objects.values()) {
+        // Builds still in flight for this runtime are stale from here on
+        // (React StrictMode tears the first runtime down while its DEM is
+        // being sampled): they must not install anything, least of all
+        // touch the map grid the next runtime owns.
+        group.userData.signature = null;
         disposeChildren(group);
         scene.remove(group);
       }
+      runtime.objects.clear();
       for (const helper of runtime.helpers) {
         scene.remove(helper);
         helper.geometry.dispose();
@@ -1686,6 +1777,8 @@ export function Viewport3D() {
       scene.remove(overlay);
       overlay.clear();
       labelLayer.remove();
+      mapGridRef.current?.dispose();
+      mapGridRef.current = null;
       renderer.dispose();
       runtimeRef.current = null;
     };
@@ -1730,6 +1823,8 @@ export function Viewport3D() {
     const live = new Map(project.scene.objects.map((object) => [object.id, object]));
     for (const [id, group] of runtime.objects) {
       if (live.has(id)) continue;
+      // Invalidates any build still in flight for this group.
+      group.userData.signature = null;
       disposeChildren(group);
       runtime.scene.remove(group);
       runtime.objects.delete(id);
@@ -1744,6 +1839,9 @@ export function Viewport3D() {
         runtime.objects.set(object.id, group);
       }
       group.visible = object.visible && !(cameraView && object.id === activeCameraId);
+      // The cursor readout measures the terrain; once it is hidden the last
+      // reading no longer describes anything on screen.
+      if (object.kind.type === "terrain" && !group.visible) setCursorElevation(null);
       applyTransform(group, object.transform);
 
       // The preview's elevation ramp: the engine's own LUT, sampled by the
@@ -1756,10 +1854,14 @@ export function Viewport3D() {
       const rampStrength = ramp?.strength ?? 1;
       const rampKey = rampName ? `${rampName}:${rampStrength}` : "none";
       const sunVision = sunVisionKey(project);
+      const terrainAssetId = object.kind.type === "terrain" ? object.kind.asset : null;
+      const terrainDemPath = terrainAssetId
+        ? (project.assets.find((entry) => entry.id === terrainAssetId)?.path ?? null)
+        : null;
       const signature = contentSignature(object, terrainResolution, ladderRung, rampKey, {
         asset: topImagery(project)?.asset ?? "",
         opacity: topImagery(project)?.opacity ?? 0,
-      }, sunVision);
+      }, sunVision, terrainDemPath);
       if (group.userData.signature !== signature) {
         group.userData.signature = signature;
         disposeChildren(group);
@@ -1851,7 +1953,17 @@ export function Viewport3D() {
             : Promise.resolve(null),
         ])
           .then(([preview, ramp]) => {
-            if (group.userData.signature !== expected) return;
+            // Stale three ways: the content changed, the object was removed
+            // (a removed group keeps its signature), or this whole runtime
+            // was torn down (StrictMode remount, unmount). Any of them means
+            // the map grid now belongs to someone else: leave it alone.
+            if (
+              runtimeRef.current !== runtime ||
+              group.userData.signature !== expected ||
+              runtime.objects.get(object.id) !== group
+            ) {
+              return;
+            }
             disposeChildren(group);
             const mesh = buildTerrainMesh(
               preview,
@@ -1862,6 +1974,34 @@ export function Viewport3D() {
             );
             group.add(mesh);
             setProblem(null);
+            mapGridRef.current?.dispose();
+            mapGridRef.current = null;
+            setMapGridInterval(null);
+            const metresPerUnit = preview.spanMetresPerUnit ?? null;
+            // The inspectors' Footprint and Relief read the same scale.
+            publishGroundScale({ path: asset.path, metresPerUnit });
+            const gridHost = containerRef.current;
+            // A metre grid needs a known ground scale. Metre CRSs keep their
+            // real eastings and northings; other units (US feet, …) get true
+            // metres from the south-west corner instead of relabelled feet;
+            // unknown scale (no CRS, unnamed CRS) gets no ruler at all.
+            const frame =
+              metresPerUnit === null
+                ? null
+                : metresPerUnit === 1
+                  ? mapFrame(preview.originXz, preview.spanXz)
+                  : mapFrame(
+                      [0, 0],
+                      [preview.spanXz[0] * metresPerUnit, preview.spanXz[1] * metresPerUnit],
+                    );
+            if (gridHost && frame) {
+              const handle = buildMapGrid(mesh, frame, gridHost);
+              handle.setVisible(
+                mapGridOnRef.current && viewportModeRef.current !== "rendered",
+              );
+              mapGridRef.current = handle;
+              setMapGridInterval(handle.interval);
+            }
             applyTerrainShading(mesh, viewportModeRef.current === "solid", hillshade);
             // The drape is the terrain's albedo: Material shows it, Solid
             // stays clay. The shell decodes the raster; a scene without an
@@ -1972,7 +2112,12 @@ export function Viewport3D() {
     runtime.renderer.toneMappingExposure = rig.exposure;
     applyShadowRig(runtime, rig);
 
-    runtime.grid.visible = project.viewport.gridVisible;
+    // The modelling grid is a reference for an empty, unitless scene. A
+    // terrain is its own ground and carries real units, so the grid stays
+    // off whenever one is loaded (the toggle still governs empty scenes).
+    runtime.grid.visible =
+      project.viewport.gridVisible &&
+      !project.scene.objects.some((object) => object.kind.type === "terrain");
 
     // Selection boxes follow their objects every tick (playback moves them at
     // the timeline's rate), so only rebuild them when the selection or the
@@ -2064,13 +2209,31 @@ export function Viewport3D() {
           ]),
       )
     : "";
-  const lastCartographySignature = useRef("__unset__");
+  // The terrain the overlay drapes on: which object, which DEM, and its
+  // vertical exaggeration. The effect reads all three from stateRef, so they
+  // must be dependencies too, or a zScale edit leaves the lines at the old
+  // height while the mesh moves.
+  const overlayTerrain = state?.project.scene.objects.find(
+    (object) => object.kind.type === "terrain",
+  );
+  const overlayTerrainKind =
+    overlayTerrain?.kind.type === "terrain" ? overlayTerrain.kind : null;
+  const overlayTerrainKey =
+    overlayTerrain && overlayTerrainKind
+      ? `${overlayTerrain.id}|${
+          state?.project.assets.find((asset) => asset.id === overlayTerrainKind.asset)?.path ?? ""
+        }|${overlayTerrainKind.zScale}`
+      : "";
+  // The dependency list is the rebuild rule: the visible stack's signature,
+  // the terrain key above, or the terrain sampling (readTerrain changes with
+  // the resolution, and the drape must follow the mesh). No extra "same signature" guard: a re-run
+  // with an unchanged signature has just cancelled the build in flight (React
+  // StrictMode runs every effect twice on mount), so skipping it left the
+  // map overlay empty until a layer was edited.
   useEffect(() => {
     const runtime = runtimeRef.current;
     const container = containerRef.current;
     if (!runtime || !container) return;
-    if (lastCartographySignature.current === cartographySignature) return;
-    lastCartographySignature.current = cartographySignature;
     let cancelled = false;
 
     // The overlay always mirrors the stack: whatever it had, it drops.
@@ -2234,6 +2397,10 @@ export function Viewport3D() {
             layer.labels ?? true,
           );
           if (cancelled) return;
+          // Drawn now: drop this layer's earlier failure (an interval edit or
+          // an engine fix), and leave any other problem standing.
+          const failure = `"${layer.name}" could not be drawn:`;
+          setProblem((current) => (current?.startsWith(failure) ? null : current));
           addDraped(result.lines, layer);
           const ink = labelInk(layer.colour);
           for (const [index, annotation] of result.labels.entries()) {
@@ -2303,7 +2470,7 @@ export function Viewport3D() {
     return () => {
       cancelled = true;
     };
-  }, [cartographySignature, readTerrain]);
+  }, [cartographySignature, overlayTerrainKey, readTerrain]);
 
   // A project HDRI replaces the studio sky for Material and Rendered. The
   // viewport decodes and pre-filters it here (Rendered receives the path and
@@ -2457,6 +2624,24 @@ export function Viewport3D() {
     runtime.needsRender = true;
   }, []);
 
+  /** Turn the free view to face map north (-Z), keeping tilt and distance. */
+  const viewNorth = useCallback(() => {
+    if (cameraView || flyModeRef.current) return;
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    const offset = runtime.camera.position.clone().sub(runtime.orbit.target);
+    const horizontal = Math.hypot(offset.x, offset.z);
+    runtime.camera.position.set(
+      runtime.orbit.target.x,
+      runtime.orbit.target.y + offset.y,
+      runtime.orbit.target.z + Math.max(horizontal, 1e-3),
+    );
+    runtime.camera.up.set(0, 1, 0);
+    runtime.camera.lookAt(runtime.orbit.target);
+    runtime.orbit.update();
+    runtime.needsRender = true;
+  }, [cameraView]);
+
   /** Viewport render resolution for Rendered mode. Options: 1×/2×/4× the
    *  viewport, the DEM's own pixel size, or the project's output size. */
   type RenderScale = "1" | "2" | "4" | "project" | "dem";
@@ -2464,6 +2649,29 @@ export function Viewport3D() {
 
   const terrainObject = state?.project.scene.objects.find((object) => object.kind.type === "terrain");
   const demDims = terrainObject?.kind.type === "terrain" ? terrainObject.kind.dimensions : null;
+  const terrainKind = terrainObject?.kind.type === "terrain" ? terrainObject.kind : null;
+  const terrainSource = terrainKind
+    ? (state?.project.assets.find((asset) => asset.id === terrainKind.asset)?.name ?? null)
+    : null;
+  const elevationReadout = terrainKind?.elevationRange
+    ? `${Math.round(terrainKind.elevationRange[0]).toLocaleString("en-US")}–${Math.round(
+        terrainKind.elevationRange[1],
+      ).toLocaleString("en-US")} m`
+    : null;
+  // AREA in ground kilometres when the scale is known; the raster's pixel
+  // size when it is not (a CRS-less or unnamed-CRS DEM), never a guess.
+  const terrainPath = terrainKind
+    ? (state?.project.assets.find((asset) => asset.id === terrainKind.asset)?.path ?? null)
+    : null;
+  const groundScale = useGroundScale(terrainPath);
+  const groundMetres = groundSpanMetres(terrainKind?.worldSpanXz ?? null, groundScale);
+  const footprintReadout = groundMetres
+    ? groundMetres
+        .map((metres) => (metres >= 10_000 ? (metres / 1000).toFixed(0) : (metres / 1000).toFixed(1)))
+        .join(" × ") + " km"
+    : groundScale && groundScale.metresPerUnit === null && demDims
+      ? `${demDims[0]} × ${demDims[1]} px`
+      : null;
 
   const renderScaleOptions: Array<{ value: RenderScale; label: string }> = [
     { value: "1", label: "1× viewport" },
@@ -2757,7 +2965,6 @@ export function Viewport3D() {
                         setRenderScale(option.value);
                       }}
                     >
-                      {renderScale === option.value ? "✓ " : ""}
                       {option.label}
                     </button>
                   ))}
@@ -2795,7 +3002,77 @@ export function Viewport3D() {
           void actions.renderViewport(target.width, target.height, "preview");
         }}
       />
-      <AxisGizmo quaternion={quaternion} onPick={viewAlong} />
+      {terrainKind ? (
+        <div className="viewport-instruments">
+          <NorthArrow
+            quaternion={quaternion}
+            onNorth={viewNorth}
+            disabled={cameraView || flyMode}
+          />
+          <dl className="viewport-readout">
+            {elevationReadout && (
+              <div>
+                <dt>ELEV</dt>
+                <dd>{elevationReadout}</dd>
+              </div>
+            )}
+            {footprintReadout && (
+              <div>
+                <dt>AREA</dt>
+                <dd>{footprintReadout}</dd>
+              </div>
+            )}
+            {!renderedMode && (
+              <div className="viewport-readout__cursor">
+                <dt>CURSOR</dt>
+                <dd>
+                  {cursorElevation === null
+                    ? "—"
+                    : `${Math.round(cursorElevation).toLocaleString("en-US")} m`}
+                </dd>
+              </div>
+            )}
+          </dl>
+          {!renderedMode && mapGridInterval !== null && (
+            <button
+              type="button"
+              className="map-grid-toggle"
+              aria-pressed={mapGridOn}
+              title={
+                mapGridOn
+                  ? "Hide the map grid and edge rulers"
+                  : "Show the map grid: lines at round eastings and northings, labelled on the near edges"
+              }
+              onClick={() => {
+                const next = !mapGridOn;
+                setMapGridOn(next);
+                try {
+                  window.localStorage.setItem("studio.viewport.mapGrid", next ? "1" : "0");
+                } catch {
+                  // Storage disabled: the toggle still works for this session.
+                }
+                const runtime = runtimeRef.current;
+                if (runtime) runtime.needsRender = true;
+              }}
+            >
+              <span className="map-grid-toggle__label">GRID</span>
+              <span className="map-grid-toggle__value">
+                {mapGridOn ? formatDistance(mapGridInterval, mapGridInterval) : "Off"}
+              </span>
+            </button>
+          )}
+        </div>
+      ) : (
+        <AxisGizmo quaternion={quaternion} onPick={viewAlong} />
+      )}
+      {/* Credits the engine only for a frame it actually produced: no stamp
+          over "No frame rendered yet" or a failed render. */}
+      {renderedMode && render.frame && (
+        <span className="viewport-stamp">Rendered by Forge3D</span>
+      )}
+      {terrainSource && (
+        <span className="viewport-attribution">Elevation source · {terrainSource}</span>
+      )}
       <div className="viewport-overlay viewport-overlay--bottom">
         <span className="viewport-hint">
           {cameraView
@@ -2821,7 +3098,7 @@ export function Viewport3D() {
 function buildLoadingPlaceholder(): THREE.Object3D {
   const placeholder = new THREE.Mesh(
     new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshBasicMaterial({ color: 0x3a4150, wireframe: true }),
+    new THREE.MeshBasicMaterial({ color: 0x3a444b, wireframe: true }),
   );
   placeholder.userData.owned = true;
   return placeholder;

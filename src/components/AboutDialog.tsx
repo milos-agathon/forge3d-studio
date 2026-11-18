@@ -1,3 +1,4 @@
+import { engineVersionLabel } from "../state/engineLabel";
 import { useSession } from "../state/session-context";
 import { CloseIcon } from "./icons";
 
@@ -55,16 +56,12 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
             <dd>{info?.name ?? "Forge3D Studio"}</dd>
           </div>
           <div>
-            <dt>Version</dt>
+            <dt>Studio</dt>
             <dd className="mono">{info?.version ?? "—"}</dd>
           </div>
           <div>
             <dt>Engine</dt>
-            <dd>
-              {engine?.available
-                ? `forge3d ${engine.packageVersion ?? "?"}`
-                : "probing…"}
-            </dd>
+            <dd>{engineVersionLabel(engine)}</dd>
           </div>
           <div>
             <dt>Backend</dt>

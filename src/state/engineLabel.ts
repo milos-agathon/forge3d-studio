@@ -1,21 +1,29 @@
 import type { EngineStatus } from "../bridge/types";
 
 /**
- * The status bar's one-line engine summary.
- *
- * The probe falls back to the installed package metadata when the engine
- * module has no `__version__`; if even that is missing it reports the literal
- * "unknown". Showing "forge3d unknown" next to a working engine reads as a
- * failure, so an unknown version is dropped instead of printed.
+ * Shared version text for the status bar, start screen and About dialog.
  */
+export function engineVersionLabel(engine: EngineStatus | null | undefined): string {
+  if (!engine) return "probing…";
+  if (!engine.available) return "unavailable";
+
+  const version = engine.packageVersion?.trim() ?? "";
+  const known = version.length > 0 && version.toLowerCase() !== "unknown";
+  return known ? `forge3d ${version}` : "forge3d";
+}
+
+/** The engine version and graphics backend shown on the start screen. */
+export function engineSummaryLabel(engine: EngineStatus | null | undefined): string {
+  const label = engineVersionLabel(engine);
+  return engine?.available && engine.backend ? `${label} · ${engine.backend}` : label;
+}
+
+/** Full status-bar diagnostics, including the adapter and software mode. */
 export function engineLabel(engine: EngineStatus | null | undefined): string {
   if (!engine) return "probing engine…";
   if (!engine.available) return "engine unavailable";
 
-  const version = engine.packageVersion?.trim() ?? "";
-  const known = version.length > 0 && version.toLowerCase() !== "unknown";
-  const parts: string[] = [known ? `forge3d ${version}` : "forge3d"];
-  if (engine.backend) parts.push(engine.backend);
+  const parts = [engineSummaryLabel(engine)];
   if (engine.adapter) {
     parts.push(engine.adapter.replace(/^NVIDIA GeForce\s*/, "").slice(0, 44));
   }
