@@ -21,6 +21,10 @@ export default function App() {
   // cartography (the map's layer stack and the layer being edited).
   const [workspace, setWorkspace] = useState<"scene" | "cartography">("scene");
   const cartography = workspace === "cartography";
+  // One flag for both banner mounts (start screen, viewport): Restore swaps
+  // the one for the other, and the snapshot stays on disk after restoring.
+  const [recoveryDismissed, setRecoveryDismissed] = useState(false);
+  const dismissRecovery = () => setRecoveryDismissed(true);
 
   useKeyboardShortcuts({ sidebarOpen, setSidebarOpen });
 
@@ -39,7 +43,7 @@ export default function App() {
               {cartography ? <LayerStack /> : <SceneTree />}
             </aside>
             <section className="workspace__center">
-              <RecoveryBanner />
+              <RecoveryBanner dismissed={recoveryDismissed} onDismiss={dismissRecovery} />
               <Viewport3D />
               <RenderQueue />
             </section>
@@ -55,10 +59,12 @@ export default function App() {
             )}
           </>
         ) : (
-          <>
-            <RecoveryBanner />
+          // One column the card's width: as two grid items the banner was
+          // squeezed into a narrow strip beside the card.
+          <div className="empty-stack">
+            <RecoveryBanner dismissed={recoveryDismissed} onDismiss={dismissRecovery} />
             <EmptyState />
-          </>
+          </div>
         )}
       </main>
 

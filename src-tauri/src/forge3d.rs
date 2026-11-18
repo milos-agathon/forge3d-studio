@@ -169,6 +169,16 @@ def main():
     except Exception as exc:
         print(json.dumps({"ok": False, "detail": "import forge3d failed: %s" % (exc,)}))
         return
+    if getattr(forge3d, "__file__", None) is None:
+        # A bare `forge3d/` folder anywhere on sys.path imports as an empty
+        # namespace package: no version, no device, no engine. Reporting that
+        # as ready would hide a broken PYTHONPATH behind a working chip.
+        where = ", ".join(str(p) for p in getattr(forge3d, "__path__", []))
+        print(json.dumps({
+            "ok": False,
+            "detail": "import forge3d found a folder without the package (%s); check PYTHONPATH" % (where,),
+        }))
+        return
     version = getattr(forge3d, "__version__", None)
     if not version or str(version).strip().lower() in ("", "unknown"):
         try:
@@ -286,19 +296,83 @@ for j in range(resolution):
         else:
             out[j, i] = min_elevation
 
-# World footprint in metres. Geographic rasters (degrees) are reprojected to
-# their local UTM zone; treating degrees as metres reported a 353 km DEM as
-# 0.00 km.
+def crs_kind_and_unit(text):
+    """("projected" | "geographic" | "unknown", metres per linear unit or None).
+
+    pyproj first (it knows every EPSG unit), then the engine's own table,
+    like forge3d.scale_bar. Anything neither can name is "unknown": its unit
+    is never guessed as metres.
+    """
+    try:
+        from pyproj import CRS
+    except ImportError:
+        CRS = None
+    if CRS is not None:
+        try:
+            parsed = CRS.from_user_input(text)
+        except Exception:
+            return "unknown", None
+        if parsed.is_geographic:
+            return "geographic", None
+        if parsed.is_projected:
+            return "projected", float(parsed.axis_info[0].unit_conversion_factor)
+        return "unknown", None
+    try:
+        info = gis._crs_metadata(text)
+    except Exception:
+        return "unknown", None
+    return str(info.get("kind") or "unknown"), info.get("linear_unit_to_meters")
+
+# World footprint. `span_xz` stays in the CRS's own linear unit (the render
+# path frames with it); `metres_per_unit` says what one unit is on the ground,
+# and is None when that is unknown: a CRS-less raster's span is pixels, and
+# an unnamed CRS's unit cannot be trusted. Geographic rasters (degrees) are
+# reprojected to their local UTM zone, so their span is metres.
+def utm_span(source_crs, bounds):
+    """The bounds' extent in their local UTM zone, metres; None if no
+    backend can transform them. pyproj handles every geographic datum; the
+    engine's own path covers WGS84 when pyproj is absent (it has no PROJ
+    backend for NAD83 or ETRS89 sources)."""
+    try:
+        local = gis.estimate_local_utm(bounds)["crs"]
+    except Exception:
+        return None
+    try:
+        from pyproj import Transformer
+    except ImportError:
+        Transformer = None
+    if Transformer is not None:
+        try:
+            left, bottom, right, top = Transformer.from_crs(
+                source_crs, local, always_xy=True
+            ).transform_bounds(*bounds, densify_pts=21)
+            return [abs(right - left), abs(top - bottom)]
+        except Exception:
+            pass
+    try:
+        left, bottom, right, top = gis.transform_bounds(source_crs, local, bounds, densify=21)
+        return [abs(right - left), abs(top - bottom)]
+    except Exception:
+        return None
+
 crs = str(dem.crs or "")
-geographic = "4326" in crs or "wgs84" in crs.lower()
+kind, unit = crs_kind_and_unit(crs) if crs else ("none", None)
+geographic = kind == "geographic" or "4326" in crs or "wgs84" in crs.lower()
 origin_xz = [0.0, 0.0]
+metres_per_unit = None
+metric_span = (
+    utm_span(dem.crs, tuple(dem.bounds))
+    if crs and geographic and dem.bounds is not None
+    else None
+)
 if not crs:
     span_xz = [float(width), float(height)]
-elif geographic and dem.bounds is not None:
-    local = gis.estimate_local_utm(dem.bounds)["crs"]
-    left, bottom, right, top = gis.transform_bounds(dem.crs, local, dem.bounds, densify=21)
-    span_xz = [abs(right - left), abs(top - bottom)]
+elif metric_span is not None:
+    span_xz = metric_span
+    metres_per_unit = 1.0
 else:
+    # Projected, or geographic with no backend for the transform: the span
+    # in the CRS's own unit, with the ground scale left unknown for degrees.
     res = dem.resolution or (1.0, 1.0)
     span_xz = [abs(float(res[0])) * width, abs(float(res[1])) * height]
     transform = dem.transform
@@ -307,6 +381,8 @@ else:
             float(getattr(transform, "c", 0.0)),
             float(-getattr(transform, "f", 0.0)),
         ]
+    if kind == "projected" and unit and unit > 0:
+        metres_per_unit = float(unit)
 
 payload = {
     "ok": True,
@@ -314,9 +390,15 @@ payload = {
     "height": int(height),
     "minElevation": min_elevation,
     "maxElevation": max_elevation,
-    "extentMeters": span_xz,
+    # Ground metres, or None when the ground scale is unknown.
+    "extentMeters": (
+        [span_xz[0] * metres_per_unit, span_xz[1] * metres_per_unit]
+        if metres_per_unit is not None
+        else None
+    ),
     "originXz": origin_xz,
     "spanXz": span_xz,
+    "spanMetresPerUnit": metres_per_unit,
     "geographic": bool(geographic),
     "outliers": outliers,
     "resolution": resolution,
@@ -906,7 +988,7 @@ kind = sys.argv[1]
 dem_path = sys.argv[2]
 service_dir = sys.argv[3]
 
-sys.path.append(service_dir)
+sys.path.append(os.path.dirname(service_dir) if service_dir.endswith(".py") else service_dir)
 
 import studio_render as sr
 
@@ -1789,16 +1871,18 @@ fn print_engine_check_remedies() {
 /// The PYTHONPATH value the probe hands to the interpreter: the checkout's
 /// `python/` goes first (dev convenience), the caller's entries keep the tail.
 /// An empty user value is treated as unset.
+///
+/// The separator is the platform's (`;` on Windows, `:` elsewhere). A `:` on
+/// Windows turns the value into one bogus entry, and `import forge3d` then
+/// resolves to whatever `forge3d/` folder a `.pth` file exposes.
 fn merge_python_path(path: String, existing: Option<String>) -> String {
     match existing {
         Some(existing) if !existing.trim().is_empty() => {
-            // ':' is the POSIX separator; Windows uses ';'. `join_paths` picks
-            // the platform's, and reports a path that cannot be represented
-            // (it contains the separator) instead of producing a broken value.
-            match std::env::join_paths([path.as_str(), existing.as_str()]) {
-                Ok(joined) => joined.to_string_lossy().into_owned(),
-                Err(_) => path,
-            }
+            let paths =
+                std::iter::once(PathBuf::from(&path)).chain(std::env::split_paths(&existing));
+            std::env::join_paths(paths)
+                .map(|joined| joined.to_string_lossy().into_owned())
+                .unwrap_or(path)
         }
         _ => path,
     }
@@ -1854,12 +1938,43 @@ fn first_line(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{merge_python_path, parse_solar_reply};
+    use std::path::PathBuf;
 
     #[test]
     fn merge_python_path_keeps_the_repo_first_and_the_user_tail() {
+        let tail = std::env::join_paths(["/user/libs", "/other/libs"])
+            .expect("valid Python paths")
+            .into_string()
+            .expect("UTF-8 paths");
+        let merged = merge_python_path("/repo/python".to_owned(), Some(tail));
         assert_eq!(
-            merge_python_path("/repo/python".to_owned(), Some("/user/libs".to_owned())),
-            "/repo/python:/user/libs"
+            std::env::split_paths(&merged).collect::<Vec<_>>(),
+            ["/repo/python", "/user/libs", "/other/libs"].map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    fn merge_python_path_splits_back_into_both_entries_on_this_platform() {
+        // The interpreter splits PYTHONPATH the way `split_paths` does; a
+        // drive-letter path on Windows must survive as its own entry.
+        let repo = if cfg!(windows) {
+            r"C:\repo\python"
+        } else {
+            "/repo/python"
+        };
+        let user = if cfg!(windows) {
+            "D:/user/libs"
+        } else {
+            "/user/libs"
+        };
+        let merged = merge_python_path(repo.to_owned(), Some(user.to_owned()));
+        let entries: Vec<_> = std::env::split_paths(&merged).collect();
+        assert_eq!(
+            entries,
+            vec![
+                std::path::PathBuf::from(repo),
+                std::path::PathBuf::from(user)
+            ]
         );
     }
 

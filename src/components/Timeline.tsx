@@ -355,6 +355,7 @@ export function Timeline() {
         max={length}
         step={1}
         value={Math.round(frame)}
+        style={{ "--pct": `${length > 0 ? (Math.round(frame) / length) * 100 : 0}%` } as React.CSSProperties}
         disabled={busy || recording}
         onChange={(event) => scrub(Number(event.target.value))}
         aria-label="Playhead"

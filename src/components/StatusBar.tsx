@@ -1,6 +1,10 @@
 import { useSession } from "../state/session-context";
 import { engineLabel } from "../state/engineLabel";
 
+function count(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
 function time(unixMs: number | null | undefined): string {
   if (!unixMs) return "—";
   return new Date(unixMs).toLocaleTimeString([], {
@@ -18,7 +22,11 @@ export function StatusBar() {
 
   return (
     <footer className="statusbar">
-      <span className="status-chip status-chip--tauri">Tauri shell</span>
+      <span
+        className={`status-chip ${engine?.available ? "status-chip--ready" : "status-chip--waiting"}`}
+      >
+        {engine ? (engine.available ? "Engine ready" : "No engine") : "Engine…"}
+      </span>
       <span
         className={`status-engine ${engine?.available ? "is-ready" : ""}`}
         title={[
@@ -37,10 +45,10 @@ export function StatusBar() {
       </span>
       {state ? (
         <>
-          <span>{objects} objects</span>
+          <span>{count(objects, "object")}</span>
           <span>{selected} selected</span>
           <span className="mono">rev {state.revision}</span>
-          <span>{state.historyLen} undo steps</span>
+          <span>{count(state.historyLen, "undo step")}</span>
           <span className={state.dirty ? "status-dirty" : "status-clean"}>
             {state.dirty ? "unsaved" : "saved"}
           </span>
@@ -53,7 +61,7 @@ export function StatusBar() {
 
       {busy && <span className="status-busy">working…</span>}
       {recovery.length > 0 && (
-        <span className="status-warn">{recovery.length} recovery snapshot(s)</span>
+        <span className="status-warn">{count(recovery.length, "recovery snapshot")}</span>
       )}
       {autosave?.lastError ? (
         <span className="status-error" title={autosave.lastError}>

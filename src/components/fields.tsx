@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { ChevronIcon } from "./icons";
 
@@ -136,6 +136,7 @@ export function RangeField({
           step={step}
           value={draft}
           disabled={disabled}
+          style={{ "--pct": `${max > min ? ((draft - min) / (max - min)) * 100 : 0}%` } as CSSProperties}
           onPointerDown={() => {
             dragging.current = true;
           }}
@@ -219,8 +220,12 @@ export function Section({
   actions,
   id,
   defaultOpen = true,
+  summary,
 }: {
   title: string;
+  /** The section's current value, shown in the header while it is collapsed
+   *  (an instrument reads at a glance without opening every row). */
+  summary?: string;
   children: ReactNode;
   actions?: ReactNode;
   /** Stable key for the remembered open/closed state. */
@@ -261,8 +266,9 @@ export function Section({
           aria-expanded={open}
           onClick={toggle}
         >
-          <ChevronIcon open={open} size={12} />
           <h3>{title}</h3>
+          {summary && <span className="inspector-section__summary">{summary}</span>}
+          <ChevronIcon open={open} size={14} />
         </button>
         {actions}
       </header>

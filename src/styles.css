@@ -7,39 +7,73 @@
  */
 
 :root {
-  --bg: #0f1115;
-  --bg-panel: #14171d;
-  --bg-panel-alt: #181c23;
-  --bg-elevated: #1d222b;
-  --bg-hover: #222834;
-  --border: #262c36;
-  --border-strong: #333c49;
+  /* Field Instrument (forge3d-studio docs/field-instrument-design-system.md):
+     cool charcoal, hairline elevation, near-sharp radii, amber = data / active /
+     selection only, cyan = measurement. Studio's variable names are kept so
+     every component picks the new values up; translucency is color-mix only. */
+  --bg: #0E1113;
+  --bg-panel: #14181B;
+  --bg-panel-alt: #1B2024;
+  --bg-elevated: #20262B;
+  --bg-hover: #232A2E;
+  --border: #2A3238;
+  --border-strong: #3A444B;
+  --line: var(--border);
 
-  --text: #e8ebf0;
-  --text-muted: #8d97a7;
-  --text-dim: #646e7d;
+  --text: #E4E9EC;
+  --text-secondary: #C6CED2;
+  /* --text-dim carries readable labels in Studio, so it takes the AA-passing
+     muted value; --text-faint is decorative only. */
+  --text-muted: #8A949A;
+  --text-dim: #8A949A;
+  --text-faint: #5F686E;
 
-  --accent: #f0a94a;
-  --accent-strong: #ffbd66;
-  --accent-quiet: rgba(240, 169, 74, 0.14);
-  --danger: #f06a5d;
-  --danger-quiet: rgba(240, 106, 93, 0.14);
-  --ok: #5ec08a;
+  --accent: #EFA026;
+  --accent-strong: #FFB84D;
+  --accent-deep: #B87620;
+  --accent-press: #D68A1C;
+  --accent-ink: #1A1204;
+  --accent-quiet: color-mix(in srgb, rgb(239 160 38) 14%, transparent);
+  --focus-ring: #FFC663;
+  --danger: #E5544B;
+  --danger-ink: #F4C9C5;
+  --danger-text: #F07068; /* error copy on raised rows: 5.0:1 on --bg-hover (AA) */
+  --danger-quiet: color-mix(in srgb, rgb(229 84 75) 14%, transparent);
+  /* Ready / saved / running read as plain instrument text: amber is the only
+     accent and cyan belongs to measurement, so "ok" takes neither. */
+  --ok: var(--text-secondary);
+  --measure: #4FB0C4;
+  --measure-dim: color-mix(in srgb, rgb(79 176 196) 16%, transparent);
 
-  --vp-bg-top: #1a1f27;
-  --vp-bg-bottom: #0f1217;
-  --vp-grid: #242a35;
-  --vp-grid-major: #2f3744;
-  --vp-mesh: #aab5c7;
-  --vp-camera: #6fa8ff;
-  --vp-light: #f2c265;
-  --vp-axis-x: #b05858;
-  --vp-axis-z: #4c6f9e;
+  --surface-lowest: #0B0E10;
+  --surface-bright: #2C343A;
+  --hairline: #2A3238;
+  --hairline-hi: #3A444B;
+  --outline-soft: #20272B;
+  --amber-dim: color-mix(in srgb, rgb(239 160 38) 14%, transparent);
+  --amber-tick: color-mix(in srgb, rgb(239 160 38) 42%, transparent);
 
-  --radius: 6px;
-  --radius-lg: 10px;
-  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  --vp-bg-top: #14181B;
+  --vp-bg-bottom: #0B0E10;
+  --vp-grid: #1B2024;
+  --vp-grid-major: #2A3238;
+  --vp-mesh: #C6CED2;
+  --vp-camera: #C6CED2;
+  --vp-light: #FFB84D;
+  --vp-axis-x: #B65A52;
+  --vp-axis-z: #4F7FA3;
+
+  --radius-sm: 2px;
+  --radius: 3px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --radius-xl: 6px;
+  --soft-shadow: 0 2px 6px color-mix(in srgb, rgb(0 0 0) 35%, transparent);
+  --motion-fast: 120ms;
+  --motion-standard: 160ms;
+
+  --font: Sora, Aptos, ui-sans-serif, system-ui, sans-serif;
+  --mono: "JetBrains Mono", "Cascadia Mono", ui-monospace, monospace;
 
   color-scheme: dark;
 }
@@ -59,8 +93,9 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
-  font-size: 13px;
+  font-size: 13.5px;
   line-height: 1.45;
+  font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
   user-select: none;
@@ -88,7 +123,7 @@ h3 {
 
 .colormap-preview__ramp {
   height: 12px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid var(--line);
 }
 
@@ -119,7 +154,7 @@ h3 {
 kbd {
   border: 1px solid var(--border-strong);
   border-bottom-width: 2px;
-  border-radius: 4px;
+  border-radius: var(--radius);
   padding: 0 4px;
   font-family: var(--mono);
   font-size: 10px;
@@ -152,7 +187,6 @@ kbd {
   place-items: center;
   padding: 24px;
   background:
-    radial-gradient(1100px 520px at 50% -10%, rgba(240, 169, 74, 0.06), transparent 70%),
     var(--bg);
 }
 
@@ -245,7 +279,7 @@ kbd {
   width: 7px;
   height: 7px;
   margin-left: -3.5px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
   transform: rotate(45deg);
 }
@@ -362,9 +396,9 @@ kbd {
   justify-content: center;
   width: 26px;
   height: 26px;
-  border-radius: 7px;
-  background: linear-gradient(150deg, #f5b55f, #d97c2b);
-  color: #1a1206;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-ink);
   font-weight: 800;
   font-size: 12px;
   letter-spacing: -0.02em;
@@ -413,7 +447,7 @@ kbd {
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--soft-shadow);
   display: flex;
   flex-direction: column;
 }
@@ -490,7 +524,7 @@ kbd {
 
 .dot--dirty {
   background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-quiet);
+  box-shadow: 0 0 0 2px var(--focus-ring);
 }
 
 .dot--saved {
@@ -505,7 +539,7 @@ kbd {
   gap: 2px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 
 .workspace-tab {
@@ -516,7 +550,7 @@ kbd {
   font: inherit;
   font-size: 12px;
   padding: 3px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   cursor: pointer;
 }
 
@@ -557,7 +591,7 @@ kbd {
 
 .button:hover:not(:disabled) {
   background: var(--bg-hover);
-  border-color: #3d4757;
+  border-color: var(--hairline-hi);
 }
 
 .button:disabled {
@@ -566,17 +600,17 @@ kbd {
 }
 
 .button--primary {
-  background: linear-gradient(180deg, #f3b264, #e09a3f);
-  border-color: #b47a2e;
-  color: #201404;
+  background: var(--accent);
+  border-color: var(--accent-deep);
+  color: var(--accent-ink);
 }
 
 .button--primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, #ffbf74, #eda548);
+  background: var(--accent-strong);
 }
 
 .button--render {
-  border-color: rgba(240, 169, 74, 0.5);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
   color: var(--accent);
 }
 
@@ -626,7 +660,7 @@ kbd {
   font-size: 12px;
   cursor: pointer;
   padding: 2px 4px;
-  border-radius: 4px;
+  border-radius: var(--radius);
 }
 
 .text-button:hover {
@@ -716,7 +750,7 @@ kbd {
 }
 
 .tree-icon--mesh {
-  color: #9fb0c8;
+  color: var(--text-secondary);
 }
 
 .tree-icon--camera {
@@ -758,7 +792,7 @@ kbd {
   width: 20px;
   height: 20px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
@@ -801,7 +835,7 @@ kbd {
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
@@ -924,7 +958,7 @@ kbd {
   gap: 2px;
   padding: 2px;
   border: 1px solid var(--border-strong);
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: var(--bg);
 }
 
@@ -932,7 +966,7 @@ kbd {
   flex: 1;
   min-width: 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius);
   padding: 4px 6px;
   background: transparent;
   color: var(--text-dim);
@@ -952,11 +986,13 @@ kbd {
 }
 
 kbd {
-  font-family: var(--font-mono, ui-monospace, monospace);
+  /* --mono is the token (JetBrains Mono); --font-mono never existed, so the
+     fallback used to win. */
+  font-family: var(--mono);
   font-size: 10px;
   padding: 1px 4px;
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--bg-elevated);
 }
 
@@ -989,7 +1025,7 @@ kbd {
 .input:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-quiet);
+  box-shadow: 0 0 0 2px var(--focus-ring);
 }
 
 .input--number {
@@ -1085,7 +1121,7 @@ kbd {
 .toggle__track {
   width: 30px;
   height: 17px;
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   background: var(--bg);
   border: 1px solid var(--border-strong);
   position: relative;
@@ -1115,7 +1151,7 @@ kbd {
 }
 
 .toggle input:focus-visible + .toggle__track {
-  box-shadow: 0 0 0 2px var(--accent-quiet);
+  box-shadow: 0 0 0 2px var(--focus-ring);
 }
 
 .toggle__label {
@@ -1124,14 +1160,14 @@ kbd {
 
 .badge {
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   font-size: 10.5px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .badge--active {
-  background: rgba(111, 168, 255, 0.14);
+  background: color-mix(in srgb, var(--measure) 14%, transparent);
   color: var(--vp-camera);
 }
 
@@ -1141,7 +1177,7 @@ kbd {
 }
 
 .badge--changed {
-  background: rgba(240, 169, 74, 0.14);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent);
 }
 
@@ -1258,7 +1294,7 @@ kbd {
 }
 
 .viewport-rendered.has-frame {
-  background: #0c0f13;
+  background: var(--surface-lowest);
   /* The image is a result, not a widget: let orbit/pan/zoom reach the canvas
      underneath. The bar and notices re-enable pointer events for themselves. */
   pointer-events: none;
@@ -1289,11 +1325,11 @@ kbd {
   right: 12px;
   top: 10px;
   padding: 6px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   font-size: 11.5px;
-  color: #ffe0b8;
-  background: rgba(240, 169, 74, 0.14);
-  border: 1px solid rgba(240, 169, 74, 0.4);
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .viewport-rendered__bar {
@@ -1328,7 +1364,7 @@ kbd {
   height: 24px;
   font-size: 11px;
   padding: 0 10px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid var(--border-strong);
   background: var(--bg-elevated);
   color: var(--text);
@@ -1366,10 +1402,10 @@ kbd {
   left: 50%;
   transform: translateX(-50%);
   padding: 4px 12px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   font-size: 10.5px;
   color: var(--text);
-  background: rgba(12, 15, 19, 0.72);
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
   border: 1px solid var(--border-strong);
   pointer-events: none;
 }
@@ -1384,8 +1420,8 @@ kbd {
   align-items: center;
   gap: 6px;
   padding: 4px;
-  border-radius: 9px;
-  background: rgba(20, 23, 29, 0.82);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-panel) 82%, transparent);
   border: 1px solid var(--border);
   backdrop-filter: blur(6px);
   pointer-events: auto;
@@ -1412,7 +1448,7 @@ kbd {
   height: 28px;
   padding: 0 6px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text-muted);
   font: inherit;
@@ -1427,7 +1463,7 @@ kbd {
 
 .tool-button.is-active {
   background: var(--accent-quiet);
-  border-color: rgba(240, 169, 74, 0.45);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   color: var(--accent);
 }
 
@@ -1444,8 +1480,8 @@ kbd {
   display: flex;
   padding: 2px;
   gap: 2px;
-  border-radius: 7px;
-  background: rgba(0, 0, 0, 0.25);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, rgb(0 0 0) 25%, transparent);
 }
 
 .segment-button {
@@ -1455,7 +1491,7 @@ kbd {
   font: inherit;
   font-size: 11px;
   padding: 3px 8px;
-  border-radius: 5px;
+  border-radius: var(--radius);
   cursor: pointer;
 }
 
@@ -1484,8 +1520,8 @@ kbd {
   z-index: 20;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--soft-shadow);
 }
 
 .add-menu__dropdown button {
@@ -1495,7 +1531,7 @@ kbd {
   text-align: left;
   padding: 6px 9px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -1528,7 +1564,7 @@ kbd {
 }
 
 .axis-gizmo__ring {
-  fill: rgba(16, 19, 24, 0.6);
+  fill: color-mix(in srgb, var(--bg) 60%, transparent);
   stroke: var(--border);
   stroke-width: 1;
 }
@@ -1547,11 +1583,11 @@ kbd {
   bottom: 36px;
   max-width: min(560px, 72%);
   padding: 7px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   font-size: 11.5px;
-  color: #ffd9d4;
-  background: rgba(240, 106, 93, 0.16);
-  border: 1px solid rgba(240, 106, 93, 0.45);
+  color: var(--danger-ink);
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
   pointer-events: auto;
 }
 
@@ -1563,8 +1599,8 @@ kbd {
   gap: 12px;
   padding: 9px 12px;
   border-radius: var(--radius-lg);
-  border: 1px solid rgba(240, 169, 74, 0.35);
-  background: linear-gradient(180deg, rgba(240, 169, 74, 0.1), rgba(240, 169, 74, 0.05));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--amber-dim);
   color: var(--text);
   flex: none;
 }
@@ -1590,6 +1626,19 @@ kbd {
 
 /* ----------------------------------------------------------- empty state */
 
+/* The start screen's column: recovery notice above the card, same width. */
+.empty-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 460px;
+}
+
+.empty-stack > .empty {
+  padding: 0;
+}
+
 .empty {
   display: grid;
   place-items: center;
@@ -1601,10 +1650,10 @@ kbd {
   max-width: 460px;
   width: 100%;
   padding: 30px 32px;
-  border-radius: 14px;
+  border-radius: var(--radius-xl);
   border: 1px solid var(--border);
-  background: linear-gradient(180deg, var(--bg-panel-alt), var(--bg-panel));
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+  background: var(--bg-panel);
+  box-shadow: var(--soft-shadow);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -1616,9 +1665,9 @@ kbd {
   justify-content: center;
   width: 42px;
   height: 42px;
-  border-radius: 12px;
-  background: linear-gradient(150deg, #f5b55f, #d97c2b);
-  color: #1a1206;
+  border-radius: var(--radius-xl);
+  background: var(--accent);
+  color: var(--accent-ink);
   font-weight: 800;
   font-size: 17px;
 }
@@ -1643,8 +1692,9 @@ kbd {
 
 .empty__facts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  /* Two facts (Studio, Engine): the engine line is the long one. */
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 10px 40px;
   margin: 4px 0 0;
   padding-top: 14px;
   border-top: 1px solid var(--border);
@@ -1706,7 +1756,7 @@ kbd {
   gap: 10px;
   flex-wrap: wrap;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--bg-panel);
   font-size: 12px;
@@ -1718,11 +1768,11 @@ kbd {
 }
 
 .engine-banner.is-ready {
-  border-color: rgba(94, 192, 138, 0.35);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
 .engine-banner.is-missing {
-  border-color: rgba(240, 169, 74, 0.35);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .forge3d__grid {
@@ -1744,7 +1794,7 @@ kbd {
   gap: 8px;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--bg-panel);
   min-height: 0;
 }
@@ -1790,7 +1840,7 @@ kbd {
 
 .report-table td {
   padding: 5px 6px;
-  border-bottom: 1px solid rgba(38, 44, 54, 0.6);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .report-table tr:hover td {
@@ -1800,7 +1850,7 @@ kbd {
 .level-badge {
   display: inline-block;
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -1809,20 +1859,20 @@ kbd {
 
 .level-badge--full {
   color: var(--ok);
-  background: rgba(94, 192, 138, 0.12);
-  border-color: rgba(94, 192, 138, 0.3);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 30%, transparent);
 }
 
 .level-badge--partial {
   color: var(--accent);
   background: var(--accent-quiet);
-  border-color: rgba(240, 169, 74, 0.3);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .level-badge--unsupported {
   color: var(--danger);
   background: var(--danger-quiet);
-  border-color: rgba(240, 106, 93, 0.3);
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
 }
 
 .degradations {
@@ -1838,8 +1888,8 @@ kbd {
 .diagnostics {
   margin: 0;
   padding: 8px 10px;
-  border-radius: 8px;
-  background: #0c0f13;
+  border-radius: var(--radius-lg);
+  background: var(--surface-lowest);
   border: 1px solid var(--border);
   font-family: var(--mono);
   font-size: 10.5px;
@@ -1865,11 +1915,11 @@ kbd {
 .forge3d__error {
   margin: 0;
   padding: 7px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   font-size: 11.5px;
-  color: #ffd9d4;
-  background: rgba(240, 106, 93, 0.14);
-  border: 1px solid rgba(240, 106, 93, 0.4);
+  color: var(--danger-ink);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
 }
 
 /* ------------------------------------------------------------- statusbar */
@@ -1892,7 +1942,7 @@ kbd {
 
 .status-chip {
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -1900,9 +1950,9 @@ kbd {
   color: var(--text-muted);
 }
 
-.status-chip--tauri {
+.status-chip--ready {
   color: var(--ok);
-  border-color: rgba(94, 192, 138, 0.35);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
 .status-dirty {
@@ -1918,7 +1968,7 @@ kbd {
 }
 
 .status-error {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .status-busy {
@@ -1946,7 +1996,7 @@ kbd {
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgba(8, 10, 13, 0.62);
+  background: color-mix(in srgb, var(--surface-lowest) 62%, transparent);
   backdrop-filter: blur(3px);
 }
 
@@ -1958,10 +2008,10 @@ kbd {
   flex-direction: column;
   gap: 12px;
   padding: 18px;
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   border: 1px solid var(--border-strong);
   background: var(--bg-panel);
-  box-shadow: 0 30px 70px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--soft-shadow);
 }
 
 .modal__header {
@@ -2035,7 +2085,7 @@ kbd {
   align-items: flex-start;
   text-align: left;
   padding: 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border-strong);
   background: var(--bg-panel-alt);
   color: var(--text);
@@ -2083,7 +2133,7 @@ kbd {
   width: 100%;
   aspect-ratio: 4 / 3;
   object-fit: cover;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   image-rendering: pixelated;
   background: var(--code-background);
@@ -2101,7 +2151,7 @@ kbd {
   width: 240px;
   height: 240px;
   image-rendering: pixelated;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--code-background);
 }
@@ -2145,7 +2195,7 @@ kbd {
   place-items: center;
   width: 100%;
   aspect-ratio: 4 / 3;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px dashed var(--border);
   color: var(--text-dim);
   font-size: 22px;
@@ -2167,7 +2217,7 @@ kbd {
 }
 
 .preset__missing {
-  color: var(--danger);
+  color: var(--danger-text);
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -2196,13 +2246,13 @@ kbd {
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-strong);
   background: var(--bg-elevated);
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--soft-shadow);
   font-size: 12.5px;
 }
 
 .toast--error {
-  border-color: rgba(240, 106, 93, 0.5);
-  background: linear-gradient(180deg, rgba(240, 106, 93, 0.14), var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+  background: var(--danger-quiet);
 }
 
 .toast__close {
@@ -2212,7 +2262,7 @@ kbd {
   cursor: pointer;
   display: inline-flex;
   padding: 2px;
-  border-radius: 4px;
+  border-radius: var(--radius);
 }
 
 .toast__close:hover {
@@ -2228,13 +2278,13 @@ kbd {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2b323d;
-  border-radius: 6px;
+  background: var(--surface-bright);
+  border-radius: var(--radius);
   border: 2px solid var(--bg-panel);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3a4350;
+  background: var(--hairline-hi);
 }
 
 ::-webkit-scrollbar-track {
@@ -2320,7 +2370,7 @@ kbd {
 }
 
 .render-job--failed .render-job__status {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .render-job--done .render-job__status {
@@ -2337,7 +2387,7 @@ kbd {
 .render-job__bar {
   margin-top: 5px;
   height: 4px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   background: var(--bg-panel-alt);
   overflow: hidden;
 }
@@ -2351,7 +2401,7 @@ kbd {
 
 .render-job__error {
   margin: 4px 0 0;
-  color: var(--danger);
+  color: var(--danger-text);
   font-size: 11.5px;
 }
 
@@ -2395,7 +2445,7 @@ kbd {
 
 .topbar .segmented button {
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius);
   padding: 3px 12px;
   background: transparent;
   color: var(--text-dim);
@@ -2476,7 +2526,7 @@ kbd {
   height: 14px;
   flex: none;
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--radius);
   padding: 0;
   cursor: pointer;
   background: var(--text-muted);
@@ -2507,7 +2557,7 @@ kbd {
   width: 16px;
   height: 16px;
   flex: none;
-  border-radius: 3px;
+  border-radius: var(--radius);
   border: 1px solid var(--border-strong);
 }
 
@@ -2536,7 +2586,7 @@ kbd {
   width: 18px;
   height: 18px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text-dim);
   font: inherit;
@@ -2569,7 +2619,7 @@ kbd {
   flex-direction: column;
   margin-top: 6px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius);
   overflow: hidden;
   background: var(--bg-elevated);
 }
@@ -2623,7 +2673,7 @@ kbd {
   border: 1.5px dashed var(--accent);
   z-index: 2;
   pointer-events: none;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 0 0 1px color-mix(in srgb, rgb(0 0 0) 25%, transparent);
 }
 .viewport-plate-frame__caption {
   position: absolute;
@@ -2633,9 +2683,9 @@ kbd {
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: 0.06em;
-  color: #f5c26b;
-  background: rgba(12, 14, 18, 0.72);
-  border-radius: 3px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  border-radius: var(--radius);
 }
 
 .input--mono {
@@ -2644,5 +2694,869 @@ kbd {
 }
 
 .hint--error {
-  color: var(--danger);
+  color: var(--danger-text);
+}
+
+/* ------------------------------------------- Field Instrument: typography */
+
+/* Mono-forward micro-labels (FI spec §4): every eyebrow, section title, table
+   head, badge and status label is JetBrains Mono, small, tracked, uppercase,
+   in the AA-passing muted grey. */
+.about__heading,
+.panel__header h2,
+.props__header h2,
+.inspector-section__header h3,
+.field-label,
+.group-label,
+.badge,
+.empty__facts dt,
+.forge3d__card h2,
+.forge3d__subhead,
+.report-table th,
+.level-badge,
+.viewer-state,
+.status-chip,
+.dataset-gallery__head h3,
+.probe-row span:first-child,
+.preset__missing,
+.render-queue__header,
+.render-job__status,
+.layerstack__head h2,
+.layerrow__kind {
+  font-family: var(--mono);
+  font-weight: 500;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Numbers read as instrument values: mono, tabular. */
+input[type="number"],
+.mono,
+.statusbar {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Brand (FI spec §5 top bar): two-tone amber mountain + Sora 700 wordmark. */
+.brand {
+  align-items: center;
+  gap: 10px;
+}
+.brand__mark {
+  width: 26px;
+  height: 26px;
+  background: none;
+  border-radius: 0;
+}
+.brand__mark svg {
+  width: 26px;
+  height: 26px;
+  display: block;
+}
+.brand__name {
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+.brand__product {
+  margin-left: -6px;
+  font-family: var(--font);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+
+/* Motion (FI spec §8): instant and mechanical. */
+button,
+.button {
+  transition-duration: var(--motion-fast);
+  transition-timing-function: linear;
+}
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.empty__mark {
+  width: auto;
+  height: auto;
+  background: none;
+  border-radius: 0;
+}
+
+/* ============================================================================
+   Field Instrument step 2: components (FI spec section 5, reference theme.css).
+   Restyled in place; class names unchanged.
+   ========================================================================== */
+
+/* ---- shell: 56 px top bar, 352 px instrument sidebar */
+.app {
+  grid-template-rows: 56px minmax(0, 1fr) 26px;
+}
+.workspace {
+  grid-template-columns: 272px minmax(0, 1fr) 352px;
+}
+/* The modifiers come earlier in the file at the same specificity, so the
+   override above would beat them: re-assert the start screen's single column
+   and the hidden-sidebar layout (N) here. */
+.workspace--empty {
+  grid-template-columns: minmax(0, 1fr);
+}
+.workspace--no-props {
+  grid-template-columns: 272px minmax(0, 1fr);
+}
+.topbar {
+  gap: 14px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* ---- buttons: hairline secondary, flat amber primary */
+.button {
+  height: 32px;
+  padding: 0 14px;
+  gap: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--hairline);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--hairline-hi);
+}
+.button--primary {
+  background: var(--accent);
+  border-color: var(--accent-press);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.button--primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent);
+}
+.button--render {
+  background: transparent;
+  border-color: var(--amber-tick);
+  color: var(--accent);
+}
+.button--render:hover:not(:disabled) {
+  background: var(--amber-dim);
+  border-color: var(--accent);
+}
+.button--small {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.icon-button,
+.tool-button {
+  border-radius: var(--radius-sm);
+}
+
+/* ---- tags (ex-pills): mono, hairline, small radius */
+.badge,
+.status-chip,
+.level-badge,
+.viewer-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: var(--bg-panel);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+
+/* ---- project identity in the top bar: a tag */
+.project-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+.project-name {
+  font-weight: 600;
+}
+.project-meta {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+/* ---- inputs: raised fill, hairline, mono placeholder, amber focus */
+.input {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline);
+  background: var(--bg-panel-alt);
+}
+.input::placeholder {
+  font-family: var(--mono);
+  color: var(--text-muted);
+}
+.input:hover:not(:disabled) {
+  border-color: var(--hairline-hi);
+}
+.input:focus {
+  border-color: var(--hairline-hi);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+.input--number {
+  color: var(--text);
+}
+
+/* ---- segmented toggles: one hairline group, dividers, active = raised + amber */
+.segmented,
+.workspaces,
+.toolbar-segment {
+  gap: 0;
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-lowest);
+  overflow: hidden;
+}
+.segmented__option,
+.workspace-tab,
+.toolbar-segment > button {
+  border-radius: 0;
+  border: 0;
+  border-right: 1px solid var(--hairline);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: none;
+}
+.segmented__option:last-child,
+.workspace-tab:last-child,
+.toolbar-segment > button:last-child {
+  border-right: 0;
+}
+.segmented__option.is-active,
+.workspace-tab.is-active,
+.toolbar-segment > button.is-active {
+  background: var(--bg-hover);
+  color: var(--accent);
+  box-shadow: none;
+}
+.workspace-tab {
+  padding: 6px 14px;
+}
+
+/* ---- sidebar = instrument: hairline rows, open row raised + amber tick */
+.props__rail {
+  gap: 4px;
+  padding: 10px 6px;
+  border-right: 1px solid var(--hairline);
+}
+.props__tab {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+.props__tab:hover {
+  border-color: var(--hairline);
+}
+.props__tab.is-active {
+  background: var(--amber-dim);
+  border-color: var(--hairline-hi);
+  color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.inspector-body {
+  padding: 12px;
+}
+.inspector-body > .inspector-section {
+  gap: 0;
+  padding: 0;
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--hairline);
+  border-top: 0;
+}
+.inspector-body > .inspector-section:first-of-type {
+  border-top: 1px solid var(--hairline);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+.inspector-body > .inspector-section:last-of-type {
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+.inspector-section__header {
+  height: 42px;
+  padding: 0 12px;
+}
+.inspector-section__header:hover {
+  background: var(--bg-hover);
+}
+.inspector-section__toggle {
+  flex: 1;
+  justify-content: space-between;
+  height: 100%;
+}
+.inspector-body > .inspector-section .inspector-section__header h3 {
+  font-family: var(--font);
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  color: var(--text-secondary);
+}
+.inspector-section__toggle svg {
+  color: var(--text-muted);
+}
+.inspector-body > .inspector-section:not(.is-collapsed) {
+  background: var(--bg-hover);
+}
+/* One active row at a time (FI): the amber edge tick follows the row being
+   worked in, not every open row. */
+.inspector-body > .inspector-section:focus-within,
+.inspector-body > .inspector-section:not(.is-collapsed):hover {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.inspector-body > .inspector-section:not(.is-collapsed) .inspector-section__header h3 {
+  color: var(--text);
+}
+.inspector-section__body {
+  padding: 2px 14px 15px;
+  gap: 10px;
+}
+
+/* look presets: an instrument table, not a card grid */
+.inspector-section .preset-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+.inspector-section .preset {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: 0;
+  background: transparent;
+}
+.inspector-section .preset:last-child {
+  border-bottom: 0;
+}
+.inspector-section .preset:hover:not(:disabled) {
+  background: var(--amber-dim);
+  box-shadow: inset 3px 0 0 var(--accent);
+  border-color: var(--hairline);
+}
+.inspector-section .preset__name {
+  flex: none;
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.inspector-section .preset__desc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+/* gallery cards elsewhere (new-project dialog): hairline, raised on hover */
+.preset {
+  border-radius: var(--radius-md);
+  border-color: var(--hairline);
+  background: var(--bg-panel-alt);
+}
+.preset:hover:not(:disabled) {
+  border-color: var(--hairline-hi);
+  background: var(--bg-hover);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* ---- sliders: thin hairline track, amber fill, tick scale, square knob.
+   --pct is set by the component (value position, 0-100 %). */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 18px;
+  margin: 0;
+  cursor: pointer;
+  background:
+    linear-gradient(var(--accent), var(--accent)) left bottom 4px / var(--pct, 0%) 2px no-repeat,
+    linear-gradient(var(--surface-lowest), var(--surface-lowest)) left bottom 4px / 100% 2px no-repeat,
+    linear-gradient(var(--hairline), var(--hairline)) left bottom 3px / 100% 4px no-repeat,
+    linear-gradient(var(--text-faint), var(--text-faint)) right top / 1px 6px no-repeat,
+    repeating-linear-gradient(90deg, var(--text-faint) 0 1px, transparent 1px 10%) left top / calc(100% + 1px) 6px no-repeat;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 18px;
+  background: transparent;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  margin-top: 4px;
+  border-radius: 1px;
+  background: var(--bg);
+  border: 1.5px solid var(--accent);
+  box-shadow: 0 1px 4px color-mix(in srgb, rgb(0 0 0) 50%, transparent);
+}
+input[type="range"]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+input[type="range"]:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.field-range__value {
+  color: var(--accent);
+}
+
+/* ---- switches: square instrument toggle */
+.toggle__track {
+  border-radius: var(--radius-sm);
+  border-color: var(--hairline-hi);
+  background: var(--surface-lowest);
+}
+.toggle__thumb {
+  border-radius: 1px;
+}
+.toggle input:checked + .toggle__track {
+  background: var(--amber-dim);
+}
+
+/* ---- scene tree: hairline instrument table, selection = amber tick */
+.tree-row {
+  height: 30px;
+  border-left: 0;
+  border-bottom: 1px solid var(--outline-soft);
+  font-size: 12.5px;
+}
+.tree-row.is-selected {
+  background: var(--amber-dim);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+/* The cartography layer stack is the same kind of list: same 3 px tick.
+   The 2 px border it replaces is folded into the padding, so the row's
+   content does not shift. */
+.layerrow {
+  border-left: 0;
+  padding-left: 6px;
+}
+.layerrow.is-selected {
+  background: var(--amber-dim);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* ---- floating viewport HUD */
+.viewport-toolbar {
+  border-radius: var(--radius-md);
+  border-color: var(--hairline);
+  background: var(--bg-panel);
+  backdrop-filter: none;
+  box-shadow: var(--soft-shadow);
+}
+.tool-button.is-active {
+  background: var(--amber-dim);
+  border-color: var(--hairline-hi);
+  color: var(--accent);
+}
+
+/* ---- recovery banner: a hairline instrument notice, amber edge tick */
+.recovery {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline-hi);
+  background: var(--bg-panel);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* ---- dialogs */
+.modal {
+  border-radius: var(--radius-lg);
+  border-color: var(--hairline-hi);
+}
+
+/* Notes between instrument rows stay inside the table frame. */
+.inspector-body > .hint,
+.inspector-body > p {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--hairline);
+  border-top: 0;
+  background: var(--bg-panel-alt);
+  font-size: 11.5px;
+}
+
+/* ============================================================================
+   Field Instrument step 3: viewport HUD. On terrain scenes the modelling grid
+   and XYZ gizmo give way to cartographic instruments: a north arrow with
+   bearing/tilt, elevation range, footprint and cursor elevation.
+   ========================================================================== */
+
+.viewport-instruments {
+  position: absolute;
+  top: 58px;
+  right: 10px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 148px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  box-shadow: var(--soft-shadow);
+  pointer-events: auto;
+}
+
+.north-arrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--motion-fast) ease;
+}
+.north-arrow:hover:not(:disabled) {
+  background: var(--bg-hover);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+/* Fly mode / camera view: the readout stays fully legible (it is still a
+   true bearing); only the click affordance goes. */
+.north-arrow:disabled {
+  cursor: default;
+}
+.north-arrow:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.north-arrow svg {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  overflow: visible;
+}
+.north-arrow__ticks {
+  stroke: var(--text-faint);
+  stroke-width: 1.5;
+  stroke-linecap: square;
+}
+.north-arrow__north {
+  fill: var(--accent);
+}
+.north-arrow__south {
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-width: 1.5;
+  stroke-linejoin: miter;
+}
+.north-arrow__n {
+  fill: var(--accent);
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 700;
+}
+.north-arrow__readout {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+.north-arrow__readout > :first-child {
+  color: var(--accent);
+}
+
+.viewport-readout {
+  margin: 0;
+  padding: 4px 0;
+}
+.viewport-readout > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 10px;
+}
+.viewport-readout dt {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+}
+.viewport-readout dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  white-space: nowrap;
+}
+.viewport-readout__cursor dd {
+  color: var(--measure);
+}
+
+/* Rendered stamp and source attribution: map-sheet marginalia, bottom right */
+.viewport-stamp,
+.viewport-attribution {
+  position: absolute;
+  right: 12px;
+  z-index: 3;
+  pointer-events: none;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.viewport-attribution {
+  bottom: 50px;
+  color: var(--text-muted);
+  padding: 3px 7px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+}
+.viewport-stamp {
+  bottom: 70px;
+  padding: 3px 7px;
+  border: 1px solid var(--amber-tick);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  color: var(--accent);
+}
+.north-arrow__ring {
+  fill: var(--surface-lowest);
+  stroke: var(--hairline-hi);
+  stroke-width: 1;
+}
+
+/* ============================================================================
+   Field Instrument step 4: polish. Rendered bar, menus, section summaries.
+   ========================================================================== */
+
+/* ---- Rendered bar: one hairline instrument strip over the frame */
+.viewport-rendered__bar {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  height: 32px;
+  padding: 0 4px 0 12px;
+  gap: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  box-shadow: var(--soft-shadow);
+  white-space: nowrap;
+}
+.viewport-rendered__bar > span {
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+.viewport-rendered__scale {
+  gap: 8px;
+  padding-left: 12px;
+  border-left: 1px solid var(--hairline);
+  height: 100%;
+}
+.viewport-rendered__scale > span {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.viewport-rendered__scale-button {
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: var(--surface-lowest);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+.viewport-rendered__scale-button:hover {
+  border-color: var(--hairline-hi);
+  background: var(--bg-hover);
+}
+.viewport-rendered__bar .button--small {
+  height: 24px;
+}
+
+/* ---- dropdown menus: hairline instrument list, checked = amber tick */
+.add-menu__dropdown {
+  padding: 4px 0;
+  border-color: var(--hairline-hi);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+}
+.add-menu__dropdown button {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 0;
+  font-size: 12.5px;
+}
+.add-menu__dropdown button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.add-menu__dropdown button[aria-checked="true"] {
+  color: var(--accent);
+  background: var(--amber-dim);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.viewport-rendered__menu button {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* ---- notices over the frame */
+.viewport-rendered__notice {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline-hi);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.viewport-rendered__updating {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  font-family: var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+
+/* ---- collapsed section headers carry their current value, right-aligned */
+.inspector-section__summary {
+  margin-left: auto;
+  margin-right: 10px;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+.inspector-section:not(.is-collapsed) .inspector-section__summary {
+  display: none;
+}
+.status-chip--waiting {
+  color: var(--text-muted);
+}
+
+/* ---- respect the OS reduced-motion setting */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* ============================================================================
+   Map grid: draped eastings/northings with edge rulers (mapGridLayer.ts).
+   ========================================================================== */
+.map-grid-labels {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+.map-grid-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--measure);
+  will-change: transform;
+}
+.map-grid-toggle {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 0;
+  border-top: 1px solid var(--hairline);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--motion-fast) ease;
+}
+.map-grid-toggle:hover {
+  background: var(--bg-hover);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.map-grid-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.map-grid-toggle__label {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+}
+.map-grid-toggle__value {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+.map-grid-toggle[aria-pressed="true"] .map-grid-toggle__value {
+  color: var(--measure);
 }

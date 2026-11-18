@@ -576,9 +576,14 @@ export interface TerrainPreview {
   height: number;
   minElevation: number;
   maxElevation: number;
-  extentMeters: [number, number];
+  /** Ground footprint in metres; null when the ground scale is unknown. */
+  extentMeters: [number, number] | null;
+  /** NW corner `[x, -y]` in the CRS's own unit; `[0, 0]` when not projected. */
   originXz: [number, number];
+  /** Footprint in the CRS's own unit (pixels for a CRS-less raster). */
   spanXz: [number, number];
+  /** Metres per unit of `spanXz`; null = unknown (CRS-less, unnamed CRS). */
+  spanMetresPerUnit?: number | null;
   resolution: number;
   heights: number[];
 }

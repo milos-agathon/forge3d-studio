@@ -10,9 +10,9 @@ function Icon({ size = 16, children, ...rest }: IconProps) {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={1.7}
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      strokeWidth={2}
+      strokeLinecap="square"
+      strokeLinejoin="miter"
       aria-hidden="true"
       {...rest}
     >
@@ -238,3 +238,14 @@ export const objectIcon = (type: "mesh" | "terrain" | "camera" | "light") => {
       return SunIcon;
   }
 };
+
+/** The Forge3D two-tone amber mountain mark (Field Instrument brand). */
+export const ForgeMark = ({ size = 26 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+    <path d="M16 3 29 26H3L16 3Z" fill="#302719" />
+    <path d="M16 3 21 26H3L16 3Z" fill="#5C370A" />
+    <path d="M16 3 29 26h-8L16 3Z" fill="#B87620" />
+    <path d="M16 11 22 24H10l6-13Z" fill="#EFA026" />
+    <path d="M16 15 19 23h-6l3-8Z" fill="#FFD060" />
+  </svg>
+);
