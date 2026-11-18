@@ -4,12 +4,14 @@
   "license": "Apache-2.0 OR MIT",
   "version": "0.1.0",
   "type": "module",
-  "description": "Forge3D Studio \u2014 Tauri desktop shell (Phase 1)",
+  "description": "Forge3D Studio — Tauri desktop shell (Phase 1)",
   "scripts": {
+    "predev": "node scripts/prepare-viewport-runtime.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/prepare-viewport-runtime.mjs",
     "build": "tsc --noEmit && vite build",
     "check": "tsc --noEmit",
-    "test": "node --experimental-strip-types src/state/engineLabel.test.ts && node --experimental-strip-types src/state/terrainLadder.test.ts && node --experimental-strip-types src/state/datasets.test.ts && node --experimental-strip-types src/state/recipes.test.ts && node --experimental-strip-types src/viewport/viewMath.test.ts && node --experimental-strip-types src/viewport/cartography.test.ts && node --experimental-strip-types src/viewport/lighting.test.ts && node --experimental-strip-types src/viewport/colormap.test.ts && node --experimental-strip-types src/state/playback.test.ts && node --experimental-strip-types src/state/animationReach.test.ts && node --experimental-strip-types src/viewport/datasetThumb.test.ts && node --experimental-strip-types src/viewport/sunVisibility.test.ts && node --experimental-strip-types src/state/renderQueue.test.ts && node --experimental-strip-types src/viewport/mapGrid.test.ts && node --experimental-strip-types src/state/groundScale.test.ts",
+    "test": "node --experimental-strip-types src/state/engineLabel.test.ts && node --experimental-strip-types src/state/terrainLadder.test.ts && node --experimental-strip-types src/state/datasets.test.ts && node --experimental-strip-types src/state/recipes.test.ts && node --experimental-strip-types src/viewport/viewMath.test.ts && node --experimental-strip-types src/viewport/cartography.test.ts && node --experimental-strip-types src/viewport/lighting.test.ts && node --experimental-strip-types src/viewport/colormap.test.ts && node --experimental-strip-types src/state/playback.test.ts && node --experimental-strip-types src/state/animationReach.test.ts && node --experimental-strip-types src/viewport/datasetThumb.test.ts && node --experimental-strip-types src/viewport/sunVisibility.test.ts && node --experimental-strip-types src/state/renderQueue.test.ts && node --experimental-strip-types src/viewport/mapGrid.test.ts && node --experimental-strip-types src/state/groundScale.test.ts && node --experimental-strip-types src/viewport/forge3dWebMapping.test.ts",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
@@ -17,6 +19,7 @@
     "package": "tauri build"
   },
   "dependencies": {
+    "@forge3d/web": "file:vendor/forge3d-web/forge3d-web-d6459a26-studio.tgz",
     "@tauri-apps/api": "^2.9.0",
     "@tauri-apps/plugin-dialog": "^2.4.0",
     "react": "^19.2.0",

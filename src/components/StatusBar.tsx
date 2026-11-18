@@ -14,7 +14,7 @@ function time(unixMs: number | null | undefined): string {
   });
 }
 
-export function StatusBar() {
+export function StatusBar({ viewport }: { viewport: string }) {
   const { state, autosave, recovery, busy, engine } = useSession();
 
   const objects = state?.project.scene.objects.length ?? 0;
@@ -43,6 +43,7 @@ export function StatusBar() {
       >
         {engineLabel(engine)}
       </span>
+      {viewport && <span className="status-engine" data-viewport-backend>{viewport}</span>}
       {state ? (
         <>
           <span>{count(objects, "object")}</span>

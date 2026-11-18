@@ -1,0 +1,19 @@
+{
+  "source": "https://github.com/milos-agathon/forge3d-web",
+  "commit": "d6459a26f04c637909360a0351c7ed98d6e0b84a",
+  "tree": "1d8209975d7da1c9bedaaef6de52bf12b0e68c7c",
+  "upstreamArchiveSha256": "abafa69a5eeeb219cb8d7f8ff67b3c49c1263512ddbca2abd0ec1ca64b0d5850",
+  "sha256": "523493d8e22434def1091d68a7b427e55aac18588861b0932ea99fcf41b83eaa",
+  "archiveIncludes": [
+    "package.json", "README.md", "LICENSE", "LICENSE-APACHE", "dist/**", "types/**",
+    "assets/**/*LICENSE*", "assets/**/*COPYING*", "assets/**/OFL.txt"
+  ],
+  "toolchain": {
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+    "node": "v24.4.0",
+    "npm": "11.6.2",
+    "wasmPack": "wasm-pack 0.15.0",
+    "typescript": "Version 6.0.3"
+  }
+}

@@ -9,24 +9,30 @@ import {
   SaveIcon,
   UndoIcon,
 } from "./icons";
+import type { RendererPreference } from "../viewport/forge3dWebMapping";
 import { AboutDialog } from "./AboutDialog";
 
 export function TopBar({
   workspace,
   onWorkspace,
+  renderer,
+  onRenderer,
 }: {
   workspace: "scene" | "cartography";
+  renderer: RendererPreference;
+  onRenderer(renderer: RendererPreference): void;
   onWorkspace(workspace: "scene" | "cartography"): void;
 }) {
   const { state, actions, busy } = useSession();
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState<"file" | "view" | false>(false);
+  const viewMenuRef = useRef<HTMLDivElement>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!menuOpen) return;
     const close = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+      if (!menuRef.current?.contains(event.target as Node) && !viewMenuRef.current?.contains(event.target as Node)) setMenuOpen(false);
     };
     const escape = (event: KeyboardEvent) => {
       if (event.key === "Escape") setMenuOpen(false);
@@ -55,14 +61,14 @@ export function TopBar({
       <div className="menu" ref={menuRef}>
         <button
           type="button"
-          className={`menu__button ${menuOpen ? "is-open" : ""}`}
-          onClick={() => setMenuOpen((open) => !open)}
+          className={`menu__button ${menuOpen === "file" ? "is-open" : ""}`}
+          onClick={() => setMenuOpen((open) => open === "file" ? false : "file")}
           aria-haspopup="menu"
-          aria-expanded={menuOpen}
+          aria-expanded={menuOpen === "file"}
         >
           File
         </button>
-        {menuOpen && (
+        {menuOpen === "file" && (
           <div className="menu__dropdown" role="menu">
             <button
               type="button"
@@ -134,6 +140,24 @@ export function TopBar({
             >
               Close project
             </button>
+          </div>
+        )}
+      </div>
+
+      <div className="menu" ref={viewMenuRef}>
+        <button type="button" className={`menu__button ${menuOpen === "view" ? "is-open" : ""}`}
+          aria-haspopup="menu" aria-expanded={menuOpen === "view"}
+          onClick={() => setMenuOpen(open => open === "view" ? false : "view")}>View</button>
+        {menuOpen === "view" && (
+          <div className="menu__dropdown" role="menu" aria-label="Viewport renderer">
+            <span className="menu__heading">Viewport renderer</span>
+            {(["auto", "forge3d-web", "three"] as const).map(value => (
+              <button key={value} type="button" role="menuitemradio" aria-checked={renderer === value}
+                onClick={() => { onRenderer(value); setMenuOpen(false); }}>
+                {value === "auto" ? "Auto" : value === "three" ? "three.js" : value}
+                {renderer === value && <kbd aria-hidden="true">✓</kbd>}
+              </button>
+            ))}
           </div>
         )}
       </div>

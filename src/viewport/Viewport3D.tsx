@@ -7,6 +7,8 @@ import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 
+import { ForgeTerrainViewport, type TerrainSource } from "./forge3dWebViewport";
+import type { RendererPreference } from "./forge3dWebMapping";
 import { bridge } from "../bridge/env";
 import type {
   CameraObject,
@@ -170,7 +172,7 @@ function clampHalfFloatToByte(
  * of truth in both places is what makes Material's orbit and the Rendered frame
  * share a light environment instead of a studio room vs. a sky.
  */
-function studioSkyTexture(width = 128, height = 64): THREE.DataTexture {
+function studioSkyRadiance(width = 128, height = 64) {
   const data = new Float32Array(width * height * 4);
   for (let y = 0; y < height; y += 1) {
     const v = y / (height - 1);
@@ -186,12 +188,7 @@ function studioSkyTexture(width = 128, height = 64): THREE.DataTexture {
       data[offset + 3] = 1;
     }
   }
-  const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
-  // Radiance, not an sRGB image: keep the values the engine would decode.
-  texture.colorSpace = THREE.LinearSRGBColorSpace;
-  texture.mapping = THREE.EquirectangularReflectionMapping;
-  texture.needsUpdate = true;
-  return texture;
+  return { width, height, data };
 }
 
 function clayMaterial(side: THREE.Side = THREE.FrontSide): THREE.MeshStandardMaterial {
@@ -708,7 +705,10 @@ function buildTerrainMesh(
       // a silent no-op patch would render a lit frame with no shadow at all.
       const ORIGINAL_IRRADIANCE =
         "vec3 irradiance = dotNL * directLight.color;";
-      if (!shader.fragmentShader.includes(ORIGINAL_IRRADIANCE)) {
+      // onBeforeCompile runs before three.js expands its shader includes.
+      const physicalInclude = "#include <lights_physical_pars_fragment>";
+      const physicalLighting = THREE.ShaderChunk.lights_physical_pars_fragment;
+      if (!shader.fragmentShader.includes(physicalInclude) || !physicalLighting.includes(ORIGINAL_IRRADIANCE)) {
         throw new Error(
           "the heightfield sun-visibility patch expected an irradiance line in the physical shader that is not there",
         );
@@ -723,15 +723,13 @@ function buildTerrainMesh(
           "#include <begin_vertex>",
           "#include <begin_vertex>\n  sunVisibilityUv = uv;",
         );
-      shader.fragmentShader = shader.fragmentShader
-        .replace(
-          "void main() {",
-          "varying vec2 sunVisibilityUv;\nuniform sampler2D sunVisibility;\nvoid main() {",
-        )
-        .replace(
-          ORIGINAL_IRRADIANCE,
-          "vec3 irradiance = dotNL * directLight.color * texture2D(sunVisibility, sunVisibilityUv).r;",
-        );
+      const terrainLighting = physicalLighting.replace(
+        ORIGINAL_IRRADIANCE,
+        "vec3 irradiance = dotNL * directLight.color * texture2D(sunVisibility, sunVisibilityUv).r;",
+      );
+      shader.fragmentShader = shader.fragmentShader.replace(physicalInclude, () =>
+        `varying vec2 sunVisibilityUv;\nuniform sampler2D sunVisibility;\n${terrainLighting}`,
+      );
     };
     material.customProgramCacheKey = () => "sunVisibilityTerrain";
     meshSunVisibilityTexture = texture;
@@ -752,6 +750,7 @@ function buildTerrainMesh(
   mesh.userData.studioMaterial = mesh.material;
   mesh.userData.drape = null;
   mesh.userData.hillshade = hillshadeTexel;
+  mesh.userData.forgeTerrain = { preview, zScale, shade: hillshadeTexel.image.data } as TerrainSource;
   mesh.userData.sunVisibility = meshSunVisibilityTexture;
   // Whether this mesh carries an elevation ramp at all (the attribute is fixed
   // once built; the mode decides if it is shown).
@@ -956,7 +955,12 @@ function disposeChildren(group: THREE.Group): void {
   }
 }
 
-export function Viewport3D() {
+export function Viewport3D({ preference, onBackend }: {
+  preference: RendererPreference;
+  onBackend(value: string): void;
+}) {
+  const preferenceRef = useRef(preference);
+  preferenceRef.current = preference;
   const {
     state,
     actions,
@@ -1217,7 +1221,7 @@ export function Viewport3D() {
       renderer = new THREE.WebGLRenderer({
         canvas,
         antialias: true,
-        alpha: false,
+        alpha: true,
         // Ask for the discrete adapter on hybrid hosts instead of letting the
         // browser pick the power-saving one.
         powerPreference: "high-performance",
@@ -1287,12 +1291,17 @@ export function Viewport3D() {
     // cannot filter the float target keeps the fallback hemisphere light.
     const pmrem = new THREE.PMREMGenerator(renderer);
     let studioEnvironment: THREE.Texture | null = null;
+    const skyPixels = studioSkyRadiance();
+    const sky = new THREE.DataTexture(skyPixels.data, skyPixels.width, skyPixels.height, THREE.RGBAFormat, THREE.FloatType);
+    sky.colorSpace = THREE.LinearSRGBColorSpace;
+    sky.mapping = THREE.EquirectangularReflectionMapping;
+    sky.needsUpdate = true;
     try {
-      const sky = studioSkyTexture();
       studioEnvironment = pmrem.fromEquirectangular(sky).texture;
-      sky.dispose();
     } catch {
       studioEnvironment = null;
+    } finally {
+      sky.dispose();
     }
 
     const grid = new THREE.GridHelper(20, 40, 0x2a3238, 0x1b2024);
@@ -1339,6 +1348,12 @@ export function Viewport3D() {
       selection: [],
     };
     runtimeRef.current = runtime;
+    const terrainCanvas = document.createElement("canvas");
+    terrainCanvas.className = "viewport-canvas viewport-canvas--terrain";
+    terrainCanvas.setAttribute("aria-hidden", "true");
+    terrainCanvas.hidden = true;
+    container.insertBefore(terrainCanvas, canvas);
+    const terrainViewport = new ForgeTerrainViewport(terrainCanvas, skyPixels, () => { runtime.needsRender = true; }, onBackend);
 
     const resize = () => {
       const width = container.clientWidth;
@@ -1719,9 +1734,36 @@ export function Viewport3D() {
         lastQuaternion = [q.x, q.y, q.z, q.w];
         setQuaternion(lastQuaternion);
       }
-      if (!moved && !runtime.needsRender) return;
+      const lost = terrainViewport.lost();
+      if (!moved && !runtime.needsRender && !lost) return;
       runtime.needsRender = false;
-      renderer.render(scene, camera);
+      const project = stateRef.current?.project;
+      const target = flying || inCameraView.current ? camera.getWorldDirection(new THREE.Vector3()).add(camera.position) : orbit.target;
+      const terrain = terrainViewport.draw({ preference: preferenceRef.current, mode: viewportModeRef.current,
+        hasHdri: project?.render.environment != null, sunVisibility: project?.render.sunVisibility ?? false,
+        background: viewportModeRef.current === "solid" ? SOLID_BG : MATERIAL_BG,
+        skyIntensity: scene.environment ? scene.environmentIntensity : 0,
+        objects: runtime.objects, camera, target, sun, renderer });
+      if (terrain) {
+        // Opaque meshes must see the terrain depth before writing any colour.
+        const background = scene.background;
+        const order = terrain.renderOrder;
+        const colorWrite = terrain.material.colorWrite;
+        scene.background = null;
+        renderer.setClearAlpha(0);
+        terrain.renderOrder = -Infinity;
+        terrain.material.colorWrite = false;
+        try { renderer.render(scene, camera); }
+        finally {
+          terrain.material.colorWrite = colorWrite;
+          terrain.renderOrder = order;
+          scene.background = background;
+          renderer.setClearAlpha(1);
+        }
+      } else {
+        renderer.setClearAlpha(1);
+        renderer.render(scene, camera);
+      }
       // Some webviews reject the first draw of a shadow/float-texture pass.
       // Probe once per change; a rejected draw downgrades one step and the
       // next frame re-probes, so the error cannot repeat forever.
@@ -1735,9 +1777,14 @@ export function Viewport3D() {
         }
       }
     };
+    const diagnostic = () => ({ terrainViewport, runtime });
+    if (import.meta.env.DEV) Object.assign(window, { forge3dViewportDiagnostics: diagnostic });
     tick();
 
     return () => {
+      if (import.meta.env.DEV) Reflect.deleteProperty(window, "forge3dViewportDiagnostics");
+      terrainViewport.dispose();
+      terrainCanvas.remove();
       cancelAnimationFrame(frame);
       observer.disconnect();
       canvas.removeEventListener("pointerdown", onPointerDown);
@@ -1783,6 +1830,10 @@ export function Viewport3D() {
       runtimeRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (runtimeRef.current) runtimeRef.current.needsRender = true;
+  }, [preference]);
 
   // Project state → three.js scene. Runs on every edit; the map diff keeps it
   // to what actually changed.
@@ -1838,6 +1889,7 @@ export function Viewport3D() {
         runtime.scene.add(group);
         runtime.objects.set(object.id, group);
       }
+      group.userData.isTerrain = object.kind.type === "terrain";
       group.visible = object.visible && !(cameraView && object.id === activeCameraId);
       // The cursor readout measures the terrain; once it is hidden the last
       // reading no longer describes anything on screen.
@@ -2002,16 +2054,17 @@ export function Viewport3D() {
               mapGridRef.current = handle;
               setMapGridInterval(handle.interval);
             }
-            applyTerrainShading(mesh, viewportModeRef.current === "solid", hillshade);
+            applyTerrainShading(mesh, viewportModeRef.current === "solid", stateRef.current?.project.viewport.hillshade ?? true);
+            runtime.needsRender = true;
             // The drape is the terrain's albedo: Material shows it, Solid
             // stays clay. The shell decodes the raster; a scene without an
             // overlay stays clay in both.
             if (overlay && overlayAsset?.path) {
               loadOverlayTexture(overlayAsset.path)
                 .then((texture) => {
-                  if (group.userData.signature !== expected) return;
+                  if (runtimeRef.current !== runtime || runtime.objects.get(object.id) !== group || group.userData.signature !== expected) return;
                   mesh.userData.drape = texture;
-                  applyTerrainShading(mesh, viewportModeRef.current === "solid", hillshade);
+                  applyTerrainShading(mesh, viewportModeRef.current === "solid", stateRef.current?.project.viewport.hillshade ?? true);
                   runtime.needsRender = true;
                 })
                 .catch((cause) => {
@@ -3083,7 +3136,7 @@ export function Viewport3D() {
         </span>
         <span className="viewport-camera">
           {camera ? `Active camera: ${camera.name}` : "No active camera"}
-          {mode === "material" ? " · three.js preview" : mode === "rendered" ? " · Forge3D engine" : ""}
+          {mode === "rendered" ? " · Forge3D engine" : ""}
         </span>
         {gpuNote && <span className="viewport-gpu-note">{gpuNote}</span>}
       </div>
