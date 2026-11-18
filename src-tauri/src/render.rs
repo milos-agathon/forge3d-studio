@@ -1188,7 +1188,7 @@ mod tests {
         assert_eq!(payload["quality"]["vignette"], f64::from(0.4_f32));
     }
 
-    /// The fixture `studio-tauri/tests/fixtures/lighting-rig.json` is read by
+    /// The fixture `studio/tests/fixtures/lighting-rig.json` is read by
     /// this test and by `src/viewport/lighting.test.ts`. This half asserts the
     /// payload the renderer receives; the node half asserts the numbers the
     /// preview hands to three.js. A drift in either fails, instead of showing

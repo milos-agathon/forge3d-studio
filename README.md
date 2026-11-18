@@ -76,7 +76,7 @@ and `phase2.rs`; the viewport only reads model state and writes through commands
 ## Architecture
 
 ```text
-studio-tauri/
+studio/
 ├── crates/studio-core/        canonical model — no Tauri, no GPU, no Forge3D
 │   ├── project.rs             Project document v2: format tag, assets, validate
 │   ├── scene.rs               Scene graph: objects, transforms, mesh sources
@@ -662,7 +662,7 @@ Asset paths are **relative to the sample file**, so the folder is portable. The
 GeoTIFF references are Git LFS objects; a plain checkout without `git lfs pull`
 still loads the project (integrity marks those two files changed/missing).
 Regenerate with `cargo run -p studio-core --example make_samples` from
-`studio-tauri/`; `tests/samples.rs` loads, validates, checks each sample's
+`studio/`; `tests/samples.rs` loads, validates, checks each sample's
 feature content, and round-trips them through save/load.
 
 ## Packaging

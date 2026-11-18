@@ -1,4 +1,4 @@
-//! Writes the committed sample projects under `studio-tauri/samples/`.
+//! Writes the committed sample projects under `studio/samples/`.
 //!
 //! Asset paths are written **relative to the sample file** (the app resolves
 //! them on load), so the folder is portable: an `.tif` lives in the repository's
@@ -6,7 +6,7 @@
 //! the JSON directly instead of `save_atomic`, whose relativisation only covers
 //! assets inside the project's own directory.
 //!
-//! Run from `studio-tauri/`:
+//! Run from `studio/`:
 //!     cargo run -p studio-core --example make_samples
 //!
 //! Regenerate after changing the starter scene or the sample layout, then

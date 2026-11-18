@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the Studio app icons from code, so they are reproducible.
 
-Run from `studio-tauri/`:  python3 scripts/make_icons.py
+Run from `studio/`:  python3 scripts/make_icons.py
 
 The mark is an isometric cube on the Forge3D amber gradient: the product is a
 3D editor, and the cube is the Phase 1 starter object.

@@ -1,6 +1,6 @@
 # Rebasing the Studio branch onto `main` (measured 2026-11-16)
 
-`studio-tauri` has never been merged to `main`: **main has no `studio-tauri/`
+`studio-tauri` has never been merged to `main`: **main has no `studio/`
 tree at all** (`git ls-tree origin/main --name-only | grep -c studio-tauri` → 0).
 The branch carries the whole Studio product surface — 269 files, 81,175
 insertions — and `main` has moved 325+ commits since the branch point
@@ -22,7 +22,7 @@ CONFLICT (content): Merge conflict in tests/data/world_coord_f32_ledger.json
 ```
 
 Three files, six hunks. **The Studio tree itself merges cleanly** — every
-`studio-tauri/` file auto-merges, including this session's work.
+`studio/` file auto-merges, including this session's work.
 
 The map_scene.py hunks are not mechanical: both sides moved the same engine
 code, and each side's version is *newer in its own direction*.

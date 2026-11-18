@@ -117,7 +117,7 @@ sees. They are the reason the app feels loose.
    in TypeScript and `workspace::compute_render_view` in Rust — and pinned to
    one shared golden vector so the two cannot drift. Duplication, but a
    *checked* one.
-5. **The Studio README links to an untracked file.** `studio-tauri/README.md`
+5. **The Studio README links to an untracked file.** `studio/README.md`
    points at `../FORGE3D_STUDIO_IMPLEMENTATION_PLAN.md`, which was not in the
    repository: the plan the product is built from was invisible to anyone who
    cloned it. Now tracked.

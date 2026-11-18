@@ -26,7 +26,7 @@
 //! ## Wire format
 //!
 //! JSON is `camelCase` throughout. The TypeScript mirror lives in
-//! `studio-tauri/src/bridge/types.ts`; `tests/schema_contract.rs` locks the
+//! `studio/src/bridge/types.ts`; `tests/schema_contract.rs` locks the
 //! serialized key shape so the two cannot drift silently.
 
 use std::time::{SystemTime, UNIX_EPOCH};
