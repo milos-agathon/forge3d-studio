@@ -24,6 +24,9 @@ jobs:
       - name: Frontend tests (viewport math, playback clock, render queue)
         run: npm test
 
+      - name: VP-01 viewport parity harness tests
+        run: node --test scripts/vp01/*.test.mjs
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
