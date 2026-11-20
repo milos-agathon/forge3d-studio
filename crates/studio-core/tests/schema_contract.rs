@@ -228,13 +228,15 @@ fn commands_use_camel_case_type_tags() {
 
 #[test]
 fn session_state_shape_matches_the_ui_mirror() {
-    let editor = studio_core::Editor::new(Project::new(UNTITLED));
-    let value = serde_json::to_value(editor.state()).unwrap();
+    let mut session = studio_core::Session::new();
+    let value = serde_json::to_value(session.new_project(None)).unwrap();
     expect_keys(
         &value,
         &[
+            "sessionId",
             "project",
             "revision",
+            "snapshotSequence",
             "dirty",
             "path",
             "canUndo",

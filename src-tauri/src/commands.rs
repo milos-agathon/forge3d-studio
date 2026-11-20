@@ -1,8 +1,7 @@
 //! Tauri commands: the only way the UI can touch project state.
 //!
-//! Every command returns the full [`SessionState`] snapshot rather than a delta.
-//! Phase 1 scenes are small and this removes any chance of the window holding a
-//! divergent copy of the scene.
+//! Project edits return a full [`SessionState`] snapshot with the session ID
+//! and sequence at which it was captured.
 
 use std::path::{Path, PathBuf};
 
@@ -41,11 +40,29 @@ pub struct AutosaveStatus {
     pub directory: String,
 }
 
-fn lock<'a>(state: &'a State<'_, AppState>) -> Result<std::sync::MutexGuard<'a, Session>, String> {
+fn lock(state: &AppState) -> Result<std::sync::MutexGuard<'_, Session>, String> {
     state
         .session
         .lock()
         .map_err(|_| "the project session is unavailable after an internal error".to_owned())
+}
+
+/// Validate ownership while holding the same lock used for the edit.
+fn require_session(session: &Session, expected: Option<u64>) -> Result<u64, String> {
+    match session.active_id() {
+        Some(id) if expected.is_none() || expected == Some(id) => Ok(id),
+        None if expected.is_none() => Err("no project is open".to_owned()),
+        _ => Err("the project changed before the edit could be applied".to_owned()),
+    }
+}
+
+fn lock_project(
+    state: &AppState,
+    session_id: Option<u64>,
+) -> Result<std::sync::MutexGuard<'_, Session>, String> {
+    let session = lock(state)?;
+    require_session(&session, session_id)?;
+    Ok(session)
 }
 
 #[tauri::command]
@@ -338,8 +355,9 @@ pub fn open_project(state: State<'_, AppState>, path: String) -> Result<SessionS
 pub fn save_project(
     state: State<'_, AppState>,
     path: Option<String>,
+    session_id: Option<u64>,
 ) -> Result<SessionState, String> {
-    let mut session = lock(&state)?;
+    let mut session = lock_project(&state, session_id)?;
     let saved = session
         .save_project(path.map(PathBuf::from))
         .map_err(|error| error.to_string())?;
@@ -354,16 +372,51 @@ pub fn save_project(
 }
 
 #[tauri::command]
-pub fn close_project(state: State<'_, AppState>) -> Result<Option<SessionState>, String> {
-    let mut session = lock(&state)?;
-    session.close_project();
-    Ok(None)
+pub fn close_project(
+    state: State<'_, AppState>,
+    with_session_id: Option<bool>,
+) -> Result<Option<u64>, String> {
+    let id = lock(&state)?.close_project();
+    // Existing IPC callers receive null. Studio uses the ID to order a Close against an Open.
+    Ok(with_session_id.unwrap_or(false).then_some(id))
 }
 
 #[tauri::command]
-pub fn apply_command(state: State<'_, AppState>, command: Command) -> Result<EditResult, String> {
-    let (applied, snapshot) = lock(&state)?
-        .apply(command)
+pub fn apply_command(
+    state: State<'_, AppState>,
+    command: Command,
+    session_id: Option<u64>,
+    terrain_generation: Option<u64>,
+) -> Result<Option<EditResult>, String> {
+    apply_project_command(&state, command, session_id, terrain_generation)
+}
+
+fn apply_project_command(
+    state: &AppState,
+    command: Command,
+    session_id: Option<u64>,
+    terrain_generation: Option<u64>,
+) -> Result<Option<EditResult>, String> {
+    if terrain_generation.is_some() && session_id.is_none() {
+        return Err("a terrain choice requires its project session ID".to_owned());
+    }
+    let mut session = lock_project(state, session_id)?;
+    if terrain_generation
+        .is_some_and(|generation| session.terrain_source_generation() != Some(generation))
+    {
+        return Ok(None);
+    }
+    let (applied, snapshot) = session.apply(command).map_err(|error| error.to_string())?;
+    Ok(Some(EditResult {
+        applied,
+        state: snapshot,
+    }))
+}
+
+#[tauri::command]
+pub fn undo(state: State<'_, AppState>, session_id: Option<u64>) -> Result<EditResult, String> {
+    let (applied, snapshot) = lock_project(&state, session_id)?
+        .undo()
         .map_err(|error| error.to_string())?;
     Ok(EditResult {
         applied,
@@ -372,17 +425,10 @@ pub fn apply_command(state: State<'_, AppState>, command: Command) -> Result<Edi
 }
 
 #[tauri::command]
-pub fn undo(state: State<'_, AppState>) -> Result<EditResult, String> {
-    let (applied, snapshot) = lock(&state)?.undo().map_err(|error| error.to_string())?;
-    Ok(EditResult {
-        applied,
-        state: snapshot,
-    })
-}
-
-#[tauri::command]
-pub fn redo(state: State<'_, AppState>) -> Result<EditResult, String> {
-    let (applied, snapshot) = lock(&state)?.redo().map_err(|error| error.to_string())?;
+pub fn redo(state: State<'_, AppState>, session_id: Option<u64>) -> Result<EditResult, String> {
+    let (applied, snapshot) = lock_project(&state, session_id)?
+        .redo()
+        .map_err(|error| error.to_string())?;
     Ok(EditResult {
         applied,
         state: snapshot,
@@ -393,8 +439,9 @@ pub fn redo(state: State<'_, AppState>) -> Result<EditResult, String> {
 pub fn set_selection(
     state: State<'_, AppState>,
     ids: Vec<ObjectId>,
+    session_id: Option<u64>,
 ) -> Result<SessionState, String> {
-    lock(&state)?
+    lock_project(&state, session_id)?
         .set_selection(ids)
         .map_err(|error| error.to_string())
 }
@@ -403,8 +450,12 @@ pub fn set_selection(
 /// not undoable, no autosave). Returns the snapshot so the UI re-renders with
 /// the evaluated transforms, plus the clamped frame that was applied.
 #[tauri::command]
-pub fn set_playhead(state: State<'_, AppState>, frame: f32) -> Result<PlayheadResult, String> {
-    let (frame, project_state) = lock(&state)?
+pub fn set_playhead(
+    state: State<'_, AppState>,
+    frame: f32,
+    session_id: Option<u64>,
+) -> Result<PlayheadResult, String> {
+    let (frame, project_state) = lock_project(&state, session_id)?
         .set_playhead(frame)
         .map_err(|error| error.to_string())?;
     Ok(PlayheadResult {
@@ -466,6 +517,7 @@ pub fn set_sun_from_solar(
     latitude: f64,
     longitude: f64,
     datetime_utc: String,
+    session_id: Option<u64>,
 ) -> Result<SolarResult, String> {
     if !latitude.is_finite() || !(-90.0..=90.0).contains(&latitude) {
         return Err("latitude must be between -90 and 90 degrees".to_owned());
@@ -478,6 +530,10 @@ pub fn set_sun_from_solar(
         return Err("a UTC date and time is required".to_owned());
     }
 
+    let issuing_session = {
+        let session = lock(&state)?;
+        require_session(&session, session_id)?
+    };
     let engine = forge.probe(false);
     if !engine.available {
         return Err(engine.detail);
@@ -485,7 +541,7 @@ pub fn set_sun_from_solar(
     let solar = crate::forge3d::solar_position(&engine.python, latitude, longitude, datetime_utc)?;
     let rotation = studio_core::workspace::sun_rotation(solar.direction);
 
-    let mut session = lock(&state)?;
+    let mut session = lock_project(&state, Some(issuing_session))?;
     let snapshot = session
         .state()
         .ok_or_else(|| "no project is open".to_owned())?;
@@ -728,8 +784,9 @@ pub fn add_polygon_layer(
     state: State<'_, AppState>,
     path: Option<String>,
     colour: Option<Vec<f32>>,
+    session_id: Option<u64>,
 ) -> Result<SessionState, String> {
-    let mut session = lock(&state)?;
+    let mut session = lock_project(&state, session_id)?;
     let snapshot = session
         .state()
         .ok_or_else(|| "no project is open".to_owned())?;
@@ -934,21 +991,72 @@ pub fn dataset_path(forge: State<'_, Forge3dState>, name: String) -> Result<Stri
 
 // ---------------------------------------------------------------------- render
 
-/// Render the current scene at `width` × `height` through the embedded
-/// Forge3D pipeline (the same one the golden tests certify).
+/// Reserve a terrain choice before resolving its file so lookup and stat completion order cannot
+/// change which choice is current. For a relink, confirm that the asset is still the active DEM.
+#[tauri::command]
+pub fn reserve_terrain_source_change(
+    state: State<'_, AppState>,
+    session_id: u64,
+    asset_id: Option<studio_core::ids::AssetId>,
+) -> Result<Option<u64>, String> {
+    lock_project(&state, Some(session_id))?
+        .reserve_terrain_source_change(asset_id)
+        .map_err(|error| error.to_string())
+}
+
 /// Replace the scene terrain's DEM with a raster the user picked; on an empty
 /// scene, create the terrain (so the Add menu can start from a DEM too).
+/// Return no snapshot if a newer terrain source choice superseded the sample.
 #[tauri::command(async)]
 pub fn import_terrain_dem(
     forge: State<'_, Forge3dState>,
     state: State<'_, AppState>,
     path: String,
-) -> Result<SessionState, String> {
-    let python = forge.probe(false).python;
-    let info = crate::forge3d::sample_terrain(&python, &path, 48)?;
-    let metadata = std::fs::metadata(&path).map_err(|error| format!("{path}: {error}"))?;
+    session_id: Option<u64>,
+    terrain_generation: Option<u64>,
+) -> Result<Option<SessionState>, String> {
+    import_dem_with_sampler(&state, path, session_id, terrain_generation, |path| {
+        crate::forge3d::sample_terrain(&forge.probe(false).python, path, 48)
+    })
+}
 
-    let mut session = lock(&state)?;
+fn import_dem_with_sampler(
+    state: &AppState,
+    path: String,
+    session_id: Option<u64>,
+    terrain_generation: Option<u64>,
+    sample: impl FnOnce(&str) -> Result<serde_json::Value, String>,
+) -> Result<Option<SessionState>, String> {
+    if terrain_generation.is_some() && session_id.is_none() {
+        return Err("a terrain choice requires its project session ID".to_owned());
+    }
+    let (issuing_session, generation) = {
+        let mut session = lock(state)?;
+        let issuing_session = require_session(&session, session_id)?;
+        let generation = match terrain_generation {
+            Some(generation) if session.terrain_source_generation() == Some(generation) => {
+                Some(generation)
+            }
+            Some(_) => None,
+            None => session
+                .reserve_terrain_source_change(None)
+                .map_err(|error| error.to_string())?,
+        };
+        let Some(generation) = generation else {
+            return Ok(None);
+        };
+        (issuing_session, generation)
+    };
+    let sampled = sample(&path).and_then(|info| {
+        let metadata = std::fs::metadata(&path).map_err(|error| format!("{path}: {error}"))?;
+        Ok((info, metadata))
+    });
+
+    let mut session = lock_project(state, Some(issuing_session))?;
+    if session.terrain_source_generation() != Some(generation) {
+        return Ok(None);
+    }
+    let (info, metadata) = sampled?;
     let snapshot = session
         .state()
         .ok_or_else(|| "no project is open".to_owned())?;
@@ -1024,10 +1132,8 @@ pub fn import_terrain_dem(
 
     session
         .apply(Command::Batch { commands })
-        .map_err(|error| error.to_string())?;
-    session
-        .state()
-        .ok_or_else(|| "no project is open".to_owned())
+        .map(|(_, snapshot)| Some(snapshot))
+        .map_err(|error| error.to_string())
 }
 
 /// Size of a file on disk. The webview cannot stat, and asset registration
@@ -1050,8 +1156,9 @@ pub fn add_imagery_layer(
     state: State<'_, AppState>,
     path: Option<String>,
     opacity: Option<f32>,
+    session_id: Option<u64>,
 ) -> Result<SessionState, String> {
-    let mut session = lock(&state)?;
+    let mut session = lock_project(&state, session_id)?;
     let snapshot = session
         .state()
         .ok_or_else(|| "no project is open".to_owned())?;
@@ -1117,8 +1224,9 @@ pub fn add_vector_layer(
     path: Option<String>,
     colour: Option<Vec<f32>>,
     width_px: Option<f32>,
+    session_id: Option<u64>,
 ) -> Result<SessionState, String> {
-    let mut session = lock(&state)?;
+    let mut session = lock_project(&state, session_id)?;
     let snapshot = session
         .state()
         .ok_or_else(|| "no project is open".to_owned())?;
@@ -1513,6 +1621,264 @@ mod tests {
     use super::*;
     use studio_core::project::{Project, Workspace};
 
+    fn terrain_import_fixture() -> (AppState, SessionState, String, String) {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let state = AppState::new(PathBuf::new());
+        let original = lock(&state)
+            .unwrap()
+            .open_project(&root.join("samples/bryce-terrain.studio3d"))
+            .unwrap();
+        let path = |name| {
+            root.join("assets/tif")
+                .join(name)
+                .to_string_lossy()
+                .into_owned()
+        };
+        (
+            state,
+            original,
+            path("Bryce_Canyon_1024.tif"),
+            path("Bryce_Canyon.tif"),
+        )
+    }
+
+    #[test]
+    fn late_lookup_and_stat_cannot_replace_a_newer_reserved_terrain_choice() {
+        let (state, original, older, newer) = terrain_import_fixture();
+        let session_id = Some(original.session_id);
+        let dem = original
+            .project
+            .terrain_object()
+            .unwrap()
+            .terrain()
+            .unwrap()
+            .asset;
+        let (old_import, old_relink, new_relink) = {
+            let mut session = lock(&state).unwrap();
+            (
+                session.reserve_terrain_source_change(None).unwrap(),
+                session.reserve_terrain_source_change(Some(dem)).unwrap(),
+                session.reserve_terrain_source_change(Some(dem)).unwrap(),
+            )
+        };
+        let relink = |path| Command::SetAssetPath {
+            id: dem,
+            path,
+            byte_size: 37088,
+        };
+
+        // A reservation supersedes older choices even while its own file stat is pending.
+        assert!(
+            import_dem_with_sampler(&state, older.clone(), session_id, old_import, |_| {
+                panic!("an outdated choice must be dropped before sampling");
+            })
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            apply_project_command(&state, relink(older), session_id, old_relink)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(lock(&state).unwrap().state().unwrap().revision, 0);
+
+        let committed =
+            apply_project_command(&state, relink(newer.clone()), session_id, new_relink)
+                .unwrap()
+                .expect("the latest reserved relink commits");
+        assert_eq!(committed.state.revision, 1);
+        assert_eq!(
+            committed
+                .state
+                .project
+                .assets
+                .iter()
+                .find(|asset| asset.id == dem)
+                .unwrap()
+                .path,
+            newer
+        );
+    }
+
+    #[test]
+    fn newer_terrain_reservation_cancels_a_dem_already_sampling() {
+        let (state, original, older, _) = terrain_import_fixture();
+        let session_id = Some(original.session_id);
+        let generation = lock(&state)
+            .unwrap()
+            .reserve_terrain_source_change(None)
+            .unwrap();
+        let superseded = import_dem_with_sampler(&state, older, session_id, generation, |_| {
+            lock(&state)?
+                .reserve_terrain_source_change(None)
+                .map_err(|error| error.to_string())?;
+            Ok(serde_json::json!({}))
+        })
+        .unwrap();
+
+        assert!(superseded.is_none());
+        let snapshot = lock(&state).unwrap().state().unwrap();
+        assert_eq!(snapshot.revision, 0);
+        assert_eq!(snapshot.project.assets, original.project.assets);
+    }
+
+    #[test]
+    fn older_dem_import_cannot_overwrite_a_newer_import() {
+        let (state, original, older, newer) = terrain_import_fixture();
+        let session_id = Some(original.session_id);
+        let superseded = import_dem_with_sampler(&state, older, session_id, None, |_| {
+            let committed =
+                import_dem_with_sampler(&state, newer.clone(), session_id, None, |_| {
+                    Ok(serde_json::json!({}))
+                })?;
+            assert!(committed.is_some());
+            Ok(serde_json::json!({}))
+        })
+        .unwrap();
+        assert!(superseded.is_none());
+
+        let snapshot = lock(&state).unwrap().state().unwrap();
+        assert_eq!(snapshot.revision, 1);
+        assert_eq!(
+            snapshot.project.assets.len(),
+            original.project.assets.len() + 1
+        );
+        let dem = snapshot
+            .project
+            .terrain_object()
+            .unwrap()
+            .terrain()
+            .unwrap()
+            .asset;
+        assert_eq!(
+            snapshot
+                .project
+                .assets
+                .iter()
+                .find(|asset| asset.id == dem)
+                .unwrap()
+                .path,
+            newer
+        );
+    }
+
+    #[test]
+    fn older_dem_import_cannot_overwrite_an_identical_path_and_size_relink() {
+        let (state, original, older, _) = terrain_import_fixture();
+        let dem = original
+            .project
+            .terrain_object()
+            .unwrap()
+            .terrain()
+            .unwrap()
+            .asset;
+        let asset = original
+            .project
+            .assets
+            .iter()
+            .find(|asset| asset.id == dem)
+            .unwrap();
+        let superseded =
+            import_dem_with_sampler(&state, older, Some(original.session_id), None, |_| {
+                lock(&state)?
+                    .apply(Command::Batch {
+                        commands: vec![Command::Batch {
+                            commands: vec![Command::SetAssetPath {
+                                id: asset.id,
+                                path: asset.path.clone(),
+                                byte_size: asset.byte_size,
+                            }],
+                        }],
+                    })
+                    .map_err(|error| error.to_string())?;
+                Ok(serde_json::json!({}))
+            })
+            .unwrap();
+        assert!(superseded.is_none());
+
+        let snapshot = lock(&state).unwrap().state().unwrap();
+        assert_eq!(snapshot.revision, 1);
+        assert_eq!(snapshot.project.assets, original.project.assets);
+        assert_eq!(
+            snapshot
+                .project
+                .terrain_object()
+                .unwrap()
+                .terrain()
+                .unwrap()
+                .asset,
+            dem
+        );
+    }
+
+    #[test]
+    fn dem_import_preserves_an_intervening_visibility_edit() {
+        let (state, original, path, _) = terrain_import_fixture();
+        let terrain = original.project.terrain_object().unwrap().id;
+        let committed = import_dem_with_sampler(
+            &state,
+            path.clone(),
+            Some(original.session_id),
+            None,
+            |_| {
+                lock(&state)?
+                    .apply(Command::SetVisibility {
+                        id: terrain,
+                        visible: false,
+                    })
+                    .map_err(|error| error.to_string())?;
+                Ok(serde_json::json!({}))
+            },
+        )
+        .unwrap()
+        .expect("visibility edits leave the DEM import current");
+
+        let terrain = committed.project.terrain_object().unwrap();
+        assert!(!terrain.visible);
+        let dem = terrain.terrain().unwrap().asset;
+        assert_eq!(
+            committed
+                .project
+                .assets
+                .iter()
+                .find(|asset| asset.id == dem)
+                .unwrap()
+                .path,
+            path
+        );
+        assert_eq!(committed.revision, 2);
+    }
+
+    #[test]
+    fn dem_import_cannot_commit_to_a_reopened_copy_of_the_same_project() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let project = root.join("samples/bryce-terrain.studio3d");
+        let dem = root.join("assets/tif/Bryce_Canyon_1024.tif");
+        let state = AppState::new(PathBuf::new());
+        let first = lock(&state).unwrap().open_project(&project).unwrap();
+        let result = import_dem_with_sampler(
+            &state,
+            dem.to_string_lossy().into_owned(),
+            None,
+            None,
+            |_| {
+                // Reopening even the very same file replaces the editor while sampling.
+                let mut session = state
+                    .session
+                    .try_lock()
+                    .expect("sampling must release the lock");
+                session.open_project(&project).unwrap();
+                Ok(serde_json::json!({}))
+            },
+        );
+        assert!(result.unwrap_err().contains("project changed"));
+        let reopened = lock(&state).unwrap().state().unwrap();
+        assert_eq!(reopened.project.id, first.project.id);
+        assert_eq!(reopened.revision, 0);
+        assert_eq!(reopened.project.assets, first.project.assets);
+        assert!(!reopened.dirty);
+    }
+
     #[test]
     fn still_sidecar_carries_the_payload_and_the_provenance() {
         let project = Project::starter(
@@ -1573,8 +1939,10 @@ mod tests {
             }),
         );
         let snapshot = SessionState {
+            session_id: 1,
             project,
             revision: 0,
+            snapshot_sequence: 0,
             dirty: false,
             path: None,
             can_undo: false,
@@ -1639,8 +2007,10 @@ mod tests {
             }),
         );
         let snapshot = SessionState {
+            session_id: 1,
             project,
             revision: 0,
+            snapshot_sequence: 0,
             dirty: false,
             path: None,
             can_undo: false,

@@ -12,7 +12,7 @@ use crate::autosave::{AutosaveStore, RecoveryEntry};
 use crate::command::Command;
 use crate::editor::{Applied, Editor, SessionState};
 use crate::error::StudioError;
-use crate::ids::ObjectId;
+use crate::ids::{AssetId, ObjectId};
 use crate::persist::{load, save_atomic};
 use crate::project::{Project, TerrainSeed, UNTITLED};
 
@@ -30,6 +30,8 @@ pub struct AutosaveReport {
 
 pub struct Session {
     editor: Option<Editor>,
+    /// Advances under the shell lock on every successful replacement, including close.
+    session_id: u64,
     /// Revision of the last snapshot, so an idle session stops writing.
     last_snapshot_revision: Option<u64>,
     last_report: Option<AutosaveReport>,
@@ -47,6 +49,7 @@ impl Session {
     pub fn new() -> Self {
         Self {
             editor: None,
+            session_id: 0,
             last_snapshot_revision: None,
             last_report: None,
             last_error: None,
@@ -54,7 +57,29 @@ impl Session {
     }
 
     pub fn state(&self) -> Option<SessionState> {
-        self.editor.as_ref().map(Editor::state)
+        self.editor
+            .as_ref()
+            .map(|editor| editor.state_for_session(self.session_id))
+    }
+
+    /// Identifies this open editor even when the same project file is reopened.
+    pub fn active_id(&self) -> Option<u64> {
+        self.editor.as_ref().map(|_| self.session_id)
+    }
+
+    /// Reserve a DEM import or a relink of the currently active DEM asset.
+    pub fn reserve_terrain_source_change(
+        &mut self,
+        asset: Option<AssetId>,
+    ) -> Result<Option<u64>, StudioError> {
+        self.editor
+            .as_mut()
+            .map(|editor| editor.reserve_terrain_source_change(asset))
+            .ok_or_else(|| StudioError::invalid("no project is open"))
+    }
+
+    pub fn terrain_source_generation(&self) -> Option<u64> {
+        self.editor.as_ref().map(Editor::terrain_source_generation)
     }
 
     pub fn last_error(&self) -> Option<&str> {
@@ -112,7 +137,7 @@ impl Session {
 
         editor.set_path(Some(target));
         editor.mark_saved();
-        let state = editor.state();
+        let state = editor.state_for_session(self.session_id);
         self.editor = Some(editor);
         self.last_snapshot_revision = None;
         Ok(state)
@@ -124,7 +149,7 @@ impl Session {
             .as_mut()
             .ok_or_else(|| StudioError::invalid("no project is open"))?;
         let applied = editor.apply(command)?;
-        Ok((applied, editor.state()))
+        Ok((applied, editor.state_for_session(self.session_id)))
     }
 
     pub fn undo(&mut self) -> Result<(Applied, SessionState), StudioError> {
@@ -133,7 +158,7 @@ impl Session {
             .as_mut()
             .ok_or_else(|| StudioError::invalid("no project is open"))?;
         let applied = editor.undo()?;
-        Ok((applied, editor.state()))
+        Ok((applied, editor.state_for_session(self.session_id)))
     }
 
     pub fn redo(&mut self) -> Result<(Applied, SessionState), StudioError> {
@@ -142,7 +167,7 @@ impl Session {
             .as_mut()
             .ok_or_else(|| StudioError::invalid("no project is open"))?;
         let applied = editor.redo()?;
-        Ok((applied, editor.state()))
+        Ok((applied, editor.state_for_session(self.session_id)))
     }
 
     pub fn set_selection(&mut self, ids: Vec<ObjectId>) -> Result<SessionState, StudioError> {
@@ -151,7 +176,7 @@ impl Session {
             .as_mut()
             .ok_or_else(|| StudioError::invalid("no project is open"))?;
         editor.set_selection(ids)?;
-        Ok(editor.state())
+        Ok(editor.state_for_session(self.session_id))
     }
 
     /// Move the playhead and evaluate the timeline into the project (view
@@ -164,7 +189,7 @@ impl Session {
             .as_mut()
             .ok_or_else(|| StudioError::invalid("no project is open"))?;
         let frame = editor.preview_playhead(frame);
-        Ok((frame, editor.state()))
+        Ok((frame, editor.state_for_session(self.session_id)))
     }
 
     /// Swap in a recovered project. It stays dirty: the user still has to save.
@@ -176,11 +201,13 @@ impl Session {
         self.begin(editor)
     }
 
-    pub fn close_project(&mut self) {
+    pub fn close_project(&mut self) -> u64 {
         self.editor = None;
+        self.session_id += 1;
         self.last_snapshot_revision = None;
         self.last_report = None;
         self.last_error = None;
+        self.session_id
     }
 
     /// Write a snapshot when the project is dirty and changed since the last
@@ -237,7 +264,8 @@ impl Session {
     }
 
     fn begin(&mut self, editor: Editor) -> SessionState {
-        let state = editor.state();
+        self.session_id += 1;
+        let state = editor.state_for_session(self.session_id);
         self.editor = Some(editor);
         self.last_snapshot_revision = None;
         self.last_report = None;
@@ -298,13 +326,37 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("saved.studio3d");
         let mut session = Session::new();
-        session.new_project(Some("Saved".to_owned()));
-        assert!(session.state().unwrap().dirty);
+        let initial = session.new_project(Some("Saved".to_owned()));
+        assert!(initial.dirty);
 
         let saved = session.save_project(Some(path.clone())).unwrap();
         assert!(!saved.dirty);
         assert_eq!(saved.path.as_deref(), Some(path.to_str().unwrap()));
+        assert_eq!(saved.revision, initial.revision);
+        assert!(saved.snapshot_sequence > initial.snapshot_sequence);
         assert!(path.exists());
+    }
+
+    #[test]
+    fn snapshot_sequence_orders_view_changes_and_edits_in_one_session() {
+        let mut session = Session::new();
+        let initial = session.new_project(None);
+        let cube = cube_id(&session);
+        let selected = session.set_selection(vec![cube]).unwrap();
+        let (_, early) = session.set_playhead(12.0).unwrap();
+        let (_, latest) = session.set_playhead(48.0).unwrap();
+        let (_, edited) = session
+            .apply(Command::SetVisibility {
+                id: cube,
+                visible: false,
+            })
+            .unwrap();
+
+        assert_eq!(latest.revision, initial.revision);
+        assert_eq!(edited.revision, initial.revision + 1);
+        let sequences = [initial, selected, early, latest, edited].map(|s| s.snapshot_sequence);
+        assert!(sequences.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(session.state().unwrap().snapshot_sequence, sequences[4]);
     }
 
     #[test]
@@ -384,7 +436,7 @@ mod tests {
         let source = dir.path().join("original.studio3d");
         let (store_dir, store) = temp_store();
         let mut session = Session::new();
-        session.new_project(Some("Recovered".to_owned()));
+        let original = session.new_project(Some("Recovered".to_owned()));
         session.save_project(Some(source.clone())).unwrap();
 
         let cube = cube_id(&session);
@@ -399,6 +451,7 @@ mod tests {
         let loaded = store.load(&record.id).unwrap();
         let state = session.restore_recovery(&record, loaded);
 
+        assert!(state.session_id > original.session_id);
         assert!(state.dirty, "recovered work must not look saved");
         assert_eq!(state.path.as_deref(), Some(source.to_str().unwrap()));
         assert!(!state.can_undo, "recovery starts a fresh history");
@@ -410,11 +463,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("kept.studio3d");
         let mut session = Session::new();
-        session.new_project(None);
-        session.save_project(Some(path.clone())).unwrap();
-        session.close_project();
+        let original = session.new_project(None);
+        let saved = session.save_project(Some(path.clone())).unwrap();
+        assert_eq!(saved.session_id, original.session_id);
+        let closed = session.close_project();
         assert!(session.state().is_none());
-        assert!(path.exists());
+        assert!(closed > saved.session_id);
+        let reopened = session.open_project(&path).unwrap();
+        assert_eq!(reopened.project.id, saved.project.id);
+        assert!(reopened.session_id > closed);
     }
 
     #[test]
@@ -425,10 +482,12 @@ mod tests {
 
         let mut session = Session::new();
         session.new_project(Some("Still open".to_owned()));
-        let before = session.state().unwrap().project.id;
+        let before = session.state().unwrap();
 
         assert!(session.open_project(&broken).is_err());
-        assert_eq!(session.state().unwrap().project.id, before);
+        let after = session.state().unwrap();
+        assert_eq!(after.session_id, before.session_id);
+        assert_eq!(after.project.id, before.project.id);
     }
 
     #[test]

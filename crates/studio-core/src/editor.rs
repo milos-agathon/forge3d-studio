@@ -11,7 +11,7 @@ use serde::Serialize;
 
 use crate::command::Command;
 use crate::error::StudioError;
-use crate::ids::ObjectId;
+use crate::ids::{AssetId, ObjectId};
 use crate::now_unix_ms;
 use crate::project::Project;
 
@@ -43,8 +43,12 @@ pub struct HistoryEntry {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionState {
+    /// Identity of this open editor in the shell. Zero for a standalone editor.
+    pub session_id: u64,
     pub project: Project,
     pub revision: u64,
+    /// Advances on changes to the snapshot, including view state and save status.
+    pub snapshot_sequence: u64,
     pub dirty: bool,
     /// Saved file path, when the project has one.
     pub path: Option<String>,
@@ -59,6 +63,8 @@ pub struct SessionState {
 pub struct Editor {
     project: Project,
     revision: u64,
+    snapshot_sequence: u64,
+    terrain_source_generation: u64,
     dirty: bool,
     path: Option<PathBuf>,
     undo: Vec<HistoryEntry>,
@@ -76,6 +82,8 @@ impl Editor {
         Self {
             project,
             revision: 0,
+            snapshot_sequence: 0,
+            terrain_source_generation: 0,
             dirty: true,
             path: None,
             undo: Vec::new(),
@@ -100,12 +108,25 @@ impl Editor {
         self.revision
     }
 
+    pub(crate) fn reserve_terrain_source_change(&mut self, asset: Option<AssetId>) -> Option<u64> {
+        if asset.is_some_and(|id| self.terrain_source().map(|(_, active)| active) != Some(id)) {
+            return None;
+        }
+        self.terrain_source_generation += 1;
+        Some(self.terrain_source_generation)
+    }
+
+    pub(crate) fn terrain_source_generation(&self) -> u64 {
+        self.terrain_source_generation
+    }
+
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
     }
 
     pub fn set_path(&mut self, path: Option<PathBuf>) {
         self.path = path;
+        self.snapshot_sequence += 1;
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -114,6 +135,7 @@ impl Editor {
 
     pub fn mark_saved(&mut self) {
         self.dirty = false;
+        self.snapshot_sequence += 1;
     }
 
     pub fn can_undo(&self) -> bool {
@@ -133,9 +155,15 @@ impl Editor {
     }
 
     pub fn state(&self) -> SessionState {
+        self.state_for_session(0)
+    }
+
+    pub(crate) fn state_for_session(&self, session_id: u64) -> SessionState {
         SessionState {
+            session_id,
             project: self.project.clone(),
             revision: self.revision,
+            snapshot_sequence: self.snapshot_sequence,
             dirty: self.dirty,
             path: self
                 .path
@@ -157,7 +185,7 @@ impl Editor {
     /// would silently produce a different object than undo removed.
     pub fn apply(&mut self, command: Command) -> Result<Applied, StudioError> {
         let label = command.label(&self.project);
-        let (inverse, affected) = command.apply_with_effect(&mut self.project)?;
+        let (inverse, affected) = self.apply_to_project(&command)?;
 
         let mut scratch = self.project.clone();
         let canonical = inverse.apply(&mut scratch)?;
@@ -182,7 +210,7 @@ impl Editor {
     /// re-applies the original command rather than its inverse.
     pub fn undo(&mut self) -> Result<Applied, StudioError> {
         let entry = self.undo.pop().ok_or(StudioError::NothingToUndo)?;
-        let (_, affected) = entry.inverse.apply_with_effect(&mut self.project)?;
+        let (_, affected) = self.apply_to_project(&entry.inverse)?;
         self.after_edit();
         self.redo.push(entry.clone());
         Ok(Applied {
@@ -195,7 +223,7 @@ impl Editor {
     /// Re-apply the last undone command.
     pub fn redo(&mut self) -> Result<Applied, StudioError> {
         let entry = self.redo.pop().ok_or(StudioError::NothingToRedo)?;
-        let (_, affected) = entry.command.apply_with_effect(&mut self.project)?;
+        let (_, affected) = self.apply_to_project(&entry.command)?;
         self.after_edit();
         self.undo.push(entry.clone());
         Ok(Applied {
@@ -221,6 +249,7 @@ impl Editor {
         }
         self.project.selection = unique;
         self.project.touch();
+        self.snapshot_sequence += 1;
         Ok(())
     }
 
@@ -235,7 +264,28 @@ impl Editor {
     pub fn preview_playhead(&mut self, frame: f32) -> f32 {
         let frame = crate::timeline::evaluate(&mut self.project, frame);
         self.project.touch();
+        self.snapshot_sequence += 1;
         frame
+    }
+
+    fn terrain_source(&self) -> Option<(ObjectId, AssetId)> {
+        let object = self.project.terrain_object()?;
+        Some((object.id, object.terrain()?.asset))
+    }
+
+    fn apply_to_project(
+        &mut self,
+        command: &Command,
+    ) -> Result<(Command, Vec<ObjectId>), StudioError> {
+        let source = self.terrain_source();
+        let result = command.apply_with_effect(&mut self.project)?;
+        // A relink can replace raster bytes without changing its path, size or asset ID.
+        if source != self.terrain_source()
+            || source.is_some_and(|(terrain, asset)| edits_terrain_source(command, terrain, asset))
+        {
+            self.terrain_source_generation += 1;
+        }
+        Ok(result)
     }
 
     fn push_undo(&mut self, entry: HistoryEntry) {
@@ -250,12 +300,24 @@ impl Editor {
         self.project.touch();
         self.project.updated_unix_ms = now_unix_ms();
         self.revision += 1;
+        self.snapshot_sequence += 1;
         self.dirty = true;
         debug_assert!(
             self.project.validate().is_ok(),
             "a command produced an invalid project: {:?}",
             self.project.validate()
         );
+    }
+}
+
+fn edits_terrain_source(command: &Command, terrain: ObjectId, asset: AssetId) -> bool {
+    match command {
+        Command::SetTerrainDem { id, .. } => *id == terrain,
+        Command::SetAssetPath { id, .. } => *id == asset,
+        Command::Batch { commands } => commands
+            .iter()
+            .any(|command| edits_terrain_source(command, terrain, asset)),
+        _ => false,
     }
 }
 

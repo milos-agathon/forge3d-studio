@@ -44,28 +44,28 @@ export const tauriBridge: StudioBridge = {
   openProject: (path) =>
     invoke<SessionState>("open_project", { path }),
 
-  saveProject: (path) =>
-    invoke<SessionState>("save_project", { path: path ?? null }),
+  saveProject: (path, sessionId) => invoke<SessionState>("save_project", { path, sessionId }),
 
-  closeProject: () => invoke<null>("close_project"),
+  closeProject: () => invoke<number>("close_project", { withSessionId: true }),
 
-  applyCommand: (command) =>
-    invoke<EditResult>("apply_command", { command }),
+  applyCommand: (command, sessionId, terrainGeneration) =>
+    invoke<EditResult | null>("apply_command", { command, sessionId, terrainGeneration }),
 
-  undo: () => invoke<EditResult>("undo"),
+  undo: (sessionId) => invoke<EditResult>("undo", { sessionId }),
 
-  redo: () => invoke<EditResult>("redo"),
+  redo: (sessionId) => invoke<EditResult>("redo", { sessionId }),
 
-  setSelection: (ids) => invoke<SessionState>("set_selection", { ids }),
+  setSelection: (ids, sessionId) => invoke<SessionState>("set_selection", { ids, sessionId }),
 
-  setPlayhead: (frame) => invoke<PlayheadResult>("set_playhead", { frame }),
+  setPlayhead: (frame, sessionId) => invoke<PlayheadResult>("set_playhead", { frame, sessionId }),
 
-  setSunFromSolar: (id, latitude, longitude, datetimeUtc) =>
+  setSunFromSolar: (id, latitude, longitude, datetimeUtc, sessionId) =>
     invoke<SolarResult>("set_sun_from_solar", {
       id,
       latitude,
       longitude,
       datetimeUtc,
+      sessionId,
     }),
 
   renderAnimationFrame: (request) =>
@@ -130,20 +130,25 @@ export const tauriBridge: StudioBridge = {
       labels,
     }),
 
-  importTerrainDem: (path) => invoke<SessionState>("import_terrain_dem", { path }),
+  importTerrainDem: (path, sessionId, terrainGeneration) =>
+    invoke<SessionState | null>("import_terrain_dem", { path, sessionId, terrainGeneration }),
 
-  addImageryLayer: (path, opacity) =>
-    invoke<SessionState>("add_imagery_layer", { path, opacity: opacity ?? null }),
+  reserveTerrainSourceChange: (sessionId, assetId) =>
+    invoke<number | null>("reserve_terrain_source_change", { sessionId, assetId }),
 
-  addVectorLayer: (path, colour, widthPx) =>
+  addImageryLayer: (path, sessionId, opacity) =>
+    invoke<SessionState>("add_imagery_layer", { path, sessionId, opacity: opacity ?? null }),
+
+  addVectorLayer: (path, sessionId, colour, widthPx) =>
     invoke<SessionState>("add_vector_layer", {
       path,
+      sessionId,
       colour: colour ?? null,
       widthPx: widthPx ?? null,
     }),
 
-  addPolygonLayer: (path, colour) =>
-    invoke<SessionState>("add_polygon_layer", { path, colour: colour ?? null }),
+  addPolygonLayer: (path, sessionId, colour) =>
+    invoke<SessionState>("add_polygon_layer", { path, sessionId, colour: colour ?? null }),
 
   forge3dProbe: (force) => invoke<EngineStatus>("forge3d_probe", { force: force ?? false }),
 

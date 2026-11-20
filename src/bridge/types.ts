@@ -433,8 +433,10 @@ export interface WrittenFrame {
 }
 
 export interface SessionState {
+  sessionId: number;
   project: Project;
   revision: number;
+  snapshotSequence: number;
   dirty: boolean;
   path: string | null;
   canUndo: boolean;

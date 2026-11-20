@@ -4,6 +4,10 @@ import { TERRAIN_VIEW_SIZE } from "./viewMath.ts";
 
 export type RendererPreference = "auto" | "forge3d-web" | "three";
 export type Triple = [number, number, number];
+export interface TerrainTransform {
+  translation: Triple;
+  scale: number;
+}
 
 export interface BackendState {
   preference: RendererPreference;
@@ -42,7 +46,38 @@ export function supportsTransform(rotation: Triple, scale: Triple): boolean {
 // Dense WebGPU terrain has a fixed 0.24-world-unit edge skirt. Render in
 // ground units and transform the Studio camera into that same coordinate system.
 export function studioUnitsPerGroundUnit(preview: TerrainPreview): number {
-  return TERRAIN_VIEW_SIZE / Math.max(...preview.spanXz) / (preview.spanMetresPerUnit ?? 1);
+  return studioUnitsPerPreviewUnit(preview) / (preview.spanMetresPerUnit ?? 1);
+}
+
+export function studioUnitsPerPreviewUnit(preview: TerrainPreview): number {
+  return TERRAIN_VIEW_SIZE / Math.max(...preview.spanXz);
+}
+
+export function terrainTransform(preview: TerrainPreview, translation: Triple, objectScale: number): TerrainTransform {
+  return { translation, scale: objectScale * studioUnitsPerGroundUnit(preview) };
+}
+
+export function studioToRuntime([x, y, z]: Triple, { translation: [tx, ty, tz], scale }: TerrainTransform): Triple {
+  return [(x - tx) / scale, (y - ty) / scale, (z - tz) / scale];
+}
+
+export function runtimeToStudio([x, y, z]: Triple, { translation: [tx, ty, tz], scale }: TerrainTransform): Triple {
+  return [tx + scale * x, ty + scale * y, tz + scale * z];
+}
+
+function terrainGrid(preview: TerrainPreview, zScale: number): { spacing: [number, number]; exaggeration: number } {
+  const { resolution, spanXz: [width, depth] } = preview;
+  const units = preview.spanMetresPerUnit ?? 1;
+  const intervals = resolution - 1;
+  return { spacing: [width * units / intervals, depth * units / intervals], exaggeration: zScale * units };
+}
+
+/** Terrain rows run north to south, with the footprint centred on X/Z and the raw minimum at Y = 0. */
+export function terrainSamplePoint(preview: TerrainPreview, zScale: number, row: number, column: number): Triple {
+  const { spacing, exaggeration } = terrainGrid(preview, zScale);
+  const centre = (preview.resolution - 1) / 2;
+  const height = preview.heights[row * preview.resolution + column];
+  return [(column - centre) * spacing[0], (height - preview.minElevation) * exaggeration, (row - centre) * spacing[1]];
 }
 
 function linearToSrgb(v: number): number {
@@ -94,17 +129,14 @@ function terrainLayers(resolution: number, hillshade: Uint8Array | undefined,
 
 export function terrainInput(preview: TerrainPreview, zScale: number, clay: Triple,
   hillshade?: Uint8Array, appearance: TerrainAppearance = {}): TerrainHeightmapInput {
-  const { resolution, spanXz: [width, depth], minElevation, maxElevation } = preview;
+  const { resolution, minElevation, maxElevation } = preview;
   const layers = appearance.drape ? undefined : terrainLayers(resolution, hillshade, appearance.vertexColors);
-  const groundUnits = preview.spanMetresPerUnit ?? 1;
-  const span = resolution - 1;
   // A constant DEM has zero height in the Studio. Use a nonempty domain
   // for the runtime and retain its lower endpoint so every vertex stays flat.
   const domainMax = maxElevation > minElevation ? maxElevation : minElevation + Math.max(1, Math.abs(minElevation));
   return {
     width: resolution, height: resolution, heights: Float32Array.from(preview.heights),
-    domain: [minElevation, domainMax], exaggeration: zScale * groundUnits,
-    spacing: [width * groundUnits / span, depth * groundUnits / span],
+    domain: [minElevation, domainMax], ...terrainGrid(preview, zScale),
     renderMode: "perspective",
     material: {
       albedoMode: "material", materialSet: [{ baseColor: [linearToSrgb(clay[0]), linearToSrgb(clay[1]), linearToSrgb(clay[2])], roughness: 0.95, metallic: 0 }],
@@ -116,8 +148,7 @@ export function terrainInput(preview: TerrainPreview, zScale: number, clay: Trip
 
 export function cameraInput(position: Triple, target: Triple, up: Triple, fov: number,
   near: number, far: number, translation: Triple, scale: number): CameraInput {
-  const local = (v: Triple): Triple => [(v[0] - translation[0]) / scale,
-    (v[1] - translation[1]) / scale, (v[2] - translation[2]) / scale];
-  return { position: local(position), target: local(target), up,
+  const transform = { translation, scale };
+  return { position: studioToRuntime(position, transform), target: studioToRuntime(target, transform), up,
     fovYDegrees: fov, near: near / scale, far: far / scale };
 }

@@ -1,30 +1,26 @@
 import * as THREE from "three";
 import type { Forge3DRuntime, LightCollection, TerrainMaterialImage, IblSnapshot, RgbeImage } from "@forge3d/web";
-import type { TerrainPreview, ViewportMode } from "../bridge/types";
-import { cameraInput, chooseViewportBackend, imageryMipLevel, imageryOverlays, supportsTransform, terrainInput, studioUnitsPerGroundUnit,
+import { cameraInput, imageryMipLevel, imageryOverlays, terrainInput, terrainTransform,
   type RendererPreference, type Triple } from "./forge3dWebMapping";
+import { cameraTarget, viewportTerrainBackend, type ViewportDimensions, type ViewportFrame, type ViewportTerrain } from "./viewportState";
 
 export type TerrainMesh = THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhysicalMaterial>;
 interface DrapeLevel { image?: TerrainMaterialImage; error?: string }
+interface PresentedAppearance {
+  skyIntensity: number;
+  drape?: { width: number; height: number; level: number; settled: boolean };
+}
 
 type WebModule = typeof import("@forge3d/web");
 
-export interface TerrainSource {
-  preview: TerrainPreview;
-  zScale: number;
-  shade: Uint8Array;
-}
-
 interface View {
   preference: RendererPreference;
-  mode: ViewportMode;
-  hasHdri: boolean;
-  sunVisibility: boolean;
+  sunShadowsDisabled: boolean;
   skyIntensity: number;
   background: THREE.Color;
+  frame: ViewportFrame;
   objects: Map<string, THREE.Group>;
-  camera: THREE.PerspectiveCamera;
-  target: THREE.Vector3;
+  projectionCamera: THREE.PerspectiveCamera;
   sun: THREE.DirectionalLight;
   renderer: THREE.WebGLRenderer;
 }
@@ -41,7 +37,7 @@ export class ForgeTerrainViewport {
   private wanted = false;
   private mounted = true;
   private failure?: string;
-  private lastMesh?: TerrainMesh;
+  private lastTerrain?: ViewportTerrain;
   private lastPreference?: RendererPreference;
   private uploaded?: TerrainMesh;
   private uploadedMap: THREE.Texture | null = null;
@@ -60,6 +56,7 @@ export class ForgeTerrainViewport {
   private lightKey = "";
   private maxDimension?: number;
   private status = "";
+  private presentedAppearance?: PresentedAppearance;
 
   constructor(private canvas: HTMLCanvasElement, private skyPixels: RgbeImage, private invalidate: () => void,
     private onStatus: (value: string) => void) {}
@@ -80,6 +77,7 @@ export class ForgeTerrainViewport {
     this.uploaded = undefined;
     this.uploadedMap = null;
     this.uploadedImage = undefined;
+    this.presentedAppearance = undefined;
     this.verifyUpload = false;
     this.appliedSkyIntensity = 0;
     this.materialDisplay = false;
@@ -139,19 +137,19 @@ export class ForgeTerrainViewport {
       .finally(() => { if (this.mounted) this.invalidate(); });
   }
 
-  private drapeLevel(view: View, mesh: TerrainMesh, image: HTMLImageElement) {
+  private drapeLevel(camera: THREE.PerspectiveCamera, { width, height }: ViewportDimensions,
+    mesh: TerrainMesh, image: HTMLImageElement) {
     // The overlay shader samples level zero. Estimate minification at the terrain
     // centre and use a filtered source level, retaining full detail on zoom.
-    const { width, height } = view.renderer.domElement;
     if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
     mesh.updateWorldMatrix(true, false);
-    view.camera.updateWorldMatrix(true, false);
+    camera.updateWorldMatrix(true, false);
     const center = this.center.copy(mesh.geometry.boundingSphere!.center);
     const right = this.across.copy(center);
     const down = this.down.copy(center);
     right.x += 1 / image.naturalWidth;
     down.z += 1 / image.naturalHeight;
-    for (const p of [center, right, down]) p.applyMatrix4(mesh.matrixWorld).project(view.camera);
+    for (const p of [center, right, down]) p.applyMatrix4(mesh.matrixWorld).project(camera);
     return imageryMipLevel((right.x - center.x) * width / 2, (right.y - center.y) * height / 2,
       (down.x - center.x) * width / 2, (down.y - center.y) * height / 2,
       Math.max(image.naturalWidth, image.naturalHeight));
@@ -185,30 +183,35 @@ export class ForgeTerrainViewport {
   }
 
   draw(view: View): TerrainMesh | undefined {
-    const terrains = Array.from(view.objects.values()).filter(g => g.visible && g.userData.isTerrain);
-    const group = terrains[0];
-    const mesh = group?.children.find(child => child.userData.forgeTerrain) as TerrainMesh | undefined;
-    const source = mesh?.userData.forgeTerrain as TerrainSource | undefined;
-    if (mesh !== this.lastMesh || this.lastPreference !== view.preference) {
+    const { frame } = view;
+    const initial = viewportTerrainBackend(frame, view.preference, {
+      gpu: !!(navigator as Navigator & { gpu?: unknown }).gpu, maxTextureDimension2D: this.maxDimension,
+      sunShadowsDisabled: view.sunShadowsDisabled,
+    });
+    const { terrain, object } = initial;
+    if (terrain !== this.lastTerrain || this.lastPreference !== view.preference) {
       this.failure = undefined;
-      this.lastMesh = mesh;
+      this.lastTerrain = terrain;
       this.lastPreference = view.preference;
     }
-    const choice = chooseViewportBackend({
-      preference: view.preference, mode: view.mode, gpu: !!(navigator as Navigator & { gpu?: unknown }).gpu, hasHdri: view.hasHdri,
-      terrainShadows: view.sun.castShadow || view.sunVisibility || Boolean(mesh?.userData.sunVisibility),
-      terrainCount: terrains.length, resolution: source?.preview.resolution ?? 0,
-      transformSupported: !group || supportsTransform([group.rotation.x, group.rotation.y, group.rotation.z],
-        group.scale.toArray()), maxTextureDimension2D: this.maxDimension, failure: this.failure,
-    });
-    if (choice.backend !== "forge3d-web" || !mesh || !source || !group) {
+    const choice = initial.backend === "forge3d-web" && this.failure
+      ? { backend: "three", reason: this.failure } : initial;
+    if (choice.backend !== "forge3d-web") {
       this.release();
       this.report(choice.backend === "native" ? "Viewport native · Rendered mode" : `Viewport three.js · ${choice.reason}`);
       return;
     }
-    const material = view.mode === "material";
+    const { camera, dimensions } = frame;
+    const mesh = terrain && view.objects.get(object.id)?.children.find(
+      child => child.userData.forgeTerrain === terrain) as TerrainMesh | undefined;
+    if (!mesh || !terrain || !camera || !dimensions) {
+      this.release();
+      this.report("Viewport three.js · Preparing viewport");
+      return;
+    }
+    const material = frame.settings.mode === "material";
     const drape: THREE.Texture<HTMLImageElement> | undefined = material ? mesh.userData.drape : undefined;
-    const level = drape ? this.drapeLevel(view, mesh, drape.image) : 0;
+    const level = drape ? this.drapeLevel(view.projectionCamera, dimensions, mesh, drape.image) : 0;
     const decoded = drape ? this.drapes.get(drape)?.get(level) : undefined;
     const skyIntensity = material ? view.skyIntensity : 0;
     const appearanceError = decoded?.error ?? (skyIntensity ? this.sky?.error : undefined);
@@ -219,7 +222,7 @@ export class ForgeTerrainViewport {
     }
     this.wanted = true;
     // Both layers must use the same physical pixels at fractional display scaling.
-    const { width, height } = view.renderer.domElement;
+    const { width, height } = dimensions;
     if (!this.web) {
       if (!this.pending) this.start(width, height);
       this.report("Viewport three.js · Starting WebGPU");
@@ -259,8 +262,8 @@ export class ForgeTerrainViewport {
       }
       const { map, vertexColors } = mesh.material;
       if (mesh !== this.uploaded || map !== this.uploadedMap || vertexColors !== this.uploadedRamp) {
-        const input = terrainInput(source.preview, source.zScale, [mesh.material.color.r, mesh.material.color.g, mesh.material.color.b],
-          !drape && map === mesh.userData.hillshade ? source.shade : undefined,
+        const input = terrainInput(terrain.preview, terrain.zScale, [mesh.material.color.r, mesh.material.color.g, mesh.material.color.b],
+          !drape && map === mesh.userData.hillshade ? mesh.userData.hillshade.image.data : undefined,
           { drape: image, vertexColors: vertexColors ? mesh.geometry.getAttribute("color").array : undefined });
         web.setTerrain(input);
         this.verifyUpload = true;
@@ -284,10 +287,9 @@ export class ForgeTerrainViewport {
         web.setLighting(lights.snapshot());
         this.lightKey = key;
       }
-      const camera = view.camera;
-      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
-      web.setCamera(cameraInput(camera.position.toArray(), view.target.toArray(), up.toArray(), camera.fov,
-        camera.near, camera.far, group.position.toArray(), group.scale.x * studioUnitsPerGroundUnit(source.preview)));
+      const transform = terrainTransform(terrain.preview, object.translation, object.scale[0]);
+      web.setCamera(cameraInput(camera.eye, cameraTarget(camera), camera.up, camera.fovYDegrees,
+        camera.near, camera.far, transform.translation, transform.scale));
       if (!web.render()) {
         this.canvas.hidden = true;
         this.report("Viewport three.js · WebGPU frame unavailable");
@@ -311,6 +313,8 @@ export class ForgeTerrainViewport {
         this.verifyUpload = false;
       }
       this.canvas.hidden = false;
+      this.presentedAppearance = { skyIntensity: this.appliedSkyIntensity,
+        drape: image && { width: image.width, height: image.height, level, settled: image === decoded?.image } };
       this.report("Viewport forge3d-web · WebGPU available");
       return mesh;
     } catch (error) {
@@ -323,4 +327,5 @@ export class ForgeTerrainViewport {
 
   // Only exposed by the development viewport's verification hook.
   get diagnosticRuntime() { return this.web; }
+  get diagnosticAppearance() { return this.canvas.hidden ? undefined : this.presentedAppearance; }
 }

@@ -24,6 +24,8 @@ import type {
 export interface SessionApi {
   info: ShellInfo | null;
   state: SessionState | null;
+  projectGeneration: number;
+  assetGenerations: ReadonlyMap<string, number>;
   autosave: AutosaveStatus | null;
   recovery: RecoveryEntry[];
   error: string | null;
