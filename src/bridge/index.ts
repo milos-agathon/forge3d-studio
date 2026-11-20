@@ -42,16 +42,16 @@ export interface StudioBridge {
   newProject(name?: string | null, preset?: string | null): Promise<SessionState>;
   scenePresets(): Promise<ScenePreset[]>;
   openProject(path: string): Promise<SessionState>;
-  saveProject(path?: string | null): Promise<SessionState>;
-  closeProject(): Promise<null>;
-  applyCommand(command: Command): Promise<EditResult>;
-  undo(): Promise<EditResult>;
-  redo(): Promise<EditResult>;
-  setSelection(ids: string[]): Promise<SessionState>;
+  saveProject(path: string | null, sessionId: number): Promise<SessionState>;
+  closeProject(): Promise<number>;
+  applyCommand(command: Command, sessionId: number, terrainGeneration?: number): Promise<EditResult | null>;
+  undo(sessionId: number): Promise<EditResult>;
+  redo(sessionId: number): Promise<EditResult>;
+  setSelection(ids: string[], sessionId: number): Promise<SessionState>;
   /** Move the playhead and evaluate the timeline into the project (view
    *  state: not undoable, no autosave). Returns the snapshot plus the
    *  clamped frame that was applied. */
-  setPlayhead(frame: number): Promise<PlayheadResult>;
+  setPlayhead(frame: number, sessionId: number): Promise<PlayheadResult>;
   /** Place a directional light from the engine's solar ephemeris. One
    *  undoable transform; the date/place are inputs, not project state. */
   setSunFromSolar(
@@ -59,6 +59,7 @@ export interface StudioBridge {
     latitude: number,
     longitude: number,
     datetimeUtc: string,
+    sessionId: number,
   ): Promise<SolarResult>;
   /** Render one frame of an offline sequence to `output` (PNG). The shell
    *  evaluates the timeline on a clone, so the session's playhead does not
@@ -109,8 +110,10 @@ export interface StudioBridge {
     labels?: boolean,
   ): Promise<GraticuleGeometry & { ok: boolean }>;
   /** Replace the scene terrain's DEM with a raster the user picked — or add
-   *  the terrain when the scene has none yet. */
-  importTerrainDem(path: string): Promise<SessionState>;
+   *  the terrain when the scene has none yet. Returns null if superseded. */
+  importTerrainDem(path: string, sessionId: number, terrainGeneration: number): Promise<SessionState | null>;
+  /** Reserve an import or active DEM relink before resolving its file. */
+  reserveTerrainSourceChange(sessionId: number, assetId?: string): Promise<number | null>;
   /** Probe a remote DEM with the engine's native COG reader before any download. */
   remoteCogInfo(url: string): Promise<RemoteCogInfo>;
   /** A remote DEM's preview, read through the engine's range reader. */
@@ -123,14 +126,16 @@ export interface StudioBridge {
   /** Add a polygon layer from a GPKG/GeoJSON feature collection. */
   addPolygonLayer(
     path: string,
+    sessionId: number,
     colour?: [number, number, number, number],
   ): Promise<SessionState>;
   /** Add an imagery layer to the map's stack. */
-  addImageryLayer(path: string, opacity?: number): Promise<SessionState>;
+  addImageryLayer(path: string, sessionId: number, opacity?: number): Promise<SessionState>;
   /** Add a vector layer to the map's stack. The colour is RGBA 0..=1 and the
    *  width is a symbol width in pixels. */
   addVectorLayer(
     path: string,
+    sessionId: number,
     colour?: [number, number, number, number],
     widthPx?: number,
   ): Promise<SessionState>;

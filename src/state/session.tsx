@@ -11,6 +11,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { viewStore } from "../viewport/viewStore";
 import { bridge } from "../bridge/env";
 import { SessionContext, type SessionApi } from "./session-context";
+import { SessionSnapshots } from "./sessionSnapshots";
 import { base64ToArrayBuffer, inspectGltf, putAssetBytes } from "../viewport/assets";
 import { findRecipe, type RecipeId } from "./recipes";
 import {
@@ -53,9 +54,28 @@ const MESH_FILTER = {
   extensions: ["gltf", "glb"],
 };
 
+function relinkedAssets(command: Command, ids = new Set<string>()): Set<string> {
+  if (command.type === "setAssetPath") ids.add(command.id);
+  if (command.type === "batch") {
+    for (const child of command.commands) relinkedAssets(child, ids);
+  }
+  return ids;
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [info, setInfo] = useState<ShellInfo | null>(null);
   const [state, setState] = useState<SessionState | null>(null);
+  const [snapshots] = useState(() => new SessionSnapshots(setState));
+  const [projectGeneration, setProjectGeneration] = useState(0);
+  const [assetGenerations, setAssetGenerations] = useState<ReadonlyMap<string, number>>(new Map());
+  const replaceProject = useCallback((reply: SessionState | { sessionId: number }) => {
+    if (!snapshots.replace(reply)) return false;
+    setProjectGeneration(current => current + 1);
+    setAssetGenerations(new Map());
+    return true;
+  }, [snapshots]);
+  const sessionId = state?.sessionId;
+  const requestProjectSnapshot = useMemo(() => snapshots.forSession(sessionId), [snapshots, sessionId]);
   const [autosave, setAutosave] = useState<AutosaveStatus | null>(null);
   const [recovery, setRecovery] = useState<RecoveryEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -149,7 +169,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         ]);
         if (cancelled) return;
         setInfo(shellInfo);
-        setState(snapshot);
+        snapshots.initialize(snapshot);
         setAutosave(autosaveStatus);
         setRecovery(entries);
       } catch (cause) {
@@ -160,7 +180,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
     };
-  }, [fail]);
+  }, [fail, snapshots]);
 
   // One engine probe per session: the status bar reports whether the renderer
   // can run, without a whole workspace for it.
@@ -196,37 +216,47 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   );
 
   const applyCommand = useCallback(
-    async (command: Command): Promise<Applied | null> => {
+    async (command: Command, terrainGeneration?: number): Promise<Applied | null> => {
       try {
-        const result = await bridge.applyCommand(command);
-        setState(result.state);
-        return result.applied;
+        const result = await requestProjectSnapshot(
+          id => bridge.applyCommand(command, id, terrainGeneration),
+          () => {
+            const relinked = relinkedAssets(command);
+            if (relinked.size) {
+              setAssetGenerations(current => {
+                const next = new Map(current);
+                for (const id of relinked) next.set(id, (current.get(id) ?? 0) + 1);
+                return next;
+              });
+            }
+          },
+        );
+        return result?.applied ?? null;
       } catch (cause) {
         fail(cause);
         return null;
       }
     },
-    [fail],
+    [fail, requestProjectSnapshot],
   );
 
   const select = useCallback(async (ids: string[]) => {
     try {
-      setState(await bridge.setSelection(ids));
+      await requestProjectSnapshot(id => bridge.setSelection(ids, id));
     } catch (cause) {
       fail(cause);
     }
-  }, [fail]);
+  }, [fail, requestProjectSnapshot]);
 
   const setPlayhead = useCallback(
     async (frame: number) => {
       try {
-        const result = await bridge.setPlayhead(frame);
-        setState(result.state);
+        await requestProjectSnapshot(id => bridge.setPlayhead(frame, id));
       } catch (cause) {
         fail(cause);
       }
     },
-    [fail],
+    [fail, requestProjectSnapshot],
   );
 
   /**
@@ -241,13 +271,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       datetimeUtc: string,
     ): Promise<SolarResult | null> => {
       try {
-        const result = await bridge.setSunFromSolar(
+        const result = await requestProjectSnapshot(sessionId => bridge.setSunFromSolar(
           id,
           latitude,
           longitude,
           datetimeUtc,
-        );
-        setState(result.state);
+          sessionId,
+        ));
+        if (!result) return null;
         flash(
           result.daytime
             ? `Sun ${result.azimuthDeg.toFixed(0)}° · ${result.elevationDeg.toFixed(1)}° elevation`
@@ -259,7 +290,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return null;
       }
     },
-    [fail, flash],
+    [fail, flash, requestProjectSnapshot],
   );
 
   const addPrimitive = useCallback(
@@ -521,25 +552,36 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     flash("Environment cleared");
   }, [applyCommand, flash, state]);
 
+  const prepareSourceChange = useCallback(<T,>(
+    prepare: () => T | Promise<T>,
+    assetId?: string,
+  ) => snapshots.prepareSourceChange(
+    sessionId,
+    (id, asset) => bridge.reserveTerrainSourceChange(id, asset),
+    prepare,
+    assetId,
+  ), [sessionId, snapshots]);
+
   const relinkAsset = useCallback(
     async (assetId: string) => {
       try {
         const picked = await openDialog({ multiple: false });
         const path = typeof picked === "string" ? picked : null;
         if (!path) return;
-        // Same non-empty invariant as AddAsset: stat, don't guess.
-        await applyCommand({
+        const prepared = await prepareSourceChange(() => bridge.fileSize(path), assetId);
+        if (!prepared?.isCurrent()) return;
+        const applied = await applyCommand({
           type: "setAssetPath",
           id: assetId,
           path,
-          byteSize: await bridge.fileSize(path),
-        });
-        flash("Asset relinked");
+          byteSize: prepared.value,
+        }, prepared.generation);
+        if (applied) flash("Asset relinked");
       } catch (cause) {
         fail(cause);
       }
     },
-    [applyCommand, fail, flash],
+    [applyCommand, fail, flash, prepareSourceChange],
   );
 
   const importTerrainDem = useCallback(async () => {
@@ -551,14 +593,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const path = typeof picked === "string" ? picked : null;
       if (!path) return;
       setBusy(true);
-      setState(await bridge.importTerrainDem(path));
-      flash(`Terrain DEM set to ${path.split(/[\\/]/).pop()}`);
+      const prepared = await prepareSourceChange(() => path);
+      const generation = prepared?.generation;
+      if (generation === undefined || !prepared?.isCurrent()) return;
+      if (await requestProjectSnapshot(id => bridge.importTerrainDem(path, id, generation))) {
+        flash(`Terrain DEM set to ${path.split(/[\\/]/).pop()}`);
+      }
     } catch (cause) {
       fail(cause);
     } finally {
       setBusy(false);
     }
-  }, [fail, flash]);
+  }, [fail, flash, prepareSourceChange, requestProjectSnapshot]);
 
   // The engine's registry: the same resolution for every import site. The
   // shell resolves the name (the engine fetches it, hash-verified, and
@@ -567,16 +613,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     async (name: string) => {
       try {
         setBusy(true);
-        const path = await bridge.datasetPath(name);
-        setState(await bridge.importTerrainDem(path));
-        flash(`Terrain DEM set from the engine's dataset "${name}"`);
+        const prepared = await prepareSourceChange(() => bridge.datasetPath(name));
+        const generation = prepared?.generation;
+        if (generation === undefined || !prepared?.isCurrent()) return;
+        if (await requestProjectSnapshot(id => bridge.importTerrainDem(prepared.value, id, generation))) {
+          flash(`Terrain DEM set from the engine's dataset "${name}"`);
+        }
       } catch (cause) {
         fail(cause);
       } finally {
         setBusy(false);
       }
     },
-    [fail, flash],
+    [fail, flash, prepareSourceChange, requestProjectSnapshot],
   );
 
   const addImageryLayerByName = useCallback(
@@ -584,15 +633,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       try {
         setBusy(true);
         const path = await bridge.datasetPath(name);
-        setState(await bridge.addImageryLayer(path, 0.82));
-        flash(`Imagery layer added from the engine's dataset "${name}"`);
+        if (await requestProjectSnapshot(id => bridge.addImageryLayer(path, id, 0.82))) {
+          flash(`Imagery layer added from the engine's dataset "${name}"`);
+        }
       } catch (cause) {
         fail(cause);
       } finally {
         setBusy(false);
       }
     },
-    [fail, flash],
+    [fail, flash, requestProjectSnapshot],
   );
 
   const addVectorLayerByName = useCallback(
@@ -600,15 +650,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       try {
         setBusy(true);
         const path = await bridge.datasetPath(name);
-        setState(await bridge.addVectorLayer(path, [0.9, 0.29, 0.1, 1.0], 2));
-        flash(`Vector layer added from the engine's dataset "${name}"`);
+        if (await requestProjectSnapshot(id => bridge.addVectorLayer(path, id, [0.9, 0.29, 0.1, 1.0], 2))) {
+          flash(`Vector layer added from the engine's dataset "${name}"`);
+        }
       } catch (cause) {
         fail(cause);
       } finally {
         setBusy(false);
       }
     },
-    [fail, flash],
+    [fail, flash, requestProjectSnapshot],
   );
 
   const addVectorLayer = useCallback(async () => {
@@ -622,14 +673,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const path = typeof picked === "string" ? picked : null;
       if (!path) return;
       setBusy(true);
-      setState(await bridge.addVectorLayer(path, [0.9, 0.29, 0.1, 1.0], 2));
-      flash("Vector layer added");
+      if (await requestProjectSnapshot(id => bridge.addVectorLayer(path, id, [0.9, 0.29, 0.1, 1.0], 2))) {
+        flash("Vector layer added");
+      }
     } catch (cause) {
       fail(cause);
     } finally {
       setBusy(false);
     }
-  }, [fail, flash]);
+  }, [fail, flash, requestProjectSnapshot]);
 
   const addPolygonLayer = useCallback(
     async (
@@ -647,15 +699,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         }
         if (!target) return;
         setBusy(true);
-        setState(await bridge.addPolygonLayer(target, colour));
-        flash("Polygon layer added");
+        if (await requestProjectSnapshot(id => bridge.addPolygonLayer(target, id, colour))) {
+          flash("Polygon layer added");
+        }
       } catch (cause) {
         fail(cause);
       } finally {
         setBusy(false);
       }
     },
-    [fail, flash],
+    [fail, flash, requestProjectSnapshot],
   );
 
   const addImageryLayer = useCallback(async () => {
@@ -667,14 +720,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const path = typeof picked === "string" ? picked : null;
       if (!path) return;
       setBusy(true);
-      setState(await bridge.addImageryLayer(path, 0.82));
-      flash("Imagery layer added");
+      if (await requestProjectSnapshot(id => bridge.addImageryLayer(path, id, 0.82))) {
+        flash("Imagery layer added");
+      }
     } catch (cause) {
       fail(cause);
     } finally {
       setBusy(false);
     }
-  }, [fail, flash]);
+  }, [fail, flash, requestProjectSnapshot]);
 
   // A layer's id is minted here: the command refuses a duplicate id, so a
   // second elevation ramp (or plate, or label layer) needs its own.
@@ -1071,7 +1125,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setNewProjectOpen(false);
         try {
           const snapshot = await bridge.newProject(null, presetId);
-          setState(snapshot);
+          if (!replaceProject(snapshot)) return;
           await refreshRecovery();
           flash("New project");
         } catch (cause) {
@@ -1091,7 +1145,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           const path = typeof picked === "string" ? picked : null;
           if (!path) return;
           setBusy(true);
-          setState(await bridge.openProject(path));
+          if (!replaceProject(await bridge.openProject(path))) return;
           await refreshRecovery();
           flash("Project opened");
         } catch (cause) {
@@ -1143,8 +1197,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             path = picked;
           }
           setBusy(true);
-          const saved = await bridge.saveProject(path);
-          setState(saved);
+          const saved = await requestProjectSnapshot(id => bridge.saveProject(path, id));
+          if (!saved) return;
           await refreshRecovery();
           flash(`Saved ${saved.path ?? "project"}`);
         } catch (cause) {
@@ -1158,7 +1212,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (!guardUnsaved("close the project")) return;
         setBusy(true);
         try {
-          setState(await bridge.closeProject());
+          if (!replaceProject({ sessionId: await bridge.closeProject() })) return;
           flash("Project closed");
         } catch (cause) {
           fail(cause);
@@ -1171,7 +1225,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
       async undo() {
         try {
-          setState((await bridge.undo()).state);
+          await requestProjectSnapshot(bridge.undo);
         } catch (cause) {
           fail(cause);
         }
@@ -1179,7 +1233,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
       async redo() {
         try {
-          setState((await bridge.redo()).state);
+          await requestProjectSnapshot(bridge.redo);
         } catch (cause) {
           fail(cause);
         }
@@ -1225,7 +1279,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       async restoreRecovery(id) {
         setBusy(true);
         try {
-          setState(await bridge.restoreRecovery(id));
+          if (!replaceProject(await bridge.restoreRecovery(id))) return;
           await refreshRecovery();
           flash("Recovered unsaved work");
         } catch (cause) {
@@ -1287,6 +1341,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       moveCartographyLayer,
       refreshEngine,
       refreshRecovery,
+      replaceProject,
+      requestProjectSnapshot,
       enqueueStill,
       renderViewport,
       clearRenderFrame,
@@ -1308,6 +1364,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     newProjectOpen,
     info,
     state,
+    projectGeneration,
+    assetGenerations,
     autosave,
     recovery,
     error,

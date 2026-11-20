@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
@@ -7,8 +7,10 @@ import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 
-import { ForgeTerrainViewport, type TerrainSource } from "./forge3dWebViewport";
-import type { RendererPreference } from "./forge3dWebMapping";
+import { ForgeTerrainViewport } from "./forge3dWebViewport";
+import { studioUnitsPerPreviewUnit, type RendererPreference } from "./forge3dWebMapping";
+import { assetRevision, nativeRenderView, terrainSampleRevision, viewportDimensions, ViewportModel,
+  type ViewportDimensions, type ViewportTerrain } from "./viewportState";
 import { bridge } from "../bridge/env";
 import type {
   CameraObject,
@@ -24,7 +26,7 @@ import { AxisGizmo, type Axis } from "./AxisGizmo";
 import { NorthArrow } from "./NorthArrow";
 import { formatDistance, mapFrame } from "./mapGrid";
 import { buildMapGrid, type MapGridHandle } from "./mapGridLayer";
-import type { CartographyLayer, Material, Project, TerrainPreview } from "../bridge/types";
+import type { Asset, CartographyLayer, Material, Project, TerrainPreview } from "../bridge/types";
 import {
   base64ToArrayBuffer,
   clearAssetCaches,
@@ -32,7 +34,7 @@ import {
   loadAssetScene,
 } from "./assets";
 import { viewStore } from "./viewStore";
-import { isRemoteDemPath, previewResolutionForDistance } from "../state/terrainLadder";
+import { isRemoteDemPath, previewResolutionForDistance, TERRAIN_RUNGS } from "../state/terrainLadder";
 import {
   graticuleLayers,
   labelLayers,
@@ -44,7 +46,7 @@ import {
 } from "../state/cartography";
 import { lightingRig, type LightingRig } from "./lighting";
 import { rampColor } from "./colormap";
-import { TERRAIN_VIEW_SIZE, computeRenderView } from "./viewMath";
+import { TERRAIN_VIEW_SIZE } from "./viewMath";
 import {
   anchorWorld,
   drapeLift,
@@ -57,6 +59,7 @@ import { groundSpanMetres } from "../state/groundScale";
 import { publishGroundScale, useGroundScale } from "../state/groundScaleStore";
 
 const DEG = Math.PI / 180;
+const GPU_STEP_WITHOUT_SUN_SHADOWS = 3;
 /** Fly-camera keys: WASD in the view plane, Q/E down and up, Shift to sprint. */
 const FLY_KEYS = new Set(["w", "a", "s", "d", "q", "e", "shift"]);
 const ACCENT = 0xefa026;
@@ -361,7 +364,7 @@ function applyGpuStep(runtime: Runtime): string {
     runtime.scene.environment = null;
     runtime.hemi.intensity = 0.25;
   }
-  if (step >= 3) {
+  if (step >= GPU_STEP_WITHOUT_SUN_SHADOWS) {
     runtime.sun.castShadow = false;
     for (const group of runtime.objects.values()) {
       group.traverse((node) => {
@@ -428,7 +431,7 @@ function applyEnvironment(
  * not worked around.
  */
 function applyShadowRig(runtime: Runtime, rig: LightingRig): void {
-  const enabled = rig.shadows.enabled && runtime.glStep < 3;
+  const enabled = rig.shadows.enabled && runtime.glStep < GPU_STEP_WITHOUT_SUN_SHADOWS;
   const key = `${enabled ? 1 : 0}|${rig.shadows.technique}|${rig.shadows.resolution}`;
   runtime.sun.castShadow = enabled;
   if (runtime.shadowKey === key) return;
@@ -566,7 +569,7 @@ function computeHillshadeTexel(
 
 /** Bake a hillshade texture from the heights: central differences, metric
  *  cell size from the footprint, 315° az / 45° alt, no exaggeration. Linear filter. */
-function bakeHillshade(preview: TerrainPreview): THREE.DataTexture {
+function bakeHillshade(preview: ViewportTerrain["preview"]): THREE.DataTexture {
   const resolution = preview.resolution;
   const heights = preview.heights;
   const [spanX, spanZ] = preview.spanXz;
@@ -617,8 +620,7 @@ function bakeHillshade(preview: TerrainPreview): THREE.DataTexture {
 }
 
 function buildTerrainMesh(
-  preview: TerrainPreview,
-  zScale: number,
+  terrain: ViewportTerrain,
   ramp: { stops: [number, number, number][]; strength: number } | null,
   hillshade: boolean,
   sun: {
@@ -628,13 +630,14 @@ function buildTerrainMesh(
     steps: number;
   } | null,
 ): THREE.Mesh {
+  const { preview, zScale } = terrain;
   const resolution = preview.resolution;
   const geometry = new THREE.PlaneGeometry(1, 1, resolution - 1, resolution - 1);
   geometry.rotateX(-Math.PI / 2);
 
   const [spanX, spanZ] = preview.spanXz;
-  const horizontal = TERRAIN_VIEW_SIZE / Math.max(spanX, spanZ);
-  const [minElevation] = [preview.minElevation];
+  const horizontal = studioUnitsPerPreviewUnit(preview);
+  const minElevation = preview.minElevation;
 
   const position = geometry.attributes.position as THREE.BufferAttribute;
   const span = Math.max(1e-6, preview.maxElevation - preview.minElevation);
@@ -750,7 +753,7 @@ function buildTerrainMesh(
   mesh.userData.studioMaterial = mesh.material;
   mesh.userData.drape = null;
   mesh.userData.hillshade = hillshadeTexel;
-  mesh.userData.forgeTerrain = { preview, zScale, shade: hillshadeTexel.image.data } as TerrainSource;
+  mesh.userData.forgeTerrain = terrain;
   mesh.userData.sunVisibility = meshSunVisibilityTexture;
   // Whether this mesh carries an elevation ramp at all (the attribute is fixed
   // once built; the mode decides if it is shown).
@@ -847,11 +850,10 @@ function sunVisionConfig(project: Project | null | undefined): { toward: [number
 function contentSignature(
   object: SceneObject,
   terrainResolution: number,
-  ladderRung: number,
   ramp: string,
-  imagery: { asset: string; opacity: number } | null,
+  imagery: { assetRevision: string; opacity: number },
   sunVision: string | null,
-  demPath: string | null,
+  demRevision: string | null,
 ): string {
   switch (object.kind.type) {
     case "mesh":
@@ -864,12 +866,19 @@ function contentSignature(
       // colormap change is a rebuild — not just a shading swap.
       // The resolved DEM path too: a relink keeps the asset id but can point
       // at another file, and the ground scale is published per path.
-      return `terrain:${object.kind.asset}:${demPath ?? ""}:${object.kind.zScale}:${terrainResolution}:${ladderRung}:${imagery?.asset ?? "none"}:${imagery?.opacity ?? ""}:${ramp}:${sunVision ?? ""}`;
+      return JSON.stringify(["terrain", demRevision, object.kind.zScale, terrainResolution,
+        imagery.assetRevision, imagery.opacity, ramp, sunVision]);
     case "camera":
       return `camera:${object.kind.fovDeg}`;
     case "light":
       return `light:${object.kind.kind}:${object.kind.color.join(",")}`;
   }
+}
+
+function requestedTerrainResolution(asset: Asset | undefined, span: [number, number] | null, localResolution: number, remoteRung: number) {
+  if (!isRemoteDemPath(asset?.path)) return localResolution;
+  const maxSpan = span ? Math.max(...span) : 0;
+  return Number.isFinite(maxSpan) && maxSpan > 0 ? remoteRung : TERRAIN_RUNGS[0];
 }
 
 function applyTransform(group: THREE.Object3D, transform: Transform): void {
@@ -963,6 +972,8 @@ export function Viewport3D({ preference, onBackend }: {
   preferenceRef.current = preference;
   const {
     state,
+    projectGeneration,
+    assetGenerations,
     actions,
     tool,
     space,
@@ -972,10 +983,17 @@ export function Viewport3D({ preference, onBackend }: {
     flyMode,
     setCameraView,
   } = useSession();
-  const [ladderRung, setLadderRung] = useState(96);
+  const [ladderRung, setLadderRung] = useState<number>(TERRAIN_RUNGS[0]);
+  const hasRemoteTerrain = state?.project.scene.objects.some(object => {
+    if (object.kind.type !== "terrain") return false;
+    const assetId = object.kind.asset;
+    return isRemoteDemPath(state.project.assets.find(asset => asset.id === assetId)?.path);
+  });
+  const remoteRung = hasRemoteTerrain ? ladderRung : TERRAIN_RUNGS[0];
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const runtimeRef = useRef<Runtime | null>(null);
+  const [viewport] = useState(() => new ViewportModel());
   const actionsRef = useRef(actions);
   actionsRef.current = actions;
 
@@ -1080,15 +1098,14 @@ export function Viewport3D({ preference, onBackend }: {
     return pending;
   }, [bridge]);
 
-  /** Decoded drape texture for a terrain overlay (shell-side GeoTIFF decode;
-   *  cached by path — opacity is applied on the material, not the texture). */
+  /** Decoded drape textures belong to the current project's asset revisions. */
   const overlayTextureCache = useRef(new Map<string, Promise<THREE.Texture>>());
-  const loadOverlayTexture = useCallback((path: string): Promise<THREE.Texture> => {
+  const loadOverlayTexture = useCallback((asset: Asset, key: string): Promise<THREE.Texture> => {
     const cache = overlayTextureCache.current;
-    let pending = cache.get(path);
+    let pending = cache.get(key);
     if (!pending) {
       pending = bridge
-        .rasterPreview(path, 2048)
+        .rasterPreview(asset.path, 2048)
         .then(
           (payload) =>
             new Promise<THREE.Texture>((resolve, reject) => {
@@ -1106,29 +1123,42 @@ export function Viewport3D({ preference, onBackend }: {
               );
             }),
         );
-      cache.set(path, pending);
-      pending.catch(() => cache.delete(path));
+      cache.set(key, pending);
+      const request = pending;
+      request.catch(() => { if (cache.get(key) === request) cache.delete(key); });
     }
     return pending;
   }, []);
 
-  const terrainCache = useRef(new Map<string, Promise<TerrainPreview>>());
+  const terrainCache = useRef(new Map<string, Map<number, Promise<TerrainPreview>>>());
+  useLayoutEffect(() => {
+    const replaced = viewport.current.projectGeneration !== projectGeneration || viewport.current.projectId !== (state?.project.id ?? null);
+    viewport.setProject(state?.project ?? null, projectGeneration, cameraView, assetGenerations);
+    const sampleRevisions = new Set(viewport.current.objects.map(object => object.terrainRevision));
+    for (const key of terrainCache.current.keys()) {
+      if (replaced || !sampleRevisions.has(key)) terrainCache.current.delete(key);
+    }
+    const assetRevisions = new Set(viewport.current.assets.map(asset => assetRevision(asset, assetGenerations.get(asset.id))));
+    for (const [key, pending] of overlayTextureCache.current) {
+      if (replaced || !assetRevisions.has(key)) {
+        overlayTextureCache.current.delete(key);
+        void pending.then(texture => texture.dispose()).catch(() => undefined);
+      }
+    }
+  }, [viewport, state?.project, projectGeneration, cameraView, assetGenerations]);
+
   const readTerrain = useCallback(
-    (path: string, spanMetres?: readonly number[] | null): Promise<TerrainPreview> => {
-      // A remote DEM is read at a rung chosen from the camera distance: the
-      // engine's COG reader picks the coarsest overview that still carries the
-      // requested resolution, so a far orbit costs fewer bytes. Local DEMs
-      // keep the session's fixed resolution — they are already on disk.
-      const remote = isRemoteDemPath(path);
-      const span = spanMetres && spanMetres.length === 2 ? Math.max(spanMetres[0], spanMetres[1]) : null;
-      const resolution = remote
-        ? previewResolutionForDistance(viewStore.current?.radius ?? null, span)
-        : terrainResolution;
-      const cache = terrainCache.current;
-      const key = `${path}:${resolution}`;
-      let pending = cache.get(key);
+    (asset: Asset, source: { worldSpanXz: [number, number] | null; worldOriginXz: [number, number] | null },
+      revision: string, resolution: number): Promise<TerrainPreview> => {
+      const { path } = asset;
+      let cache = terrainCache.current.get(revision);
+      if (!cache) {
+        cache = new Map();
+        terrainCache.current.set(revision, cache);
+      }
+      let pending = cache.get(resolution);
       if (!pending) {
-        pending = remote
+        pending = isRemoteDemPath(path)
           ? bridge.remoteCogPreview(path, resolution).then((preview) => ({
               ok: preview.ok,
               width: preview.width,
@@ -1137,19 +1167,21 @@ export function Viewport3D({ preference, onBackend }: {
               minElevation: preview.minElevation,
               maxElevation: preview.maxElevation,
               heights: preview.heights,
-              // The engine reader has no CRS accessor; the project's measured
-              // DEM span (from the probe/materialization) is authoritative.
-              extentMeters: spanMetres ? [spanMetres[0], spanMetres[1]] : [preview.levelWidth, preview.levelHeight],
-              spanXz: spanMetres ? [spanMetres[0], spanMetres[1]] : [preview.levelWidth, preview.levelHeight],
-              originXz: [0, 0],
+              // The project retains the CRS footprint, while the COG
+              // reader has no accessor for the CRS's unit scale.
+              extentMeters: null,
+              spanMetresPerUnit: null,
+              spanXz: source.worldSpanXz ?? [preview.levelWidth, preview.levelHeight],
+              originXz: source.worldOriginXz ?? [0, 0],
             }))
           : bridge.terrainPreview(path, resolution);
-        cache.set(key, pending);
-        pending.catch(() => cache.delete(key));
+        cache.set(resolution, pending);
+        const request = pending;
+        request.catch(() => { if (cache.get(resolution) === request) cache.delete(resolution); });
       }
       return pending;
     },
-    [terrainResolution],
+    [],
   );
 
   const readMesh = useCallback(
@@ -1232,7 +1264,6 @@ export function Viewport3D({ preference, onBackend }: {
       );
       return;
     }
-    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     // The renderer tone-maps (ACES, exposure 1.35); without this the viewport
     // reads much brighter than the Rendered frame.
@@ -1355,11 +1386,21 @@ export function Viewport3D({ preference, onBackend }: {
     container.insertBefore(terrainCanvas, canvas);
     const terrainViewport = new ForgeTerrainViewport(terrainCanvas, skyPixels, () => { runtime.needsRender = true; }, onBackend);
 
-    const resize = () => {
+    let observedDpr: number | undefined;
+    let resizePending = true;
+    let lastDimensions: ViewportDimensions | undefined;
+    const resize = (dpr: number) => {
+      resizePending = false;
+      observedDpr = dpr;
       const width = container.clientWidth;
       const height = container.clientHeight;
       if (width === 0 || height === 0) return;
-      renderer.setSize(width, height, false);
+      const dimensions = viewportDimensions(width, height, dpr);
+      if (lastDimensions?.cssWidth === width && lastDimensions.cssHeight === height &&
+          lastDimensions.pixelRatio === dimensions.pixelRatio) return;
+      lastDimensions = dimensions;
+      viewport.setDimensions(dimensions);
+      renderer.setDrawingBufferSize(width, height, dimensions.pixelRatio);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       runtime.overlay.visible = viewportModeRef.current !== "rendered";
@@ -1374,9 +1415,8 @@ export function Viewport3D({ preference, onBackend }: {
           : { width, height },
       );
     };
-    const observer = new ResizeObserver(resize);
+    const observer = new ResizeObserver(() => { resizePending = true; });
     observer.observe(container);
-    resize();
 
     gizmo.addEventListener("dragging-changed", (event) => {
       // Fly mode owns the camera: re-enabling OrbitControls here would let its
@@ -1403,15 +1443,9 @@ export function Viewport3D({ preference, onBackend }: {
       // A remote DEM's preview rung follows the orbit distance. Crossing a
       // rung changes the terrain signature below, which rebuilds the mesh
       // from the engine's next overview level.
-      const terrain = stateRef.current?.project.scene.objects.find(
-        (object) => object.kind.type === "terrain",
-      );
-      const span = terrain?.kind.type === "terrain" ? terrain.kind.worldSpanXz : null;
-      const rung = previewResolutionForDistance(
-        viewStore.current?.radius ?? null,
-        span ? Math.max(span[0], span[1]) : null,
-      );
-      setLadderRung((previous) => (previous === rung ? previous : rung));
+      // The change event fires after the new camera pose is installed.
+      // A measured DEM fills TERRAIN_VIEW_SIZE at every ground scale.
+      setLadderRung(previewResolutionForDistance(orbit.getDistance(), TERRAIN_VIEW_SIZE));
       if (!modeRef.current) return;
       const now = performance.now();
       if (now - lastRenderRequest < 120) return;
@@ -1569,53 +1603,19 @@ export function Viewport3D({ preference, onBackend }: {
     window.addEventListener("blur", onWindowBlur);
 
     /**
-     * Publish the Solid camera in the renderer's frame every frame, so a
-     * render reproduces the view on screen instead of a canned framing.
-     * The axis/scale/datum math lives in `viewMath` (unit-tested);
-     * camera view aims 10 viewport units ahead, free view aims at the
-     * orbit target — any point on the view axis frames the same picture,
-     * since the mapping is a similarity transform.
-     */
-    const updateViewStore = () => {
-      const project = stateRef.current?.project;
-      const object = project?.scene.objects.find(
-        (candidate) => candidate.kind.type === "terrain",
-      );
-      if (!object || object.kind.type !== "terrain") {
-        viewStore.current = null;
-        return;
-      }
-      const aim =
-        cameraViewRef.current || flyModeRef.current
-          ? camera.position
-              .clone()
-              .add(
-                new THREE.Vector3(0, 0, -1)
-                  .applyQuaternion(camera.quaternion)
-                  .multiplyScalar(10),
-              )
-          : orbit.target;
-      viewStore.current = computeRenderView({
-        camera: [camera.position.x, camera.position.y, camera.position.z],
-        aim: [aim.x, aim.y, aim.z],
-        fovDeg: camera.fov,
-        spanXz: object.kind.worldSpanXz,
-        dimensions: object.kind.dimensions,
-        elevationRange: object.kind.elevationRange,
-        zScale: object.kind.zScale,
-      });
-    };
-
-    /**
      * Publish the viewport camera as a scene transform. The timeline's path
      * recorder reads it while a take is running, so what gets keyed is exactly
      * what is on screen — the camera's own orientation, not an orbit aim.
      */
     let frame = 0;
+    const cameraAxis = new THREE.Vector3();
     let lastQuaternion: Quaternion = [0, 0, 0, 1];
     let lastTick = performance.now();
     const tick = (now: number = performance.now()) => {
       frame = requestAnimationFrame(tick);
+      // A scale change can leave the CSS box unchanged. Synchronize both sizes just before drawing.
+      const dpr = window.devicePixelRatio;
+      if (resizePending || dpr !== observedDpr) resize(dpr);
       const dt = Math.min(0.1, (now - lastTick) / 1000);
       lastTick = now;
       // OrbitControls.update() ends with `camera.lookAt(target)`, which would
@@ -1637,7 +1637,13 @@ export function Viewport3D({ preference, onBackend }: {
         if (flyKeys.current.has("q")) camera.position.y -= speed;
         runtime.needsRender = true;
       }
-      updateViewStore();
+      const aim = inCameraView.current || flying
+        ? { forward: cameraAxis.set(0, 0, -1).applyQuaternion(camera.quaternion).toArray() }
+        : { orbitTarget: orbit.target.toArray() };
+      viewport.setCamera({ eye: camera.position.toArray(), aim,
+        up: cameraAxis.set(0, 1, 0).applyQuaternion(camera.quaternion).toArray(),
+        fovYDegrees: camera.fov, near: camera.near, far: camera.far });
+      viewStore.current = nativeRenderView(viewport.current);
       viewStore.cameraTransform = cameraTransform(camera);
       // Cartography labels ride the projection: cheap per frame, and the
       // occlusion pass (a ray per anchor against the terrain) only runs
@@ -1737,13 +1743,11 @@ export function Viewport3D({ preference, onBackend }: {
       const lost = terrainViewport.lost();
       if (!moved && !runtime.needsRender && !lost) return;
       runtime.needsRender = false;
-      const project = stateRef.current?.project;
-      const target = flying || inCameraView.current ? camera.getWorldDirection(new THREE.Vector3()).add(camera.position) : orbit.target;
-      const terrain = terrainViewport.draw({ preference: preferenceRef.current, mode: viewportModeRef.current,
-        hasHdri: project?.render.environment != null, sunVisibility: project?.render.sunVisibility ?? false,
-        background: viewportModeRef.current === "solid" ? SOLID_BG : MATERIAL_BG,
+      const terrain = terrainViewport.draw({ preference: preferenceRef.current,
+        sunShadowsDisabled: runtime.glStep >= GPU_STEP_WITHOUT_SUN_SHADOWS,
+        background: viewport.current.settings.mode === "solid" ? SOLID_BG : MATERIAL_BG,
         skyIntensity: scene.environment ? scene.environmentIntensity : 0,
-        objects: runtime.objects, camera, target, sun, renderer });
+        frame: viewport.current, objects: runtime.objects, projectionCamera: camera, sun, renderer });
       if (terrain) {
         // Opaque meshes must see the terrain depth before writing any colour.
         const background = scene.background;
@@ -1777,13 +1781,14 @@ export function Viewport3D({ preference, onBackend }: {
         }
       }
     };
-    const diagnostic = () => ({ terrainViewport, runtime });
+    const diagnostic = () => ({ terrainViewport, runtime, frame: viewport.current, nativeView: viewStore.current });
     if (import.meta.env.DEV) Object.assign(window, { forge3dViewportDiagnostics: diagnostic });
     tick();
 
     return () => {
       if (import.meta.env.DEV) Reflect.deleteProperty(window, "forge3dViewportDiagnostics");
       terrainViewport.dispose();
+      viewport.setProject(null, viewport.current.projectGeneration, false);
       terrainCanvas.remove();
       cancelAnimationFrame(frame);
       observer.disconnect();
@@ -1889,7 +1894,6 @@ export function Viewport3D({ preference, onBackend }: {
         runtime.scene.add(group);
         runtime.objects.set(object.id, group);
       }
-      group.userData.isTerrain = object.kind.type === "terrain";
       group.visible = object.visible && !(cameraView && object.id === activeCameraId);
       // The cursor readout measures the terrain; once it is hidden the last
       // reading no longer describes anything on screen.
@@ -1907,13 +1911,15 @@ export function Viewport3D({ preference, onBackend }: {
       const rampKey = rampName ? `${rampName}:${rampStrength}` : "none";
       const sunVision = sunVisionKey(project);
       const terrainAssetId = object.kind.type === "terrain" ? object.kind.asset : null;
-      const terrainDemPath = terrainAssetId
-        ? (project.assets.find((entry) => entry.id === terrainAssetId)?.path ?? null)
-        : null;
-      const signature = contentSignature(object, terrainResolution, ladderRung, rampKey, {
-        asset: topImagery(project)?.asset ?? "",
-        opacity: topImagery(project)?.opacity ?? 0,
-      }, sunVision, terrainDemPath);
+      const terrainAsset = terrainAssetId ? project.assets.find(entry => entry.id === terrainAssetId) : undefined;
+      const resolution = requestedTerrainResolution(terrainAsset,
+        object.kind.type === "terrain" ? object.kind.worldSpanXz : null, terrainResolution, remoteRung);
+      const imagery = terrainAssetId ? topImagery(project) : null;
+      const overlayAsset = imagery ? project.assets.find(entry => entry.id === imagery.asset) : undefined;
+      const overlayRevision = overlayAsset ? assetRevision(overlayAsset, assetGenerations.get(overlayAsset.id)) : "";
+      const signature = `${project.id}:${projectGeneration}:${contentSignature(object, resolution, rampKey, {
+        assetRevision: overlayRevision, opacity: imagery?.opacity ?? 0,
+      }, sunVision, terrainSampleRevision(object, terrainAsset, terrainAsset && assetGenerations.get(terrainAsset.id)))}`;
       if (group.userData.signature !== signature) {
         group.userData.signature = signature;
         disposeChildren(group);
@@ -1976,27 +1982,20 @@ export function Viewport3D({ preference, onBackend }: {
             });
         }
       } else if (object.kind.type === "terrain") {
-        const terrainKind = object.kind;
-        const asset = project.assets.find((entry) => entry.id === terrainKind.asset);
+        const asset = terrainAsset;
         if (!asset) {
           setProblem(
             `Object "${object.name}" references a missing DEM — relink it in the Assets panel.`,
           );
           continue;
         }
-        // The draped imagery is the topmost visible imagery layer now.
-        const imagery = topImagery(project);
-        const overlay = imagery
-          ? { asset: imagery.asset ?? "", opacity: imagery.opacity ?? 0.82 }
-          : null;
-        const overlayAsset = overlay
-          ? project.assets.find((entry) => entry.id === overlay.asset)
-          : undefined;
+        const request = viewport.beginTerrain(object.id, resolution);
+        if (!request) continue;
         group.add(buildLoadingPlaceholder());
-        const expected = signature;
-        const zScale = terrainKind.zScale;
+        const current = () => runtimeRef.current === runtime && viewport.isCurrent(request)
+          && runtime.objects.get(object.id) === group && group.userData.signature === signature;
         Promise.all([
-          readTerrain(asset.path, terrainKind.worldSpanXz),
+          readTerrain(asset, object.kind, request.terrainRevision, request.resolution),
           rampName
             ? loadColormapStops(rampName).then((stops) => ({
                 stops,
@@ -2005,21 +2004,12 @@ export function Viewport3D({ preference, onBackend }: {
             : Promise.resolve(null),
         ])
           .then(([preview, ramp]) => {
-            // Stale three ways: the content changed, the object was removed
-            // (a removed group keeps its signature), or this whole runtime
-            // was torn down (StrictMode remount, unmount). Any of them means
-            // the map grid now belongs to someone else: leave it alone.
-            if (
-              runtimeRef.current !== runtime ||
-              group.userData.signature !== expected ||
-              runtime.objects.get(object.id) !== group
-            ) {
-              return;
-            }
+            if (!current()) return;
+            const terrain = viewport.acceptTerrain(request, preview);
+            if (!terrain) return;
             disposeChildren(group);
             const mesh = buildTerrainMesh(
-              preview,
-              zScale,
+              terrain,
               ramp,
               hillshade,
               sunVisionConfig(project),
@@ -2059,15 +2049,16 @@ export function Viewport3D({ preference, onBackend }: {
             // The drape is the terrain's albedo: Material shows it, Solid
             // stays clay. The shell decodes the raster; a scene without an
             // overlay stays clay in both.
-            if (overlay && overlayAsset?.path) {
-              loadOverlayTexture(overlayAsset.path)
+            if (overlayAsset?.path) {
+              loadOverlayTexture(overlayAsset, overlayRevision)
                 .then((texture) => {
-                  if (runtimeRef.current !== runtime || runtime.objects.get(object.id) !== group || group.userData.signature !== expected) return;
+                  if (!current()) return;
                   mesh.userData.drape = texture;
                   applyTerrainShading(mesh, viewportModeRef.current === "solid", stateRef.current?.project.viewport.hillshade ?? true);
                   runtime.needsRender = true;
                 })
                 .catch((cause) => {
+                  if (!current()) return;
                   setProblem(
                     `Could not drape ${overlayAsset.name}: ${cause instanceof Error ? cause.message : String(cause)}`,
                   );
@@ -2075,6 +2066,7 @@ export function Viewport3D({ preference, onBackend }: {
             }
           })
           .catch((cause) => {
+            if (!current()) return;
             setProblem(
               `Could not sample ${asset.name}: ${cause instanceof Error ? cause.message : cause}`,
             );
@@ -2219,16 +2211,20 @@ export function Viewport3D({ preference, onBackend }: {
     // Everything above mutated the scene; draw once on the next tick.
     runtime.needsRender = true;
   }, [
+    assetGenerations,
     cameraView,
     flyMode,
+    remoteRung,
     loadColormapStops,
     loadTexture,
+    projectGeneration,
     readMesh,
     readTerrain,
     space,
     state,
     terrainResolution,
     tool,
+    viewport,
   ]);
 
   // The map overlay: vector lines, their labels and the graticule, draped
@@ -2271,15 +2267,18 @@ export function Viewport3D({ preference, onBackend }: {
   );
   const overlayTerrainKind =
     overlayTerrain?.kind.type === "terrain" ? overlayTerrain.kind : null;
+  const overlayTerrainAsset = state?.project.assets.find(asset => asset.id === overlayTerrainKind?.asset);
+  const overlayTerrainRevision = overlayTerrain && terrainSampleRevision(overlayTerrain,
+    overlayTerrainAsset, overlayTerrainAsset && assetGenerations.get(overlayTerrainAsset.id));
+  const overlayResolution = requestedTerrainResolution(overlayTerrainAsset, overlayTerrainKind?.worldSpanXz ?? null,
+    terrainResolution, remoteRung);
   const overlayTerrainKey =
     overlayTerrain && overlayTerrainKind
-      ? `${overlayTerrain.id}|${
-          state?.project.assets.find((asset) => asset.id === overlayTerrainKind.asset)?.path ?? ""
-        }|${overlayTerrainKind.zScale}`
+      ? JSON.stringify([overlayTerrain.id, overlayTerrainKind.zScale, overlayTerrainRevision])
       : "";
   // The dependency list is the rebuild rule: the visible stack's signature,
-  // the terrain key above, or the terrain sampling (readTerrain changes with
-  // the resolution, and the drape must follow the mesh). No extra "same signature" guard: a re-run
+  // the terrain key above, or the sampling resolution (the drape must
+  // follow the mesh). No extra "same signature" guard: a re-run
   // with an unchanged signature has just cancelled the build in flight (React
   // StrictMode runs every effect twice on mount), so skipping it left the
   // map overlay empty until a layer was edited.
@@ -2309,8 +2308,8 @@ export function Viewport3D({ preference, onBackend }: {
       return;
     }
     const terrainKind = terrainObject.kind;
-    const terrainAsset = project.assets.find((asset) => asset.id === terrainKind.asset);
-    if (!terrainAsset) {
+    const terrainAsset = overlayTerrainAsset;
+    if (!terrainAsset || overlayTerrainRevision == null) {
       runtime.needsRender = true;
       return;
     }
@@ -2320,7 +2319,7 @@ export function Viewport3D({ preference, onBackend }: {
       let preview: TerrainPreview;
       try {
         // Shares the terrain cache with the mesh build — one read per DEM.
-        preview = await readTerrain(terrainAsset.path, terrainKind.worldSpanXz);
+        preview = await readTerrain(terrainAsset, terrainKind, overlayTerrainRevision, overlayResolution);
       } catch {
         // The terrain's own error path already reports this one.
         return;
@@ -2523,7 +2522,7 @@ export function Viewport3D({ preference, onBackend }: {
     return () => {
       cancelled = true;
     };
-  }, [cartographySignature, overlayTerrainKey, readTerrain]);
+  }, [cartographySignature, overlayTerrainKey, overlayResolution, projectGeneration, readTerrain]);
 
   // A project HDRI replaces the studio sky for Material and Rendered. The
   // viewport decodes and pre-filters it here (Rendered receives the path and
@@ -2642,6 +2641,8 @@ export function Viewport3D({ preference, onBackend }: {
     const runtime = runtimeRef.current;
     if (!runtime) return;
     if (!flyMode) {
+      // OrbitControls.update() uses lookAt and would discard the authored roll.
+      if (cameraView) return;
       runtime.orbit.enabled = true;
       const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(runtime.camera.quaternion);
       runtime.orbit.target.copy(runtime.camera.position).addScaledVector(forward, 10);
@@ -2821,8 +2822,6 @@ export function Viewport3D({ preference, onBackend }: {
   const renderedMode = mode === "rendered";
   const modeRef = useRef(renderedMode);
   modeRef.current = renderedMode;
-  const cameraViewRef = useRef(cameraView);
-  cameraViewRef.current = cameraView;
   const requestSizeRef = useRef(requestSize);
   requestSizeRef.current = requestSize;
   const sizeRef = useRef(size);

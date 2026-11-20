@@ -91,6 +91,7 @@ pub fn run() {
             commands::dataset_list,
             commands::remote_cog_preview,
             commands::dataset_path,
+            commands::reserve_terrain_source_change,
             commands::remote_cog_info,
             commands::import_terrain_dem,
             commands::read_image_asset,
