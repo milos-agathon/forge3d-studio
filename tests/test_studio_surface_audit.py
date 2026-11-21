@@ -155,7 +155,7 @@ def _shell_sources() -> list[Path]:
         path
         for folder in ("src", "src-tauri/src", "crates")
         for path in (SHELL / folder).rglob("*")
-        if path.suffix in {".ts", ".tsx", ".py", ".rs"}
+        if path.suffix in {".ts", ".tsx", ".mjs", ".py", ".rs"}
     ]
     sources += [
         path
