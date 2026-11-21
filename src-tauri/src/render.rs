@@ -844,6 +844,29 @@ impl RenderRequest {
 mod tests {
     use super::*;
 
+    #[test]
+    fn non_default_settings_reach_the_serialized_payload() {
+        let settings = studio_core::RenderSettings {
+            environment_background_intensity: 0.42,
+            clouds: studio_core::project::CloudSettings {
+                enabled: true,
+                shadow_strength: 0.77,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let payload = request().with_settings(&settings).to_payload("final", None);
+        assert!((payload["environmentBackgroundIntensity"].as_f64().unwrap() - 0.42).abs() < 1e-6);
+        assert!(
+            (payload["quality"]["clouds"]["shadowStrength"]
+                .as_f64()
+                .unwrap()
+                - 0.77)
+                .abs()
+                < 1e-6
+        );
+    }
+
     fn request() -> RenderRequest {
         RenderRequest {
             width: 960,
