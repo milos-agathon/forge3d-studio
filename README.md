@@ -625,10 +625,12 @@ v4; older builds reject a v4 file rather than silently dropping its tracks).
 - A camera animation reaches Forge3D through `workspace::camera_render_view`:
   the exported frame uses the evaluated camera's eye, rotation, distance, and
   FOV — matching a camera-view still — rather than the terrain's canned framing.
-- **Only camera animation is Forge3D-native.** The engine draws terrain, so a
-  mesh's animation is visible in the Studio viewport and evaluated for export,
-  but it does not appear in Rendered frames (the same geometry-export gap as
-  primitives). The UI does not claim otherwise.
+- **Imported meshes and camera animation are Forge3D-native.** Whole imported
+  glTF/GLB meshes reach Rendered at their scene transforms, and
+  `render_animation_frame()` evaluates the timeline before collecting those
+  transforms, so keyed object motion appears in exported frames too. A
+  node-scoped import is reported as skipped rather than silently rendered as a
+  whole asset; built-in primitives still have no render geometry.
 
 ## Asset integrity
 
@@ -721,7 +723,7 @@ by the dependency-free `node` tests `npm test` runs.
 
 ## Not yet implemented (deliberately)
 
-- Geometry export for primitives — Rendered still draws terrain only
+- Geometry export for built-in primitives — imported glTF/GLB meshes do reach Rendered, primitives do not
 - Shared material library — **Phase 5** (environment/IBL controls, capability badges, the Material-preview albedo drape, and glTF node selection shipped)
 Relinking, the material inspector (terrain albedo, mesh base colour and
 texture), the render settings UI, the Phase 6 timeline, and the Phase 7 queue,

@@ -81,6 +81,42 @@ jobs:
         run: |
           "$HOME/studio-venv/bin/python" -m pytest tests/ -q
 
+  studio-python-gpu:
+    name: Trusted GPU — mesh compositing (NVIDIA Vulkan)
+    # Hosted runners skip the terrain-safe tests. This lane must run them and
+    # must fail when the adapter is missing, so an empty mesh handoff cannot
+    # merge behind a green hosted job.
+    runs-on: [self-hosted, Windows, X64, forge3d-gpu, gpu-nvidia]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned engine and test deps
+        env:
+          GIT_LFS_SKIP_SMUDGE: "1"
+        shell: pwsh
+        run: |
+          python -m venv "$env:USERPROFILE\studio-gpu-venv"
+          & "$env:USERPROFILE\studio-gpu-venv\Scripts\python.exe" -m pip install --upgrade pip
+          & "$env:USERPROFILE\studio-gpu-venv\Scripts\python.exe" -m pip install `
+            'forge3d @ git+https://github.com/milos-agathon/forge3d.git@9804091086364a1824ea8bb0e7f9f2a172fddf45' `
+            pytest pillow rasterio pyproj
+
+      - name: pytest on the physical adapter
+        shell: pwsh
+        env:
+          FORGE3D_TESSELLA_REQUIRED_GPU: '1'
+          WGPU_BACKEND: vulkan
+          WGPU_BACKENDS: vulkan
+        run: |
+          & "$env:USERPROFILE\studio-gpu-venv\Scripts\python.exe" -m pytest tests/test_studio_mesh_composite.py -v --tb=short
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   deb-audit:
     name: deb audit — engine probe in both interpreter scenarios
     # Gate on PRs and main pushes: the deb's stranger-readable discovery path

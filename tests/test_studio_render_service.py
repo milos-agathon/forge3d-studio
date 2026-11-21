@@ -591,6 +591,15 @@ def test_the_class_legend_lists_the_classes_the_map_shows():
     legend = service.plate_class_legend([1, 2, 4])
     assert legend.shape[0] > 40 and legend.shape[1] > 100, legend.shape
     assert legend.shape[2] == 4
+    # Each swatch sits in its own row; finding its colour elsewhere on the
+    # plate (a rail line, say) must not count as a legend entry.
+    for index, class_id in enumerate((1, 2, 4)):
+        y = 26 + index * 22
+        swatch = legend[y : y + 16, 2:18, :3].astype(np.int32)
+        expected = np.array(service.CLASSIFICATION_PALETTE[class_id - 1], dtype=np.int32)
+        assert int((np.abs(swatch - expected).sum(axis=2) < 12).sum()) > 40, (
+            f"class {class_id} swatch is not in legend row {index}"
+        )
     # No classes, no legend.
     assert service.plate_class_legend([]).shape == (1, 1, 4)
 
@@ -663,15 +672,14 @@ def test_compose_plate_stacks_several_legends():
     second = service.plate_vector_legend((0.2, 0.8, 0.3, 1.0), "b.gpkg")
     single = service.compose_plate(frame, depth, title="T", legend=[first], caption="")
     stacked = service.compose_plate(frame, depth, title="T", legend=[first, second], caption="")
-    assert stacked.shape[0] >= single.shape[0]
-    assert stacked.shape != single.shape or True  # the header grows with two entries
+    assert stacked.shape[0] == single.shape[0] + second.shape[0] + 8
 
 
 def test_the_reader_finds_the_named_points():
     """A label field names the features: the reader takes the points that
     carry it, and a file without that attribute has no points at all."""
     service = load_service()
-    fuji = "assets/gpkg/Mount_Fuji_places.gpkg"
+    fuji = str(REPO / "assets/gpkg/Mount_Fuji_places.gpkg")
 
     lines, points, crs, _cats = service.read_vector_features(fuji, "name.en")
     assert crs == "EPSG:4326"
@@ -776,14 +784,14 @@ def test_the_cartography_is_prepared_for_the_engine_own_pass():
     has no quality surface).
     """
     service = load_service()
-    points = "assets/gpkg/Mount_Fuji_places.gpkg"
+    points = str(REPO / "assets/gpkg/Mount_Fuji_places.gpkg")
     visible = [
         {
             "id": "v",
             "name": "Places",
             "visible": True,
             "type": "vector",
-            "path": "assets/gpkg/luxembourg_rail.gpkg",
+            "path": str(REPO / "assets/gpkg/luxembourg_rail.gpkg"),
             "colour": [0.87, 0.1, 0.1, 1.0],
             "widthPx": 2.0,
         },
@@ -1227,7 +1235,6 @@ def test_the_vector_layer_legend_draws_per_category(tmp_path, monkeypatch):
     palette = service.CATEGORY_PALETTE
     # "rail" and "road" have equal counts; alphabetical puts rail in rank 2? no —
     # ranked by (-count, value): path... here rail==road==1, sorted by name.
-    assert list(palette[0]) == [round(c, 6) for c in calls[0][0][0] and calls[0][1][:3]] or True
     assert tuple(round(c, 3) for c in colours[0][:3]) == tuple(round(c, 3) for c in palette[0])
     assert tuple(round(c, 3) for c in colours[1][:3]) == tuple(round(c, 3) for c in palette[1])
     # one entry per class in the plate legend
@@ -1394,9 +1401,10 @@ def test_the_rainier_showcase_sun_angles_reach_pixels(tmp_path):
     default_req = _base_request()
     reply, default_frame = _render_reply(service, renderer, default_req)
 
+    # Only the angles change: intensity and colour stay at the starter values,
+    # so ignoring the angles cannot pass on the brightness difference.
     showcase_req = {**default_req,
-                    "sun": {**STUDIO_SUN, "azimuthDeg": 135.0, "elevationDeg": 25.0,
-                            "intensity": 4.0, "color": [1.0, 0.95, 0.9]}}
+                    "sun": {**STUDIO_SUN, "azimuthDeg": 135.0, "elevationDeg": 25.0}}
     reply, recipe_frame = _render_reply(service, renderer, showcase_req)
     diff = np.abs(default_frame.astype(np.int64) - recipe_frame.astype(np.int64)).sum(axis=2)
     changed = int((diff > 8).sum())
@@ -1463,15 +1471,20 @@ def test_the_vector_attribute_legend_reaches_the_plate(tmp_path):
               "target": [0.0, 0.0, 0.0], "fovDeg": 45.0}
     sun = {"azimuthDeg": 270.0, "elevationDeg": 32.0,
            "intensity": 3.0, "color": [1.0, 0.97, 0.92]}
+    plate_layer = {"id": "plate", "name": "Map plate", "visible": True, "type": "plate",
+                   "title": "Luxembourg rail network", "caption": "Usage classes",
+                   "northArrow": True, "scaleBar": True, "legend": True}
     plain = {
         "width": 512, "height": 512,
         "camera": camera, "sun": sun,
         "exposure": 1.35,
+        "output": str(tmp_path / "plain.png"),
         "cartography": [
             {"id": "relief", "name": "Terrain relief", "visible": True, "type": "relief"},
             {"id": "rail", "name": "Rail", "visible": True, "type": "vector",
              "path": str(rail), "colour": [0.9, 0.29, 0.1, 1.0], "widthPx": 2.0,
              "legendField": ""},
+            dict(plate_layer),
         ],
         "quality": {"shadows": True},
     }
@@ -1483,9 +1496,7 @@ def test_the_vector_attribute_legend_reaches_the_plate(tmp_path):
             {"id": "rail", "name": "Rail", "visible": True, "type": "vector",
              "path": str(rail), "colour": [0.9, 0.29, 0.1, 1.0], "widthPx": 2.0,
              "legendField": "usage"},
-            {"id": "plate", "name": "Map plate", "visible": True, "type": "plate",
-             "title": "Luxembourg rail network", "caption": "Usage classes",
-             "northArrow": True, "scaleBar": True, "legend": True},
+            dict(plate_layer),
         ],
     }
     renderer = service.StudioRenderer(str(dem))
@@ -1517,10 +1528,14 @@ def test_the_vector_attribute_legend_reaches_the_plate(tmp_path):
         "test": (213, 94, 0),
         "siding": (240, 228, 66),
     }
-    for name, (r, g, b) in palette.items():
-        distance = np.abs(plate - np.array([r, g, b])).sum(axis=2)
+    # Each swatch must be in its own legend row in the top-left of the page;
+    # a rail line elsewhere carrying the same colour must not count.
+    for index, (name, (r, g, b)) in enumerate(palette.items()):
+        y0 = 72 + index * 60
+        row = plate[y0 - 4 : y0 + 18, :60]
+        distance = np.abs(row - np.array([r, g, b])).sum(axis=2)
         assert int((distance < 40).sum()) >= 30, (
-            "%s swatch missing from the plate legend" % name
+            "%s swatch missing from legend row %d" % (name, index)
         )
 
 
@@ -1590,6 +1605,7 @@ def _write_cog_with_overviews(path: Path, size: int = 1024, random: bool = False
 
 def _run_remote_preview(url: str, resolution: int) -> dict:
     import json
+    import os
     import subprocess
     import sys
 
@@ -1599,10 +1615,7 @@ def _run_remote_preview(url: str, resolution: int) -> dict:
         capture_output=True,
         text=True,
         timeout=600,
-        env={
-            "PATH": "/usr/bin:/bin",
-            "HOME": str(Path.home()),
-        },
+        env=dict(os.environ),
     )
     assert result.stdout.strip(), f"the preview produced no output: {result.stderr}"
     payload = json.loads(
@@ -1619,13 +1632,12 @@ def test_the_remote_dem_preview_reads_the_overview_through_the_range_reader(tmp_
     import sys
 
     sys.path.insert(0, str(REPO / "tests"))
-    from _cog_http_fixtures import _clear_cog_cache, _serve_range
+    from _cog_http_fixtures import _serve_range
 
     cog_path = tmp_path / "demo.cog.tif"
     body = _write_cog_with_overviews(cog_path)
     total = len(body)
 
-    _clear_cog_cache()
     server, url, served = _serve_range(body)
     try:
         preview = _run_remote_preview(url, 64)
@@ -1672,15 +1684,13 @@ def test_the_remote_preview_ladder_selects_finer_overviews(tmp_path):
     import sys
 
     sys.path.insert(0, str(REPO / "tests"))
-    from _cog_http_fixtures import _clear_cog_cache, _serve_range
+    from _cog_http_fixtures import _serve_range
 
     cog_path = tmp_path / "ladder.cog.tif"
     body = _write_cog_with_overviews(cog_path)
     server, url, _served = _serve_range(body)
     try:
-        _clear_cog_cache()
         coarse = _run_remote_preview(url, 64)
-        _clear_cog_cache()
         fine = _run_remote_preview(url, 256)
     finally:
         server.shutdown()
@@ -1707,7 +1717,7 @@ def test_a_remote_dem_streams_into_the_still_without_a_local_copy(tmp_path):
     import sys
 
     sys.path.insert(0, str(REPO / "tests"))
-    from _cog_http_fixtures import _clear_cog_cache, _serve_range
+    from _cog_http_fixtures import _serve_range
 
     cog_path = tmp_path / "stream.cog.tif"
     body = _write_cog_with_overviews(cog_path, size=2048, random=True)
@@ -1728,11 +1738,10 @@ print(json.dumps({"ok": True, "span": renderer.span_x, "path": renderer.dem_path
                   "renderPath": reply["renderPath"], "png": reply["png"]}))
 """
     try:
-        _clear_cog_cache()
         result = subprocess.run(
             [sys.executable, "-c", script, str(REPO), url],
             capture_output=True, text=True, timeout=600,
-            env={"PATH": "/usr/bin:/bin", "HOME": str(Path.home())},
+            env=dict(os.environ),
         )
         assert result.returncode == 0, result.stderr[-1200:]
         reply = json.loads(result.stdout.strip().splitlines()[-1])
