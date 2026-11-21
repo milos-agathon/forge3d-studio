@@ -24,6 +24,15 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tests"))
 
+# Every test here renders a still through the engine's native terrain path.
+# Hosted runners have no terrain-safe adapter; the hardware lane runs them.
+from _terrain_runtime import terrain_rendering_available  # noqa: E402
+
+engine_required = pytest.mark.skipif(
+    not terrain_rendering_available(),
+    reason="no terrain-safe GPU for the engine's render path",
+)
+
 
 def _service():
     import importlib.util
@@ -73,6 +82,7 @@ def _mesh_at_aim_placement(renderer, size: int) -> np.ndarray:
     return (viewport_to_render @ object_transform).reshape(16).tolist()
 
 
+@engine_required
 def test_imported_mesh_lands_at_the_still_camera_aim(tmp_path):
     from test_gltf_import import _write_material_glb
 
@@ -123,6 +133,7 @@ def test_imported_mesh_lands_at_the_still_camera_aim(tmp_path):
     assert np.array_equal(_decode(service, without), baseline)
 
 
+@engine_required
 def test_node_scoped_mesh_is_reported_not_silently_rendered(tmp_path):
     from test_gltf_import import _write_material_glb
 
@@ -144,6 +155,7 @@ def test_node_scoped_mesh_is_reported_not_silently_rendered(tmp_path):
     assert reply["meshReport"]["meshesSkipped"] == ["one-node"]
 
 
+@engine_required
 def test_rendered_viewport_path_shows_the_mesh_at_an_off_aim_transform(tmp_path):
     """The viewport's preview-quality path uses the same service. A mesh moved
     to a different viewport position must project away from the frame centre;

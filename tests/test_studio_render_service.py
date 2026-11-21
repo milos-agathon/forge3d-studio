@@ -19,6 +19,28 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+
+# -------------------------------- engine-backed conformance (GPU, skip-if-absent)
+#
+# Declared before the first test that uses it: two tests below reach the
+# engine's render path too, and a CI runner without a terrain-safe adapter
+# must skip them rather than fail on a missing device.
+
+def _terrain_gpu_available() -> bool:
+    from _terrain_runtime import terrain_rendering_available
+
+    try:
+        return terrain_rendering_available()
+    except Exception:  # noqa: BLE001 - absence must read as a skip, never a failure
+        return False
+
+
+engine_required = pytest.mark.skipif(
+    not _terrain_gpu_available(),
+    reason="no terrain-safe GPU for the engine's render path",
+)
+
+
 REPO = Path(__file__).resolve().parents[1]
 SERVICE = (
     REPO
@@ -764,6 +786,7 @@ def test_the_clouds_are_the_engines_own_settings():
         service.cloud_settings({"enabled": True, "coverage": 1.5})
 
 
+@engine_required
 def test_the_cartography_is_prepared_for_the_engine_own_pass():
     """The map's lines and labels become the engine's GPU batches.
 
@@ -1270,23 +1293,6 @@ def test_the_still_compiles_a_recipe_before_rendering():
     assert "TerrainRenderParams(" not in source
 
 
-# -------------------------------- engine-backed conformance (GPU, skip-if-absent)
-
-def _terrain_gpu_available() -> bool:
-    from _terrain_runtime import terrain_rendering_available
-
-    try:
-        return terrain_rendering_available()
-    except Exception:  # noqa: BLE001 - absence must read as a skip, never a failure
-        return False
-
-
-engine_required = pytest.mark.skipif(
-    not _terrain_gpu_available(),
-    reason="no terrain-safe GPU for the engine's render path",
-)
-
-
 def _render_reply(service, renderer, request):
     """One still through the service; returns the reply and decoded frame."""
     import base64
@@ -1703,6 +1709,7 @@ def test_the_remote_preview_ladder_selects_finer_overviews(tmp_path):
     assert len(fine["heights"]) == 256 * 256
 
 
+@engine_required
 def test_a_remote_dem_streams_into_the_still_without_a_local_copy(tmp_path):
     """18.3: a URL-backed DEM is read through the engine's range reader at
     render time — the project never materializes the whole file, and the still
