@@ -4,6 +4,10 @@ node_modules/
 dist/
 *.log
 
+# Local engine environment
+.venv/
+__pycache__/
+
 # Rust
 target/
 src-tauri/gen/
