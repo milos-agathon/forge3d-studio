@@ -3,6 +3,7 @@ public/forge3d-web/
 node_modules/
 dist/
 *.log
+*.pyc
 
 # Rust
 target/
