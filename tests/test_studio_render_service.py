@@ -13,35 +13,16 @@ maths — the parts a GPU golden cannot see:
 from __future__ import annotations
 
 import importlib.util
+import sys
 import types
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-
-# -------------------------------- engine-backed conformance (GPU, skip-if-absent)
-#
-# Declared before the first test that uses it: two tests below reach the
-# engine's render path too, and a CI runner without a terrain-safe adapter
-# must skip them rather than fail on a missing device.
-
-def _terrain_gpu_available() -> bool:
-    from _terrain_runtime import terrain_rendering_available
-
-    try:
-        return terrain_rendering_available()
-    except Exception:  # noqa: BLE001 - absence must read as a skip, never a failure
-        return False
-
-
-engine_required = pytest.mark.skipif(
-    not _terrain_gpu_available(),
-    reason="no terrain-safe GPU for the engine's render path",
-)
-
-
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "tests"))
+from _engine_gate import engine_required  # noqa: E402
 SERVICE = (
     REPO
     / "src-tauri"

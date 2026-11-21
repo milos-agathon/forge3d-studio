@@ -26,12 +26,7 @@ sys.path.insert(0, str(REPO / "tests"))
 
 # Every test here renders a still through the engine's native terrain path.
 # Hosted runners have no terrain-safe adapter; the hardware lane runs them.
-from _terrain_runtime import terrain_rendering_available  # noqa: E402
-
-engine_required = pytest.mark.skipif(
-    not terrain_rendering_available(),
-    reason="no terrain-safe GPU for the engine's render path",
-)
+from _engine_gate import engine_required  # noqa: E402
 
 
 def _service():
