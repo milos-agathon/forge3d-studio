@@ -631,8 +631,9 @@ pub fn discard_recovery(state: State<'_, AppState>, id: String) -> Result<(), St
 }
 
 /// Imports are read whole into memory. Phase 5 streams large assets; until
-/// then the cap is what keeps a 2 GB GLB from freezing the window.
-const MAX_MESH_BYTES: u64 = 32 * 1024 * 1024;
+/// then the cap bounds the base64 IPC copy (~170 MB at this limit) while
+/// letting city-scale GLBs through. A 2 GB file still fails fast.
+const MAX_MESH_BYTES: u64 = 128 * 1024 * 1024;
 /// Cap on an HDRI pulled across IPC for the Material preview (base64 adds a
 /// third, so this is a real memory bound).
 const MAX_HDR_BYTES: u64 = 64 * 1024 * 1024;
@@ -2046,5 +2047,25 @@ mod tests {
             vector_id,
             "the label layer must name the vector layer above it"
         );
+    }
+
+    #[test]
+    fn mesh_import_rejects_an_oversized_file_before_reading_it() {
+        // Sparse file: metadata is enough for the cap, no 129 MB allocation.
+        let path = std::env::temp_dir().join(format!("studio-mesh-cap-{}.glb", std::process::id()));
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_MESH_BYTES + 1).unwrap();
+
+        let error = read_file_capped(
+            &path.to_string_lossy(),
+            MAX_MESH_BYTES,
+            "imports are limited to",
+        )
+        .expect_err("a file over the cap must be rejected");
+        assert!(
+            error.contains("128 MB"),
+            "the error must name the limit: {error}"
+        );
+        std::fs::remove_file(path).unwrap();
     }
 }
