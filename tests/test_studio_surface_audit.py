@@ -62,13 +62,8 @@ def _render_settings_fields() -> list[str]:
     return re.findall(r"\n    pub ([a-z0-9_]+):", text[start:end])
 
 
-def _quality_payload_keys() -> tuple[set[str], set[str]]:
-    """The render request's `quality` keys: the scalars and the nested blocks.
-
-    The nested blocks (water, fog, bloom, sunVisibility, aov) hold their own
-    keys, so they are returned separately: a block is a key of `quality`, and
-    its leaves are not.
-    """
+def _quality_payload_keys() -> tuple[set[str], set[str], set[str]]:
+    """The `quality` scalars, its nested blocks, and the blocks' leaf keys."""
     text = RENDER.read_text()
     start = text.index('"quality": {')
     depth = 0
@@ -86,7 +81,8 @@ def _quality_payload_keys() -> tuple[set[str], set[str]]:
     # (inside a block) by 20.
     scalars = set(re.findall(r'\n\s{16}"([A-Za-z0-9_]+)":', block))
     blocks = set(re.findall(r'\n\s{16}"([A-Za-z0-9_]+)": \{', block))
-    return scalars - blocks, blocks
+    nested = set(re.findall(r'\n\s{20}"([A-Za-z0-9_]+)":', block))
+    return scalars - blocks, blocks, nested
 
 
 def _service_quality_reads() -> set[str]:
@@ -103,11 +99,15 @@ def test_every_render_setting_reaches_the_payload() -> None:
     fields = _render_settings_fields()
     assert len(fields) > 20, f"the model looks empty: {fields}"
     sources = RENDER.read_text() + COMMANDS.read_text()
-    missing = [
-        field
-        for field in fields
-        if not re.search(rf"\.{re.escape(field)}\b", sources)
-    ]
+
+    def reads(field: str) -> bool:
+        # A write to `self.field` or a later serialization of it is not a
+        # read of the model's setting. The HDRI asset comes from the handoff.
+        if field == "environment":
+            return re.search(r"environment:\s*handoff", sources) is not None
+        return re.search(rf"settings\.{re.escape(field)}\b(?!\s*=)", sources) is not None
+
+    missing = [field for field in fields if not reads(field)]
     assert not missing, (
         "these RenderSettings fields are never read by the shell, so they are "
         f"dead configuration: {missing}"
@@ -115,9 +115,12 @@ def test_every_render_setting_reaches_the_payload() -> None:
 
 
 def test_the_payload_and_the_service_agree_in_both_directions() -> None:
-    payload, blocks = _quality_payload_keys()
+    payload, blocks, nested = _quality_payload_keys()
     reads = _service_quality_reads()
-    missing = sorted((payload | blocks) - reads)
+    # A misspelled nested lookup must be caught: check every leaf key against
+    # every `.get("key")` in the service, not just the top-level quality reads.
+    any_reads = set(re.findall(r'["\']([A-Za-z0-9_]+)["\']', SERVICE.read_text()))
+    missing = sorted((payload | blocks | nested) - any_reads)
     assert not missing, (
         "the payload sends these keys and the service never reads them, so they "
         f"are controls that do nothing: {missing}"
@@ -127,6 +130,27 @@ def test_the_payload_and_the_service_agree_in_both_directions() -> None:
         "the service reads these keys and the payload never sends them, so the "
         f"controls cannot work: {unsent}"
     )
+
+
+def _service_cloud_block() -> str:
+    text = SERVICE.read_text()
+    start = text.index('studio_settings["clouds"] = {')
+    depth = 0
+    for index, char in enumerate(text[start:], start):
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index]
+    raise AssertionError("the service has no cloud settings block")
+
+
+def test_nested_cloud_keys_are_read_in_the_render_recipe() -> None:
+    """A typo in a nested lookup must fail, not silently default the control."""
+    block = _service_cloud_block()
+    for key in ("shadowsEnabled", "coverage", "density", "shadowStrength", "quality"):
+        assert f'clouds.get("{key}"' in block, f"the service never reads clouds.{key}"
 
 
 def test_the_model_carries_no_parameter_the_engine_ignores() -> None:
