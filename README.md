@@ -257,6 +257,23 @@ cargo test -p forge3d-studio-shell --lib   # 23 shell tests: engine probe, candi
 npx tsc --noEmit               # UI types
 ```
 
+The Python suites live in `tests/` and cover the render service directly:
+
+```bash
+python3 -m venv .venv
+GIT_LFS_SKIP_SMUDGE=1 .venv/bin/pip install \
+  'forge3d @ git+https://github.com/milos-agathon/forge3d.git@9804091086364a1824ea8bb0e7f9f2a172fddf45' \
+  pytest pillow rasterio pyproj
+.venv/bin/python -m pytest tests/ -q
+```
+
+They check the sky HDR is a valid Radiance file, the denoise colour-space
+helpers, the remote-DEM range-read previews, the `RenderSettings` payload
+contract against the shell, and — end to end — that imported glTF meshes land
+in the Rendered still at the viewport camera's aim. Tests that need a
+terrain-safe GPU skip when no hardware adapter is present. CI runs the same
+command against the pinned engine above.
+
 ## Viewport controls
 
 | Input | Action |
@@ -521,8 +538,9 @@ consumed is gone.
   references external `.bin`/texture files fails with an explicit message,
   because the webview cannot read neighbouring files.
 - **Imported meshes are transform-editable, relinkable, and node-selectable.**
-  Solid draws them as clay; the Material preview draws their glTF materials.
-  Meshes do not reach Rendered at all yet (see Primitives below).
+  Solid draws them as clay; the Material preview draws their glTF materials,
+  and Rendered composites them over the still at the viewport camera's aim.
+  Built-in primitives still do not reach Forge3D (see Primitives below).
 - **No shadows or PBR environment** in the Solid viewport; it is a modelling
   view, not the Forge3D render. The Material preview is where HDRI lighting and
   soft shadows live (Phase 4).
