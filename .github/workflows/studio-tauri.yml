@@ -50,6 +50,35 @@ jobs:
       - name: Shell unit tests (render payload, view override)
         run: cargo test -p forge3d-studio-shell --lib
 
+  studio-python:
+    name: Python suites — render service, mesh composite, surface audit
+    # These suites were left in the engine repo at the split. They are the only
+    # end-to-end check that imported meshes reach the Rendered still, so they
+    # gate PRs rather than waiting for a release.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned engine and test deps
+        env:
+          GIT_LFS_SKIP_SMUDGE: "1" # the wheel excludes the engine's LFS sample data
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan-dev pkg-config
+          python -m venv "$HOME/studio-venv"
+          "$HOME/studio-venv/bin/python" -m pip install --upgrade pip
+          "$HOME/studio-venv/bin/python" -m pip install \
+            'forge3d @ git+https://github.com/milos-agathon/forge3d.git@9804091086364a1824ea8bb0e7f9f2a172fddf45' \
+            pytest pillow rasterio pyproj
+
+      - name: pytest
+        run: |
+          "$HOME/studio-venv/bin/python" -m pytest tests/ -q
+
   deb-audit:
     name: deb audit — engine probe in both interpreter scenarios
     # Gate on PRs and main pushes: the deb's stranger-readable discovery path
