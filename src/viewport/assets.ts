@@ -122,6 +122,9 @@ function loadSceneGroup(
   let pending = scenesByPath.get(path);
   if (!pending) {
     const bytes = bytesByPath.get(path);
+    if (bytes) bytesByPath.delete(path);
+    // Raw bytes are a handoff, not a cache: the parsed scene is the cache.
+    // Keeping both meant 64 × 128 MiB of ArrayBuffers could stay alive.
     pending = bytes ? parseGltf(bytes, path) : read(path).then((buffer) => parseGltf(buffer, path));
     scenesByPath.set(path, pending);
     pending.catch(() => scenesByPath.delete(path));

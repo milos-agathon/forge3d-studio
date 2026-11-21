@@ -631,8 +631,9 @@ pub fn discard_recovery(state: State<'_, AppState>, id: String) -> Result<(), St
 }
 
 /// Imports are read whole into memory. Phase 5 streams large assets; until
-/// then the cap is what keeps a 2 GB GLB from freezing the window.
-const MAX_MESH_BYTES: u64 = 32 * 1024 * 1024;
+/// then the cap bounds the base64 IPC copy (~170 MB at this limit) while
+/// letting city-scale GLBs through. A 2 GB file still fails fast.
+const MAX_MESH_BYTES: u64 = 128 * 1024 * 1024;
 /// Cap on an HDRI pulled across IPC for the Material preview (base64 adds a
 /// third, so this is a real memory bound).
 const MAX_HDR_BYTES: u64 = 64 * 1024 * 1024;
@@ -2045,6 +2046,68 @@ mod tests {
             label_source.as_ref().map(|(source, _)| *source),
             vector_id,
             "the label layer must name the vector layer above it"
+        );
+    }
+
+    /// Exclusively created sparse file; removal (and permission restore) on drop.
+    struct SparseGlb(std::path::PathBuf);
+
+    impl SparseGlb {
+        fn new(bytes: u64) -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "studio-mesh-cap-{}-{}-{}.glb",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+                NEXT.fetch_add(1, Ordering::Relaxed),
+            ));
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .unwrap();
+            file.set_len(bytes).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for SparseGlb {
+        fn drop(&mut self) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o600));
+            }
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn mesh_import_accepts_above_the_old_cap_and_rejects_oversized_before_reading() {
+        // The old 32 MiB cap would reject this through the real command.
+        let old_cap_plus_one = 32 * 1024 * 1024 + 1;
+        let file = SparseGlb::new(old_cap_plus_one);
+        let reply = read_mesh_file(file.0.to_string_lossy().into_owned())
+            .expect("a mesh just above the old cap must import");
+        assert_eq!(reply.byte_size, old_cap_plus_one);
+
+        // Unreadable as well as oversized: a helper that reads before checking
+        // the size reports a permission error instead of the cap.
+        let oversized = SparseGlb::new(MAX_MESH_BYTES + 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&oversized.0, std::fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        let error = read_mesh_file(oversized.0.to_string_lossy().into_owned())
+            .expect_err("a file over the cap must be rejected");
+        assert!(
+            error.contains("128 MB"),
+            "the error must name the cap, not a read failure: {error}"
         );
     }
 }
