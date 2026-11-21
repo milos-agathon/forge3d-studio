@@ -870,10 +870,15 @@ mod tests {
 
     #[test]
     fn non_default_settings_reach_the_serialized_payload() {
-        let mut settings = studio_core::RenderSettings::default();
-        settings.environment_background_intensity = 0.42;
-        settings.clouds.enabled = true;
-        settings.clouds.shadow_strength = 0.77;
+        let settings = studio_core::RenderSettings {
+            environment_background_intensity: 0.42,
+            clouds: studio_core::project::CloudSettings {
+                enabled: true,
+                shadow_strength: 0.77,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let payload = request().with_settings(&settings).to_payload("final", None);
         assert!((payload["environmentBackgroundIntensity"].as_f64().unwrap() - 0.42).abs() < 1e-6);
         assert!(
