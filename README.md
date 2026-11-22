@@ -182,8 +182,12 @@ The CI `bundle` job on `main` ships a `deb` artifact. Locally:
 npm run tauri:build -- --bundles deb
 sudo dpkg -i target/release/bundle/deb/*.deb
 GIT_LFS_SKIP_SMUDGE=1 python3 -m pip install --user \
-  'forge3d @ git+https://github.com/milos-agathon/forge3d.git@9804091086364a1824ea8bb0e7f9f2a172fddf45'
+  'forge3d @ git+https://github.com/milos-agathon/forge3d.git@9804091086364a1824ea8bb0e7f9f2a172fddf45' \
+  rasterio
 ```
+
+Opening local GeoTIFFs or remote COGs requires Rasterio in the Python environment
+Studio uses for Forge3D.
 
 The `deb` is the bundle CI audits (`deb-audit` job: builds the deb, installs
 it with `dpkg -i`, validates the desktop entry, then runs `--engine-check` in

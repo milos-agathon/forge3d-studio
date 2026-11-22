@@ -62,7 +62,10 @@ def cog_rasterio():
     try:
         import rasterio
     except ImportError as exc:
-        raise RuntimeError("Reading DEMs requires rasterio in Studio's Python environment") from exc
+        raise RuntimeError(
+            "Reading DEMs requires Rasterio. "
+            "Run `python -m pip install rasterio` in Studio's Python environment."
+        ) from exc
     return rasterio
 
 
@@ -104,8 +107,8 @@ def elevation_metres_per_unit(unit):
 def cog_info(url):
     import numpy as np
 
-    size = cog_byte_size(url)
     rasterio = cog_rasterio()
+    size = cog_byte_size(url)
     source = cog_path(url)
     compression_codes = {"LZW": 5, "JPEG": 7, "DEFLATE": 8, "ZSTD": 50000}
 
