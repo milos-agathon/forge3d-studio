@@ -24,20 +24,21 @@ function listen(server, port, host) {
   });
 }
 
-async function waitForDebugPort(port, host) {
-  const reservation = createServer();
+async function reserveDebugPort(port, host) {
   const deadline = Date.now() + 15_000;
   for (;;) {
+    const reservation = createServer();
     try {
       await listen(reservation, port, host);
-      break;
+      const selected = reservation.address().port;
+      await new Promise(resolve => reservation.close(resolve));
+      return selected;
     } catch (error) {
       // WebView2 can release the socket after its Tauri parent exits.
       if (error.code !== "EADDRINUSE" || Date.now() >= deadline) throw error;
       await delay(100);
     }
   }
-  await new Promise(resolve => reservation.close(resolve));
 }
 
 function contextCanary(canvas) {
@@ -76,18 +77,19 @@ function sendCanary(res, [body, contentType]) {
 }
 
 export async function gateStudio(origin, upstream) {
-  let release;
-  let open = false;
+  const runtime = Promise.withResolvers();
+  const studio = Promise.withResolvers();
+  let runtimeOpen = false, studioOpen = false;
   let tamper;
-  const gate = new Promise(resolve => { release = resolve; });
   const held = [];
   const sockets = new Set();
   const server = createServer(async (req, res) => {
     if (!req.url?.startsWith("/") || req.url.startsWith("//")) { res.writeHead(400); res.end(); return; }
     if (canaries.has(req.url)) { sendCanary(res, canaries.get(req.url)); return; }
-    if (!open && req.url !== "/") {
+    const runtimeFile = new URL(req.url, origin).pathname.startsWith("/forge3d-web/");
+    if (req.url !== "/" && !(runtimeFile ? runtimeOpen : studioOpen)) {
       held.push(req.url);
-      await gate;
+      await (runtimeFile ? runtime.promise : studio.promise);
     }
     if (res.destroyed) return;
     const proxy = request(new URL(req.url, upstream), {
@@ -128,6 +130,8 @@ export async function gateStudio(origin, upstream) {
       socket.pipe(peer).pipe(socket);
     });
     peer.on("error", () => socket.destroy());
+    socket.on("error", () => peer.destroy());
+    peer.on("close", () => socket.destroy());
     socket.on("close", () => peer.destroy());
   });
   await listen(server, Number(origin.port), origin.hostname.replace(/^\[|\]$/g, ""));
@@ -141,9 +145,16 @@ export async function gateStudio(origin, upstream) {
   return {
     origin: new URL(`http://${origin.hostname}:${server.address().port}`),
     held, crossFrame: `http://127.0.0.1:${cross.address().port}/frame`,
-    start({ altered } = {}) { tamper = altered; open = true; release(); },
+    startRuntime() { runtimeOpen = true; runtime.resolve(); },
+    start({ altered } = {}) {
+      tamper = altered;
+      runtimeOpen = studioOpen = true;
+      runtime.resolve();
+      studio.resolve();
+    },
     async close() {
-      release();
+      runtime.resolve();
+      studio.resolve();
       for (const socket of sockets) socket.destroy();
       cross.closeAllConnections();
       await Promise.all([cross, server].map(item => new Promise(resolve => item.close(resolve))));
@@ -156,8 +167,9 @@ export async function launchStudio({ shell, origin, endpoint, dir, root, blocked
   const nativeTemp = join(dir, "native-temp");
   await mkdir(nativeTemp);
   const address = endpoint.hostname === "localhost" ? "127.0.0.1" : endpoint.hostname.replace(/^\[|\]$/g, "");
-  const port = Number(endpoint.port);
-  await waitForDebugPort(port, address);
+  const port = await reserveDebugPort(Number(endpoint.port), address);
+  const debugEndpoint = new URL(endpoint);
+  debugEndpoint.port = String(port);
   const flags = [`--remote-debugging-address=${address}`, `--remote-debugging-port=${port}`, "--force-device-scale-factor=1"];
   if (blocked) flags.push("--disable-webgl");
   const child = spawn(shell, [], { cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: {
@@ -179,14 +191,16 @@ export async function launchStudio({ shell, origin, endpoint, dir, root, blocked
     }
   }
   try {
-    // A new WebView2 profile can spend the first 30 seconds navigating from about:blank.
-    const deadline = Date.now() + 60_000;
+    // Wait for the first navigation on this lane's fresh WebView2 profile.
+    const deadline = Date.now() + 120_000;
+    let connectionError;
     while (!cdp && Date.now() < deadline) {
       if (spawnError || child.exitCode !== null) throw spawnError ?? Error(`Studio exited ${child.exitCode}`);
-      cdp = await connectStudio(endpoint.href).catch(() => null);
+      cdp = await connectStudio(debugEndpoint.href).catch(error => { connectionError = error; return null; });
       if (!cdp) await delay(100);
     }
-    assert.ok(cdp && new URL(cdp.page.url).origin === origin.origin, "Studio must start on the gated development origin");
+    if (!cdp) throw Error(`Timed out discovering Studio on ${debugEndpoint.origin}`, { cause: connectionError });
+    assert.ok(new URL(cdp.page.url).origin === origin.origin, "Studio must start on the gated development origin");
     return { cdp, flags, pid: child.pid, close };
   } catch (error) {
     await close();

@@ -87,7 +87,7 @@ class Session {
 
   send(method, params = {}, sessionId) {
     if (this.socket.readyState !== WebSocket.OPEN) {
-      throw failure("CDP_CONNECTION_ERROR", "Studio CDP is disconnected");
+      return Promise.reject(failure("CDP_CONNECTION_ERROR", "Studio CDP is disconnected"));
     }
     const id = ++this.id;
     return new Promise((resolve, reject) => {

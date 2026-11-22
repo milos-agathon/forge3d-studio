@@ -197,9 +197,16 @@ def sample_dem(grid, resolution, empty_message):
             block = grid[ys[j]:max(ys[j] + 1, ys[j + 1]), xs[i]:max(xs[i] + 1, xs[i + 1])]
             good = block[np.isfinite(block)]
             out[j, i] = float(np.clip(good.mean(), low, high)) if good.size else float(low)
+    if np.float32(low) == np.float32(high):
+        # A single centimetre bin represents a datum plane. Across a rounding
+        # boundary, retain the clipped metre samples so local relief survives.
+        heights = ([float(low)] * out.size if round(float(low), 2) == round(float(high), 2)
+                   else out.ravel().tolist())
+    else:
+        heights = [round(float(value), 2) for value in out.ravel()]
     return {
         "ok": True, "resolution": resolution,
         "minElevation": float(low), "maxElevation": float(high),
-        "heights": [round(float(value), 2) for value in out.ravel()],
+        "heights": heights,
         "outliers": int(np.count_nonzero((values < low) | (values > high))),
     }

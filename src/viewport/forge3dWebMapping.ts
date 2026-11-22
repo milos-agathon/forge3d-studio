@@ -1,12 +1,20 @@
-import type { CameraInput, TerrainHeightmapInput, TerrainMaterialImage, TerrainOverlayLayerInput, TerrainOverlaysInput } from "@forge3d/web";
+import type { CameraInput, TerrainDataset, TerrainHeightmapInput, TerrainMaterialImage, TerrainOverlayLayerInput, TerrainOverlaysInput } from "@forge3d/web";
+import type { ViewportTerrain } from "./viewportState.ts";
 import type { TerrainPreview, ViewportMode } from "../bridge/types";
 import { TERRAIN_VIEW_SIZE } from "./viewMath.ts";
 
 export type RendererPreference = "auto" | "forge3d-web" | "three";
 export type Triple = [number, number, number];
-export interface TerrainTransform {
+interface UniformTransform {
   translation: Triple;
   scale: number;
+}
+
+export interface TerrainTransform extends UniformTransform {
+  objectScale: number;
+  halfSpanXz: [number, number];
+  gridHalfSpanXz: [number, number];
+  boundsXz: [[number, number], [number, number]];
 }
 
 export interface BackendState {
@@ -49,16 +57,64 @@ export function terrainGroundSpan(preview: TerrainPreview): [number, number] {
   return [width * units, depth * units];
 }
 
-export function terrainTransform(preview: TerrainPreview, translation: Triple, objectScale: number): TerrainTransform {
-  return { translation, scale: objectScale * studioUnitsPerGroundUnit(preview) };
+// Every finite binary64 is an integer multiple of 2^-1074. Use those units
+// when placing the four inclusive edges: rounding an intermediate radius can
+// lose a corner, and a tolerance can admit its nearest exterior neighbour.
+const bits = new DataView(new ArrayBuffer(8));
+function binary64Units(value: number): bigint {
+  bits.setFloat64(0, Math.abs(value));
+  const raw = bits.getBigUint64(0);
+  const exponent = raw >> 52n;
+  const fraction = raw & ((1n << 52n) - 1n);
+  const units = exponent === 0n ? fraction : ((1n << 52n) + fraction) << (exponent - 1n);
+  return value < 0 ? -units : units;
 }
 
-export function studioToRuntime([x, y, z]: Triple, { translation: [tx, ty, tz], scale }: TerrainTransform): Triple {
+// Round a ratio of integer units once, to the nearest binary64 (ties to even).
+function roundedCoordinate(numerator: bigint, denominator: bigint): number {
+  const magnitude = numerator < 0n ? -numerator : numerator;
+  const whole = magnitude / denominator;
+  const shift = Math.max(0, whole.toString(2).length - 53);
+  const divisor = denominator << BigInt(shift);
+  let significand = magnitude / divisor;
+  const twiceRemainder = (magnitude % divisor) * 2n;
+  if (twiceRemainder > divisor || (twiceRemainder === divisor && (significand & 1n) === 1n)) significand++;
+  const value = Number(significand) * 2 ** (shift - 1074);
+  return numerator < 0n ? -value : value;
+}
+
+export function terrainTransform(preview: TerrainPreview, translation: Triple, objectScale: number): TerrainTransform {
+  const [width, depth] = preview.spanXz;
+  const longest = binary64Units(Math.max(width, depth));
+  const halfSize = BigInt(TERRAIN_VIEW_SIZE / 2) * binary64Units(objectScale);
+  function axis(side: number, centre: number) {
+    const extent = halfSize * binary64Units(side);
+    const offset = binary64Units(centre) * longest;
+    const bounds: [number, number] = [roundedCoordinate(offset - extent, longest), roundedCoordinate(offset + extent, longest)];
+    return { half: roundedCoordinate(extent, longest), bounds };
+  }
+  const x = axis(width, translation[0]), z = axis(depth, translation[2]);
+  const { spacing } = terrainGrid(preview, 1);
+  const centre = (preview.resolution - 1) / 2;
+  return { translation: [...translation], scale: objectScale * studioUnitsPerGroundUnit(preview), objectScale,
+    halfSpanXz: [x.half, z.half], gridHalfSpanXz: [centre * spacing[0], centre * spacing[1]], boundsXz: [x.bounds, z.bounds] };
+}
+
+export function studioToRuntime([x, y, z]: Triple, { translation: [tx, ty, tz], scale }: UniformTransform): Triple {
   return [(x - tx) / scale, (y - ty) / scale, (z - tz) / scale];
 }
 
-export function runtimeToStudio([x, y, z]: Triple, { translation: [tx, ty, tz], scale }: TerrainTransform): Triple {
-  return [tx + scale * x, ty + scale * y, tz + scale * z];
+export function runtimeToStudio([x, y, z]: Triple, transform: UniformTransform | TerrainTransform): Triple {
+  const { translation: [tx, ty, tz], scale } = transform;
+  function horizontal(value: number, origin: number, axis: 0 | 1) {
+    if ("boundsXz" in transform) {
+      const edge = transform.gridHalfSpanXz[axis];
+      if (value === -edge) return transform.boundsXz[axis][0];
+      if (value === edge) return transform.boundsXz[axis][1];
+    }
+    return origin + scale * value;
+  }
+  return [horizontal(x, tx, 0), ty + scale * y, horizontal(z, tz, 1)];
 }
 
 function terrainGrid(preview: TerrainPreview, zScale: number): { spacing: [number, number]; exaggeration: number } {
@@ -67,12 +123,92 @@ function terrainGrid(preview: TerrainPreview, zScale: number): { spacing: [numbe
   return { spacing: [width / intervals, depth / intervals], exaggeration: zScale };
 }
 
+type HeightGrid = Pick<TerrainPreview, "resolution" | "minElevation" | "maxElevation"> & { heights: ArrayLike<number> };
+
+function domainUpper(min: number, max: number) {
+  // The runtime widens coincident Float32 endpoints symmetrically. Widen
+  // upwards before upload to keep the accepted lower datum at local Y = 0.
+  return Math.fround(max) > Math.fround(min) ? max : min + Math.max(1, Math.abs(min));
+}
+
+export function flatTextureDomain(grid: Pick<HeightGrid, "minElevation" | "maxElevation">, origin = 0) {
+  return Math.fround(grid.minElevation - origin) === Math.fround(grid.maxElevation - origin);
+}
+
+/** The sampler's accepted elevation can round past either source bound. */
+export function terrainVertexRelief(grid: HeightGrid, height: number): number {
+  return height - grid.minElevation;
+}
+
+// Keep raw texture bytes when they meet Studio's placement tolerance across
+// the supported exaggeration range. Otherwise upload metres relative to the
+// source datum, so subtracting two large Float32 values cannot erase relief.
+export function terrainHeightOrigin(preview: TerrainPreview): number {
+  if (flatTextureDomain(preview)) {
+    return preview.heights.some(h => h !== preview.minElevation) ? preview.minElevation : 0;
+  }
+  const low = Math.fround(preview.minElevation);
+  const maxVerticalScale = 50 * studioUnitsPerGroundUnit(preview);
+  const losesPrecision = preview.heights.some(height => {
+    const sample = Math.fround(height);
+    const reliefError = (sample - low) - terrainVertexRelief(preview, height);
+    return Math.max(Math.abs(sample - height), Math.abs(reliefError)) * maxVerticalScale > 1e-4;
+  });
+  return losesPrecision ? preview.minElevation : 0;
+}
+
+/** Interpolate the drawn triangles across the NE/SW diagonal. */
+export function terrainSurfaceRelief(grid: HeightGrid, col: number, row: number): number {
+  const last = grid.resolution - 1;
+  const x = Math.min(last, Math.max(0, col)), z = Math.min(last, Math.max(0, row));
+  const i = Math.min(last - 1, Math.floor(x)), j = Math.min(last - 1, Math.floor(z));
+  const fx = x - i, fz = z - j;
+  const nw = j * grid.resolution + i;
+  const at = (index: number) => terrainVertexRelief(grid, grid.heights[index]);
+  const ne = at(nw + 1), sw = at(nw + grid.resolution);
+  if (fx + fz <= 1) return at(nw) * (1 - fx - fz) + ne * fx + sw * fz;
+  return at(nw + grid.resolution + 1) * (fx + fz - 1) + ne * (1 - fz) + sw * (1 - fx);
+}
+
+// Classify the inclusive Studio bounds before subtracting a potentially large
+// translation. Only accepted points may be moved inward to survive grid division.
+function gridQueryCoordinate(value: number, origin: number, scale: number, [lower, upper]: [number, number], spacing: number, count: number) {
+  const half = (count - 1) / 2;
+  const edge = half * spacing;
+  if (value < lower || value > upper) return;
+  let ground = (value - origin) / scale;
+  if (value <= lower) ground = -edge;
+  if (value >= upper) ground = edge;
+  ground = Math.min(edge, Math.max(-edge, ground));
+  return Math.abs(ground / spacing) > half ? Math.sign(ground) * (1 - Number.EPSILON) * edge : ground;
+}
+
+export function queryTerrainDataset(dataset: TerrainDataset, terrain: ViewportTerrain, transform: TerrainTransform, x: number, z: number) {
+  const { translation, scale } = transform;
+  const groundX = gridQueryCoordinate(x, translation[0], scale, transform.boundsXz[0], dataset.spacing[0], dataset.width);
+  const groundZ = gridQueryCoordinate(z, translation[2], scale, transform.boundsXz[1], dataset.spacing[1], dataset.height);
+  if (groundX === undefined || groundZ === undefined) return;
+  const hit = dataset.query(groundX, groundZ);
+  if (!hit) return;
+  const { preview, zScale } = terrain;
+  const relief = terrainSurfaceRelief({ resolution: dataset.width, heights: dataset.heights,
+    minElevation: Math.fround(dataset.domain[0]), maxElevation: Math.fround(dataset.domain[1]) },
+    hit.gridPosition[0], hit.gridPosition[1]);
+  const worldPosition: [number, number, number] = [x, translation[1] + relief * zScale * scale, z];
+  const origin = terrain.heightOrigin;
+  // A collapsed absolute texture represents the exact source datum. Grids
+  // with sub-Float32 relief instead carry their own relative height origin.
+  const elevation = origin === 0 && preview.minElevation !== 0 && flatTextureDomain(preview)
+    ? preview.minElevation : hit.elevation + origin;
+  return { ...hit, elevation, worldPosition };
+}
+
 /** Terrain rows run north to south, with the footprint centred on X/Z and the raw minimum at Y = 0. */
 export function terrainSamplePoint(preview: TerrainPreview, zScale: number, row: number, column: number): Triple {
   const { spacing, exaggeration } = terrainGrid(preview, zScale);
   const centre = (preview.resolution - 1) / 2;
   const height = preview.heights[row * preview.resolution + column];
-  return [(column - centre) * spacing[0], (height - preview.minElevation) * exaggeration, (row - centre) * spacing[1]];
+  return [(column - centre) * spacing[0], terrainVertexRelief(preview, height) * exaggeration, (row - centre) * spacing[1]];
 }
 
 function linearToSrgb(v: number): number {
@@ -123,17 +259,26 @@ function terrainLayers(resolution: number, hillshade: Uint8Array | undefined,
 }
 
 export function terrainInput(preview: TerrainPreview, zScale: number, clay: Triple,
-  hillshade?: Uint8Array, appearance: TerrainAppearance = {}): TerrainHeightmapInput {
+  hillshade?: Uint8Array, appearance: TerrainAppearance = {}, origin = terrainHeightOrigin(preview)): TerrainHeightmapInput {
   const { resolution, minElevation, maxElevation } = preview;
+  const heights = Float32Array.from(preview.heights, height => height - origin);
+  const domain: [number, number] = [minElevation - origin, domainUpper(minElevation - origin, maxElevation - origin)];
+  // The material shader clamps geometry independently of the datum used for
+  // vertex placement. Its clamp must include every accepted height.
+  const heightRange: [number, number] = [Math.fround(domain[0]), Math.fround(domain[1])];
+  for (const h of heights) {
+    heightRange[0] = Math.min(heightRange[0], h);
+    heightRange[1] = Math.max(heightRange[1], h);
+  }
+  // tm_height_geom divides by max(range, 1e-6), even with no height curve.
+  if (heightRange[1] - heightRange[0] < 1e-6) heightRange[1] = heightRange[0] + 2e-6;
   const layers = appearance.drape ? undefined : terrainLayers(resolution, hillshade, appearance.vertexColors);
-  // A constant DEM has zero height in the Studio. Use a nonempty domain
-  // for the runtime and retain its lower endpoint so every vertex stays flat.
-  const domainMax = maxElevation > minElevation ? maxElevation : minElevation + Math.max(1, Math.abs(minElevation));
   return {
-    width: resolution, height: resolution, heights: Float32Array.from(preview.heights),
-    domain: [minElevation, domainMax], ...terrainGrid(preview, zScale),
+    width: resolution, height: resolution,
+    heights, domain, ...terrainGrid(preview, zScale),
     renderMode: "perspective",
     material: {
+      clamp: { heightRange },
       albedoMode: "material", materialSet: [{ baseColor: [linearToSrgb(clay[0]), linearToSrgb(clay[1]), linearToSrgb(clay[2])], roughness: 0.95, metallic: 0 }],
       hueVariation: 0, pom: { enabled: false }, detail: { enabled: false },
     },
