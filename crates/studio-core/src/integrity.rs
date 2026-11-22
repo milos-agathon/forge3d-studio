@@ -47,7 +47,8 @@ impl AssetIntegrity {
     }
 }
 
-/// Check every asset in the project, in registry order.
+/// Check local assets in registry order. The remote reader reports COG access
+/// errors when it opens the URL.
 ///
 /// `stat` returns the file's byte length, or a human-readable reason it could
 /// not be read. A missing file is reported with its recorded path so the user
@@ -59,6 +60,7 @@ pub fn asset_integrity(
     project
         .assets
         .iter()
+        .filter(|asset| !asset.is_remote_dem())
         .map(|asset| match stat(&asset.path) {
             Ok(actual) => AssetIntegrity {
                 id: asset.id,

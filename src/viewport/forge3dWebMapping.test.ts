@@ -20,15 +20,15 @@ assert.deepEqual(mapped.domain, [100, 115]);
 assert.equal(mapped.exaggeration, 2);
 assert.equal(Array.from(mapped.overlays!.layers![0].image.data.slice(0, 4)), [188, 188, 188, 128]);
 
-// The footprint is in feet. Both viewports must show the same relief from the raw DEM samples.
-const feetPreview = { ...fixture, spanMetresPerUnit: 0.3048 };
+// Represent the same metre-height surface using a footprint in feet.
+const feetPreview: TerrainPreview = { ...fixture, spanXz: [20 / 0.3048, 40 / 0.3048], spanMetresPerUnit: 0.3048 };
 const feetTerrain = terrainInput(feetPreview, 2, [0.2, 0.3, 0.4]);
-assert.deepEqual(feetTerrain.spacing, [6.096, 12.192]);
-assert.equal(feetTerrain.exaggeration, 0.6096);
+assert.deepEqual(feetTerrain.spacing, mapped.spacing);
+assert.equal(feetTerrain.exaggeration, mapped.exaggeration);
 assert.deepEqual(feetTerrain.heights, mapped.heights);
 assert.deepEqual(feetTerrain.domain, mapped.domain);
 const elevationSpan = feetPreview.maxElevation - feetPreview.minElevation;
-const threeRelief = elevationSpan * 2 * (TERRAIN_VIEW_SIZE / Math.max(...feetPreview.spanXz));
+const threeRelief = elevationSpan * 2 * (TERRAIN_VIEW_SIZE / Math.max(...fixture.spanXz));
 assert.equal(elevationSpan * feetTerrain.exaggeration! * studioUnitsPerGroundUnit(feetPreview), threeRelief);
 
 const vertexColors = Float32Array.from([1, 0, 0, 0, 1, 0, 0, 0, 1, 0.5, 0.5, 0.5]);
@@ -56,18 +56,17 @@ assert.ok(!supportsTransform([0, 5, 0], [1, 1, 1]));
 assert.ok(!supportsTransform([0, 0, 0], [1, 1, 2]));
 assert.ok(!supportsTransform([0, 0, 0], [-1, -1, -1]));
 const base: BackendState = { preference: "auto", mode: "solid", gpu: true,
-  terrainCount: 1, transformSupported: true, resolution: 128, hasHdri: false, terrainShadows: false };
+  terrainCount: 1, transformSupported: true, hasHdri: false, terrainShadows: false };
 const cases: [Partial<BackendState>, string, string][] = [
   [{}, "forge3d-web", "WebGPU available"], [{ preference: "forge3d-web" }, "forge3d-web", "WebGPU available"],
   [{ mode: "rendered" }, "native", "Rendered mode"], [{ preference: "three" }, "three", "View menu override"],
   [{ gpu: false, preference: "forge3d-web" }, "three", "WebGPU unavailable"],
   [{ mode: "material", hasHdri: true }, "three", "Material HDRI"], [{ mode: "material" }, "forge3d-web", "WebGPU available"],
   [{ mode: "material", terrainShadows: true }, "three", "Terrain shadows"],
-  [{ terrainCount: 0 }, "three", "No visible terrain"], [{ terrainCount: 2 }, "three", "Multiple visible terrains"],
-  [{ transformSupported: false }, "three", "Terrain transform"], [{ resolution: 0 }, "three", "Loading terrain"],
+  [{ terrainCount: 0 }, "forge3d-web", "WebGPU available"], [{ terrainCount: 2 }, "three", "Multiple visible terrains"],
+  [{ transformSupported: false }, "three", "Terrain transform"],
   [{ terrainShadows: true }, "three", "Terrain shadows"],
   [{ terrainShadows: true, preference: "forge3d-web" }, "three", "Terrain shadows"],
-  [{ maxTextureDimension2D: 64 }, "three", "Terrain exceeds GPU texture limit"],
   ...["DEVICE_REQUEST_FAILED", "DEVICE_LOST", "SURFACE_LOST", "OUT_OF_MEMORY", "RUNTIME_DISPOSED", "Material path unavailable"]
     .map(reason => [{ failure: reason }, "three", reason] as [Partial<BackendState>, string, string]),
 ];

@@ -75,10 +75,11 @@ export interface TerrainObject {
   zScale: number;
   albedo: string | null;
   dimensions: [number, number] | null;
-  /** Viewer-basis world origin `[mapX, -mapY]`, metres. */
+  /** Viewer-basis world origin `[mapX, -mapY]` in source units. */
   worldOriginXz: [number, number] | null;
-  /** Viewer-basis world span, metres (the viewer's terrain world units). */
+  /** Horizontal span in source units. */
   worldSpanXz: [number, number] | null;
+  spanMetresPerUnit?: number | null;
   elevationRange: [number, number] | null;
 }
 
@@ -380,11 +381,12 @@ export interface PlayheadResult {
   state: SessionState;
 }
 
-/** What the engine's native COG reader sees in a remote DEM. */
+/** Range-readable dimensions and metadata of a remote DEM. */
 export interface RemoteCogInfo {
   url: string;
+  byteSize: number;
   overviewCount: number;
-  /** Geographic [west, south, east, north] when the file declares one. */
+  /** [west, south, east, north] in the source CRS when declared. */
   bounds: [number, number, number, number] | null;
   streamable: boolean;
   levels: RemoteCogLevel[];
@@ -477,6 +479,7 @@ export interface AutosaveStatus {
 export interface ShellInfo {
   name: string;
   version: string;
+  nativeSourceSha256?: string;
 }
 
 /** A `.gltf`/`.glb` file read by the shell, base64 for the webview. */
@@ -549,21 +552,8 @@ export interface GraticuleGeometry {
   labels: PreviewAnnotation[];
 }
 
-/** A DEM sampled for the Studio viewport (heights are row-major, bottom-up). */
-/**
- * A remote DEM's preview, read through the engine's range reader: the
- * ladder's first rung (the coarsest overview that still carries the
- * requested resolution). The same shape as a local `TerrainPreview`, so the
- * studio's own elevation ramp draws both.
- */
-export interface RemoteCogPreview {
-  ok: boolean;
-  width: number;
-  height: number;
-  resolution: number;
-  minElevation: number;
-  maxElevation: number;
-  heights: number[];
+/** A DEM preview sampled from the coarsest adequate COG overview. */
+export interface RemoteCogPreview extends TerrainPreview {
   /** The overview level the preview was read from (0 = full resolution). */
   level: number;
   levelWidth: number;
@@ -650,6 +640,7 @@ export interface RenderFrame {
   png: string;
   /** Where a still was written, when it went to disk. */
   path: string | null;
+  source?: { sessionId: number; terrainId: string };
 }
 
 export interface RenderStatus {
@@ -700,6 +691,7 @@ export type Command =
       elevationRange?: [number, number] | null;
       worldOriginXz?: [number, number] | null;
       worldSpanXz?: [number, number] | null;
+      spanMetresPerUnit?: number | null;
       /** Omitted means "the new DEM's own default". */
       zScale?: number | null;
     }

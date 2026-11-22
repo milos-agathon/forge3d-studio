@@ -177,7 +177,7 @@ pub fn map_camera_transform(
 ) -> Option<(crate::math::Transform, f32)> {
     use crate::math::{Transform, Vec3};
 
-    let span = terrain.world_span_xz?;
+    let span = terrain.metric_span_xz()?;
     let max_span = span[0].max(span[1]);
     if !max_span.is_finite() || max_span <= 0.0 || !fov_deg.is_finite() {
         return None;
@@ -262,33 +262,54 @@ pub fn map_sun_direction(azimuth_deg: f64, elevation_deg: f64) -> [f32; 3] {
 /// makes an exported animation frame reproduce a camera-view still of the same
 /// object instead of the terrain's canned framing.
 pub fn camera_render_view(project: &Project) -> Option<RenderView> {
-    let terrain = project.terrain_object()?.terrain()?;
+    let node = project.visible_terrain_object()?;
+    let terrain = node.terrain()?;
     let camera = project.scene.camera()?;
     let ObjectKind::Camera(camera_object) = &camera.kind else {
         return None;
     };
     let eye = camera.transform.translation;
     let forward = camera.transform.forward();
+    let (translation, scale) = terrain_placement(&node.transform);
+    let local = |point: [f64; 3]| std::array::from_fn(|i| (point[i] - translation[i]) / scale);
     compute_render_view(&TerrainView {
-        camera: [f64::from(eye.x), f64::from(eye.y), f64::from(eye.z)],
-        aim: [
+        camera: local([f64::from(eye.x), f64::from(eye.y), f64::from(eye.z)]),
+        aim: local([
             f64::from(eye.x + forward.x * 10.0),
             f64::from(eye.y + forward.y * 10.0),
             f64::from(eye.z + forward.z * 10.0),
-        ],
+        ]),
         fov_deg: f64::from(camera_object.fov_deg),
-        span_xz: terrain.world_span_xz,
+        span_xz: terrain.metric_span_xz(),
         dimensions: terrain.dimensions,
         elevation_range: terrain.elevation_range,
         z_scale: terrain.z_scale,
     })
 }
 
+/// Translation and positive uniform scale supported by the live terrain viewport.
+fn terrain_placement(transform: &crate::math::Transform) -> ([f64; 3], f64) {
+    let size = transform.scale;
+    if transform.rotation_deg == crate::math::Vec3::ZERO
+        && size.x > 0.0
+        && size.x == size.y
+        && size.x == size.z
+    {
+        let t = transform.translation;
+        (
+            [f64::from(t.x), f64::from(t.y), f64::from(t.z)],
+            f64::from(size.x),
+        )
+    } else {
+        ([0.0; 3], 1.0)
+    }
+}
+
 /// Metres per viewport unit: the terrain's long side is SCENE_TERRAIN_SIZE
 /// units across. Shared by camera mapping and mesh placement so the two can
 /// never drift apart.
 pub fn viewport_scale(terrain: &crate::scene::TerrainObject) -> Option<f64> {
-    let span = terrain.world_span_xz?;
+    let span = terrain.metric_span_xz()?;
     let max_span = span[0].max(span[1]);
     (max_span.is_finite() && max_span > 0.0)
         .then(|| max_span / f64::from(crate::project::SCENE_TERRAIN_SIZE))
@@ -321,22 +342,33 @@ pub fn mesh_render_matrix(
     transform: &crate::math::Transform,
     terrain: &crate::scene::TerrainObject,
 ) -> Option<[f32; 16]> {
-    let s = viewport_scale(terrain)? as f32;
+    mesh_render_matrix_with_placement(transform, terrain, &crate::math::Transform::default())
+}
+
+/// Place a scene mesh in the same terrain-local metre frame as the native camera.
+pub fn mesh_render_matrix_with_placement(
+    transform: &crate::math::Transform,
+    terrain: &crate::scene::TerrainObject,
+    placement: &crate::math::Transform,
+) -> Option<[f32; 16]> {
+    let (translation, scale) = terrain_placement(placement);
+    let s = (viewport_scale(terrain)? / scale) as f32;
+    let [tx, ty, tz] = translation.map(|v| v as f32);
     let [low, high] = terrain.elevation_range.unwrap_or([0.0, 0.0]);
     let half_relief = ((high - low) as f64 * f64::from(terrain.z_scale) / 2.0) as f32;
     let viewport_to_render = [
         s,
         0.0,
         0.0,
-        0.0,
+        -tx * s,
         0.0,
         0.0,
         -s,
-        0.0,
+        tz * s,
         0.0,
         s,
         0.0,
-        -half_relief,
+        -ty * s - half_relief,
         0.0,
         0.0,
         0.0,
@@ -808,7 +840,7 @@ pub fn environment_handoff(project: &Project) -> Option<ForgeAsset> {
 
 /// The scene's DEM in viewer terms.
 pub fn terrain_handoff(project: &Project) -> Option<TerrainHandoff> {
-    let object = project.terrain_object()?;
+    let object = project.visible_terrain_object()?;
     let terrain = object.terrain()?;
     let asset = project.asset(terrain.asset)?;
     Some(TerrainHandoff {
@@ -817,14 +849,14 @@ pub fn terrain_handoff(project: &Project) -> Option<TerrainHandoff> {
         path: asset.path.clone(),
         z_scale: terrain.z_scale,
         dimensions: terrain.dimensions,
-        world_span_xz: terrain.world_span_xz,
+        world_span_xz: terrain.metric_span_xz(),
         elevation_range: terrain.elevation_range,
     })
 }
 
 /// Studio's camera expressed as the viewer's terrain orbit.
 pub fn terrain_camera(project: &Project) -> Option<TerrainCamera> {
-    let terrain = project.terrain_object()?;
+    let terrain = project.visible_terrain_object()?;
     let camera = project.scene.camera()?;
     let ObjectKind::Camera(camera_object) = &camera.kind else {
         return None;
@@ -891,6 +923,7 @@ mod tests {
                 elevation_range: Some([189.0, 4_220.0]),
                 world_origin_xz: Some([2_600_000.0, 1_200_000.0]),
                 world_span_xz: Some([352_427.0, 225_654.0]),
+                span_metres_per_unit: None,
                 overlay: None,
             }),
         );
@@ -910,6 +943,7 @@ mod tests {
         // A country: 352 km by 226 km, 4 km of relief.
         let terrain = crate::scene::TerrainObject {
             world_span_xz: Some([352_427.0, 225_654.0]),
+            span_metres_per_unit: None,
             elevation_range: Some([189.0, 4_220.0]),
             z_scale: 5.246,
             ..terrain
@@ -1264,6 +1298,7 @@ mod tests {
                 elevation_range: Some([2099.23, 2553.58]),
                 world_origin_xz: Some([395_998.5, -4_165_574.5]),
                 world_span_xz: Some([4000.0, 3800.0]),
+                span_metres_per_unit: None,
                 overlay: None,
             }),
         )
@@ -1342,6 +1377,41 @@ mod tests {
             (rotated.phi_deg - view.phi_deg).abs() > 1.0,
             "camera rotation must move the orbit azimuth"
         );
+    }
+
+    #[test]
+    fn native_camera_and_mesh_placements_follow_the_visible_terrain() {
+        use crate::math::{Transform, Vec3};
+
+        let mut project = terrain_project();
+        let original = camera_render_view(&project).unwrap();
+        let id = project.visible_terrain_object().unwrap().id;
+        let node = project.scene.object_mut(id).unwrap();
+        node.transform.translation = Vec3::new(2.5, 1.0, -3.0);
+        node.transform.scale = Vec3::new(1.5, 1.5, 1.5);
+        let terrain = node.terrain().unwrap();
+        let unit = viewport_scale(terrain).unwrap();
+        let [lo, hi] = terrain.elevation_range.unwrap();
+        let half = (f64::from(hi) - f64::from(lo)) * f64::from(terrain.z_scale) / 2.0;
+        // A mesh with the same placement as the DEM stays at its local origin.
+        let mesh =
+            mesh_render_matrix_with_placement(&node.transform, terrain, &node.transform).unwrap();
+        let identity = mesh_render_matrix(&Transform::default(), terrain).unwrap();
+        assert!(mesh.iter().zip(identity).all(|(a, b)| (a - b).abs() < 1e-3));
+        let view = camera_render_view(&project).unwrap();
+        let [east, north, up] = original.target.unwrap();
+        let expected = [
+            (east - 2.5 * unit) / 1.5,
+            (north - 3.0 * unit) / 1.5,
+            (up + half - unit) / 1.5 - half,
+        ];
+        assert!(view
+            .target
+            .unwrap()
+            .iter()
+            .zip(expected)
+            .all(|(a, b)| (a - b).abs() < 1e-6));
+        assert!((view.radius - original.radius / 1.5).abs() < 1e-6);
     }
 
     #[test]

@@ -17,8 +17,6 @@ export interface BackendState {
   transformSupported: boolean;
   hasHdri: boolean;
   terrainShadows: boolean;
-  resolution: number;
-  maxTextureDimension2D?: number;
   failure?: string;
 }
 
@@ -28,13 +26,9 @@ export function chooseViewportBackend(s: BackendState) {
   if (s.preference === "three") return three("View menu override");
   if (!s.gpu) return three("WebGPU unavailable");
   if (s.mode === "material" && s.hasHdri) return three("Material HDRI");
-  if (!s.terrainCount) return three("No visible terrain");
-  if (s.terrainCount !== 1) return three("Multiple visible terrains");
-  if (!s.transformSupported) return three("Terrain transform");
-  if (!s.resolution) return three("Loading terrain");
-  if (s.terrainShadows) return three("Terrain shadows");
-  if (s.maxTextureDimension2D !== undefined && s.resolution > s.maxTextureDimension2D)
-    return three("Terrain exceeds GPU texture limit");
+  if (s.terrainCount > 1) return three("Multiple visible terrains");
+  if (s.terrainCount && !s.transformSupported) return three("Terrain transform");
+  if (s.terrainCount && s.terrainShadows) return three("Terrain shadows");
   if (s.failure) return three(s.failure);
   return { backend: "forge3d-web" as const, reason: "WebGPU available" };
 }
@@ -46,11 +40,13 @@ export function supportsTransform(rotation: Triple, scale: Triple): boolean {
 // Dense WebGPU terrain has a fixed 0.24-world-unit edge skirt. Render in
 // ground units and transform the Studio camera into that same coordinate system.
 export function studioUnitsPerGroundUnit(preview: TerrainPreview): number {
-  return studioUnitsPerPreviewUnit(preview) / (preview.spanMetresPerUnit ?? 1);
+  return TERRAIN_VIEW_SIZE / Math.max(...terrainGroundSpan(preview));
 }
 
-export function studioUnitsPerPreviewUnit(preview: TerrainPreview): number {
-  return TERRAIN_VIEW_SIZE / Math.max(...preview.spanXz);
+export function terrainGroundSpan(preview: TerrainPreview): [number, number] {
+  const [width, depth] = preview.spanXz;
+  const units = preview.spanMetresPerUnit ?? 1;
+  return [width * units, depth * units];
 }
 
 export function terrainTransform(preview: TerrainPreview, translation: Triple, objectScale: number): TerrainTransform {
@@ -66,10 +62,9 @@ export function runtimeToStudio([x, y, z]: Triple, { translation: [tx, ty, tz], 
 }
 
 function terrainGrid(preview: TerrainPreview, zScale: number): { spacing: [number, number]; exaggeration: number } {
-  const { resolution, spanXz: [width, depth] } = preview;
-  const units = preview.spanMetresPerUnit ?? 1;
-  const intervals = resolution - 1;
-  return { spacing: [width * units / intervals, depth * units / intervals], exaggeration: zScale * units };
+  const [width, depth] = terrainGroundSpan(preview);
+  const intervals = preview.resolution - 1;
+  return { spacing: [width / intervals, depth / intervals], exaggeration: zScale };
 }
 
 /** Terrain rows run north to south, with the footprint centred on X/Z and the raw minimum at Y = 0. */

@@ -52,7 +52,13 @@ fn the_environment_is_a_reversible_persisted_setting() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("environment.studio3d");
     let mut editor = Editor::new(Project::new(UNTITLED));
-    let asset = hdr_asset();
+    let mut asset = hdr_asset();
+    asset.path = dir
+        .path()
+        .join("hdri")
+        .join("studio_sunrise.hdr")
+        .to_string_lossy()
+        .into_owned();
     editor
         .apply(Command::AddAsset {
             asset: asset.clone(),
@@ -66,7 +72,7 @@ fn the_environment_is_a_reversible_persisted_setting() {
     editor.apply(Command::SetRenderSettings { render }).unwrap();
     assert_eq!(
         editor.project().environment_path(),
-        Some("/hdri/studio_sunrise.hdr")
+        Some(asset.path.as_str())
     );
     // Dependency accounting must see it, or the Assets panel would offer to
     // delete a file the renderer is using.
@@ -84,10 +90,7 @@ fn the_environment_is_a_reversible_persisted_setting() {
     save_atomic(&path, editor.project()).unwrap();
     let reloaded = load(&path).unwrap();
     assert_eq!(reloaded.render.environment, Some(asset.id));
-    assert_eq!(
-        reloaded.environment_path(),
-        Some("/hdri/studio_sunrise.hdr")
-    );
+    assert_eq!(reloaded.environment_path(), Some(asset.path.as_str()));
 }
 
 #[test]

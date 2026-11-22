@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 
 import { bridge } from "../bridge/env";
 import type { RemoteCogInfo, RemoteCogPreview } from "../bridge/types";
@@ -18,57 +18,57 @@ const COMPRESSION_NAMES: Record<number, string> = {
 /**
  * Open a remote DEM (a Cloud Optimized GeoTIFF) as a project.
  *
- * The probe is the engine's own range-reader: one HEAD request, no pixel
- * data, and it fails loudly on anything that is not a valid remote COG the
- * reader can open. Confirmation downloads the file once to the local cache
- * (`~/…/forge3d-cog-cache`), hash-keyed by URL, so reopening costs nothing.
+ * The probe reads the COG's metadata and a coarse overview by byte range.
+ * The project keeps the URL for subsequent reads.
  */
 export function RemoteDemDialog() {
   const { actions, busy } = useSession();
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [probing, setProbing] = useState(false);
-  const [info, setInfo] = useState<RemoteCogInfo | null>(null);
-  const [preview, setPreview] = useState<RemoteCogPreview | null>(null);
+  const [result, setResult] = useState<{ url: string; info: RemoteCogInfo; preview: RemoteCogPreview } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const generation = useRef(0);
+  const verified = result?.url === url.trim() ? result : null;
 
-  const close = () => {
-    setOpen(false);
+  useLayoutEffect(() => () => { generation.current += 1; }, []);
+
+  const resetProbe = () => {
+    generation.current += 1;
     setError(null);
-    setInfo(null);
-    setPreview(null);
+    setResult(null);
     setProbing(false);
+  };
+  const close = () => {
+    resetProbe();
+    setOpen(false);
   };
 
   const probe = async () => {
     const target = url.trim();
-    if (!target) return;
+    if (!target || probing) return;
+    const request = ++generation.current;
     setProbing(true);
     setError(null);
-    setInfo(null);
-    setPreview(null);
+    setResult(null);
     try {
-      setInfo(await bridge.remoteCogInfo(target));
-      // The ladder's first rung: the overview, read through the engine's
-      // range reader — the terrain shows up before the file is downloaded.
-      // A preview that fails is not a probe failure: the summary still stands.
-      try {
-        setPreview(await bridge.remoteCogPreview(target, 96));
-      } catch {
-        setPreview(null);
-      }
+      const info = await bridge.remoteCogInfo(target);
+      if (generation.current !== request) return;
+      const preview = await bridge.remoteCogPreview(target, 96);
+      if (generation.current === request) setResult({ url: target, info, preview });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (generation.current === request) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setProbing(false);
+      if (generation.current === request) setProbing(false);
     }
   };
 
-  const pick = (id: string) => {
+  const pick = () => {
+    if (!verified || busy) return;
     // The fetch happens inside createProject; close first so the busy
     // state is not double-rendered.
     close();
-    void actions.createProject(id);
+    void actions.createProject(`url:${verified.url}`);
   };
 
   if (!open) {
@@ -82,13 +82,15 @@ export function RemoteDemDialog() {
       >
         <span className="preset__name">Remote DEM (COG)…</span>
         <span className="preset__desc">
-          Probe a remote Cloud Optimized GeoTIFF before anything downloads
+          Preview a Cloud Optimized GeoTIFF by URL
         </span>
         <span className="preset__meta mono">http / https / file</span>
       </button>
     );
   }
 
+  const info = verified?.info;
+  const preview = verified?.preview;
   const compression = info ? COMPRESSION_NAMES[info.levels[0]?.compression] ?? `#${info.levels[0]?.compression}` : "";
 
   return (
@@ -110,9 +112,8 @@ export function RemoteDemDialog() {
         </header>
 
         <p className="hint">
-          An HTTP(S) URL to a Cloud Optimized GeoTIFF (a tiled, deflate or
-          LZW GeoTIFF). The engine probes it with one HEAD request — nothing
-          downloads until you confirm.
+          Enter the URL of a Cloud Optimized GeoTIFF. Studio reads its
+          metadata and a small preview using byte ranges.
         </p>
 
         <label className="field">
@@ -126,8 +127,7 @@ export function RemoteDemDialog() {
             value={url}
             onChange={(event) => {
               setUrl(event.target.value);
-              setInfo(null);
-              setError(null);
+              resetProbe();
             }}
             onKeyDown={(event) => {
               if (event.key === "Enter") void probe();
@@ -145,7 +145,7 @@ export function RemoteDemDialog() {
             </div>
             <div className="probe-row">
               <span>Streamable</span>
-              <span>{info.streamable ? "yes (tiled, native range reads)" : "no"}</span>
+              <span>{info.streamable ? "yes (byte-range reads)" : "no"}</span>
             </div>
             <div className="probe-row">
               <span>Overview levels</span>
@@ -183,23 +183,22 @@ export function RemoteDemDialog() {
             />
             <figcaption className="hint">
               Preview from overview level {preview.level} (
-              {preview.levelWidth} × {preview.levelHeight} px) — read through the
-              engine&rsquo;s range reader; the full file downloads on open.
+              {preview.levelWidth} × {preview.levelHeight} px).
             </figcaption>
           </figure>
         )}
 
-        {error && <p className="hint hint--error">Probe failed: {error}</p>}
+        {error && <p className="hint hint--error">Probe failed. {error}</p>}
 
         <footer className="modal__footer">
           <span className="hint">
-            Downloads once to the local cache on open; reopening costs no fetch.
+            Studio saves the URL and reads the DEM by byte range as needed.
           </span>
           <div className="modal__footer-actions">
             <button type="button" className="button" onClick={close}>
               Cancel
             </button>
-            {!info ? (
+            {!verified ? (
               <button
                 type="button"
                 className="button"
@@ -213,7 +212,7 @@ export function RemoteDemDialog() {
                 type="button"
                 className="button button--primary"
                 disabled={probing || busy}
-                onClick={() => pick(`url:${url.trim()}`)}
+                onClick={pick}
               >
                 Open DEM
               </button>

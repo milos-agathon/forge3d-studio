@@ -1,7 +1,7 @@
 /**
  * The preview ladder's rungs for a remote DEM.
  *
- * The engine's COG reader picks the coarsest overview that still carries the
+ * The COG sampler picks the coarsest overview that still carries the
  * requested resolution (`remote_cog_preview`). The viewport only has to choose
  * a resolution from how close the camera is: a far orbit sees the whole DEM
  * and needs the overview; a close orbit sees a fraction of it and needs the

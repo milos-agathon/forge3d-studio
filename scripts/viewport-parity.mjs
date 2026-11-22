@@ -25,7 +25,7 @@ try {
 } finally { socket.close(); }
 
 async function measure(requireImageryAndSky) {
-  const { Camera } = await import(new URL("forge3d-web/index.js", document.baseURI));
+  const { Camera, Forge3DRuntime } = await import(new URL("forge3d-web/index.js", document.baseURI));
   const diagnostics = window.forge3dViewportDiagnostics;
   const { terrainViewport, frame: initialFrame } = diagnostics();
   const { mode, imageryAsset, studioSkyIntensity } = initialFrame.settings;
@@ -78,12 +78,14 @@ async function measure(requireImageryAndSky) {
   const aim = orbit.target.clone();
   const radius = initial.distanceTo(aim);
   const beforeAlpha = renderer.getClearAlpha();
-  const originalSetCamera = web.setCamera;
-  const originalSetTerrain = web.setTerrain;
-  const originalSetTerrainOverlays = web.setTerrainOverlays;
-  const originalResize = web.resize;
+  const observing = runtime => terrainViewport.owns ? terrainViewport.owns(runtime) : runtime === web;
+  const prototype = Forge3DRuntime.prototype;
+  const originalSetCamera = prototype.setCamera;
+  const originalSetTerrain = prototype.setTerrain;
+  const originalSetTerrainOverlays = prototype.setTerrainOverlays;
+  const originalResize = prototype.resize;
   let resizes = 0;
-  web.resize = function(input) { resizes++; return originalResize.call(this, input); };
+  prototype.resize = function(input) { if (observing(this)) resizes++; return originalResize.call(this, input); };
   let webCamera, webTerrain, requestedOverlay, cameras = 0;
   const submissions = [];
   const overlaySize = overlays => overlays?.layers?.some(layer => layer.name === "Imagery") ?
@@ -91,12 +93,16 @@ async function measure(requireImageryAndSky) {
   const sameGeometry = (a, b) => a.heights === b.heights && a.width === b.width &&
     a.height === b.height && a.exaggeration === b.exaggeration &&
     a.domain.join(",") === b.domain.join(",") && a.spacing.join(",") === b.spacing.join(",");
-  web.setCamera = function(input) { cameras++; webCamera = input; return originalSetCamera.call(this, input); };
-  web.setTerrainOverlays = function(input) {
-    requestedOverlay = overlaySize(input);
+  prototype.setCamera = function(input) {
+    if (observing(this)) { cameras++; webCamera = input; }
+    return originalSetCamera.call(this, input);
+  };
+  prototype.setTerrainOverlays = function(input) {
+    if (observing(this)) requestedOverlay = overlaySize(input);
     return originalSetTerrainOverlays.call(this, input);
   };
-  web.setTerrain = function(input) {
+  prototype.setTerrain = function(input) {
+    if (!observing(this)) return originalSetTerrain.call(this, input);
     const imagery = overlaySize(input.overlays);
     // The facade falls back to setTerrain when setTerrainOverlays changes
     // allocation size. It reuses the committed height array and grid.
@@ -179,10 +185,10 @@ async function measure(requireImageryAndSky) {
         landmarks: landmarks.map(index => ({ index, elevation: heights[index] })) },
       adapter: web.getCapabilities().adapterInfo, poses: results };
   } finally {
-    web.resize = originalResize;
-    web.setCamera = originalSetCamera;
-    web.setTerrain = originalSetTerrain;
-    web.setTerrainOverlays = originalSetTerrainOverlays;
+    prototype.resize = originalResize;
+    prototype.setCamera = originalSetCamera;
+    prototype.setTerrain = originalSetTerrain;
+    prototype.setTerrainOverlays = originalSetTerrainOverlays;
     renderer.setRenderTarget(null); renderer.setClearAlpha(beforeAlpha); target.dispose();
     camera.position.copy(initial); orbit.target.copy(aim); orbit.update(); runtime.needsRender = true;
   }

@@ -28,6 +28,7 @@ fn project_with_terrain() -> (Editor, AssetId) {
         elevation_range: Some([200.0, 560.0]),
         world_origin_xz: Some([0.0, 0.0]),
         world_span_xz: Some([65_000.0, 60_000.0]),
+        span_metres_per_unit: None,
         overlay: None,
     };
     let mut project = Project::starter("Luxembourg", Some(seed));

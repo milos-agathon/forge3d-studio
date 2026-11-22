@@ -907,9 +907,11 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "env_logger",
+ "glob",
  "log",
  "serde",
  "serde_json",
+ "sha2",
  "studio-core",
  "tauri",
  "tauri-build",

@@ -181,6 +181,8 @@ pub enum Command {
         world_origin_xz: Option<[f64; 2]>,
         #[serde(default)]
         world_span_xz: Option<[f64; 2]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        span_metres_per_unit: Option<f64>,
         /// Vertical exaggeration; omitted means "the new DEM's default".
         #[serde(default)]
         z_scale: Option<f32>,
@@ -774,7 +776,7 @@ impl Command {
                     if let crate::scene::ObjectKind::Terrain(terrain) = &mut object.kind {
                         terrain.z_scale = crate::scene::dem_default_z_scale(
                             terrain.elevation_range,
-                            terrain.world_span_xz,
+                            terrain.metric_span_xz(),
                         );
                     }
                 }
@@ -828,7 +830,7 @@ impl Command {
                     crate::scene::ObjectKind::Terrain(terrain) => (
                         terrain.z_scale,
                         terrain.elevation_range,
-                        terrain.world_span_xz,
+                        terrain.metric_span_xz(),
                     ),
                     _ => return Err(CommandError::invalid("terrain", "object is not a terrain")),
                 };
@@ -854,6 +856,7 @@ impl Command {
                 elevation_range,
                 world_origin_xz,
                 world_span_xz,
+                span_metres_per_unit,
                 z_scale,
             } => {
                 let object = project
@@ -870,14 +873,7 @@ impl Command {
                     ));
                 }
                 let previous = match &object.kind {
-                    crate::scene::ObjectKind::Terrain(terrain) => (
-                        terrain.asset,
-                        terrain.dimensions,
-                        terrain.elevation_range,
-                        terrain.world_origin_xz,
-                        terrain.world_span_xz,
-                        terrain.z_scale,
-                    ),
+                    crate::scene::ObjectKind::Terrain(terrain) => terrain.clone(),
                     _ => return Err(CommandError::invalid("terrain", "object is not a terrain")),
                 };
                 if let Some(object) = project.scene.object_mut(*id) {
@@ -887,23 +883,28 @@ impl Command {
                         terrain.elevation_range = *elevation_range;
                         terrain.world_origin_xz = *world_origin_xz;
                         terrain.world_span_xz = *world_span_xz;
+                        terrain.span_metres_per_unit = *span_metres_per_unit;
                         // A new DEM's relief has nothing to do with the old
                         // one's, so its vertical scale is re-derived unless the
                         // command names one (the undo carries the old value).
                         terrain.z_scale = z_scale.unwrap_or_else(|| {
-                            crate::scene::dem_default_z_scale(*elevation_range, *world_span_xz)
+                            crate::scene::dem_default_z_scale(
+                                *elevation_range,
+                                terrain.metric_span_xz(),
+                            )
                         });
                     }
                 }
                 Ok(Outcome {
                     inverse: Command::SetTerrainDem {
                         id: *id,
-                        asset: previous.0,
-                        dimensions: previous.1,
-                        elevation_range: previous.2,
-                        world_origin_xz: previous.3,
-                        world_span_xz: previous.4,
-                        z_scale: Some(previous.5),
+                        asset: previous.asset,
+                        dimensions: previous.dimensions,
+                        elevation_range: previous.elevation_range,
+                        world_origin_xz: previous.world_origin_xz,
+                        world_span_xz: previous.world_span_xz,
+                        span_metres_per_unit: previous.span_metres_per_unit,
+                        z_scale: Some(previous.z_scale),
                     },
                     affected: vec![*id],
                 })

@@ -391,7 +391,8 @@ export function installProbe({ role, cubeId }) {
     const aim = orbit.target.clone();
     const radius = initial.distanceTo(aim);
     const size = viewport().physical;
-    const ApiCamera = auto ? (await import(new URL("forge3d-web/index.js", document.baseURI))).Camera : null;
+    const api = auto ? await import(new URL("forge3d-web/index.js", document.baseURI)) : null;
+    const ApiCamera = api?.Camera;
     const rendererWeb = web();
     const terrainViewport = diagnostics().terrainViewport;
     const resizeCalls = [];
@@ -400,9 +401,13 @@ export function installProbe({ role, cubeId }) {
     let cameraSubmissions = 0;
     const undo = [];
     const watch = (method, track) => {
-      const original = rendererWeb[method];
-      rendererWeb[method] = function (input) { track(input); return original.call(this, input); };
-      undo.push(() => { rendererWeb[method] = original; });
+      const prototype = api.Forge3DRuntime.prototype;
+      const original = prototype[method];
+      prototype[method] = function (input) {
+        if (terrainViewport.owns ? terrainViewport.owns(this) : this === rendererWeb) track(input);
+        return original.call(this, input);
+      };
+      undo.push(() => { prototype[method] = original; });
     };
 
     const color = renderer.getClearColor(new THREE.Color()).clone();
