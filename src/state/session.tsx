@@ -396,7 +396,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     height: number;
     quality: "preview" | "final";
     /** The viewport camera at the moment the frame was requested. */
-    view: RenderView | undefined;
+    view: Promise<RenderView | undefined> | undefined;
   } | null>(null);
   const renderInFlight = useRef(false);
 
@@ -409,7 +409,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         pendingRender.current = null;
         setRender((current) => ({ ...current, busy: true, error: null }));
         try {
-          const frame = await bridge.renderFrame(request.width, request.height, request.quality, request.view);
+          const view = await request.view;
+          if (pendingRender.current) continue;
+          const frame = await bridge.renderFrame(request.width, request.height, request.quality, view);
           setRender({ frame, busy: false, error: null });
         } catch (cause) {
           setRender({
@@ -426,7 +428,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const renderViewport = useCallback(
     async (width: number, height: number, quality: "preview" | "final" = "preview") => {
-      pendingRender.current = { width, height, quality, view: viewStore.current ?? undefined };
+      const view = viewStore.resolve?.();
+      // A newer request may supersede this promise before the queue reads it.
+      void view?.catch(() => undefined);
+      pendingRender.current = { width, height, quality, view };
       await pumpRender();
     },
     [pumpRender],
@@ -903,10 +908,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         updateJob(job.id, { status: "running" });
         try {
           if (job.kind === "still") {
-            const frame = await bridge.renderStill(
-              job.output || null,
-              viewStore.current ?? undefined,
-            );
+            const view = await viewStore.resolve?.();
+            if (cancelledJobs.current.has(job.id)) {
+              updateJob(job.id, { status: "cancelled" });
+              continue;
+            }
+            const frame = await bridge.renderStill(job.output || null, view);
             // A still cannot be interrupted mid-frame; a cancel requested
             // while it ran still writes the file, so report the truth.
             const cancelled = cancelledJobs.current.has(job.id);

@@ -1,0 +1,13 @@
+Cargo.lock
+Cargo.toml
+crates/studio-core/Cargo.toml
+crates/studio-core/src/**/*.rs
+src-tauri/Cargo.toml
+src-tauri/build.rs
+src-tauri/capabilities/**/*.json
+src-tauri/icons/*.ico
+src-tauri/icons/*.png
+src-tauri/native-source.inputs
+src-tauri/src/**/*.py
+src-tauri/src/**/*.rs
+src-tauri/tauri.conf.json

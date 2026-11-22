@@ -486,22 +486,14 @@ pub fn check_assets(
     let snapshot = lock(&state)?
         .state()
         .ok_or_else(|| "no project is open".to_owned())?;
-    Ok(studio_core::asset_integrity(&snapshot.project, |path| {
-        // A remote DEM's path is a URL: there is no local file to stat. The
-        // engine's range reader validated it at open and revalidates at every
-        // render, so reporting it as missing would be a false alarm.
-        if path.starts_with("http://")
-            || path.starts_with("https://")
-            || path.starts_with("file://")
-        {
-            return Ok(0);
-        }
-        match std::fs::metadata(path) {
+    Ok(studio_core::asset_integrity(
+        &snapshot.project,
+        |path| match std::fs::metadata(path) {
             Ok(metadata) if metadata.is_file() => Ok(metadata.len()),
             Ok(_) => Err(format!("{path} is not a file")),
             Err(error) => Err(format!("{path}: {error}")),
-        }
-    }))
+        },
+    ))
 }
 
 /// Place the directional light from the engine's ephemeris.
@@ -945,6 +937,7 @@ pub fn shell_info() -> ShellInfo {
     ShellInfo {
         name: "Forge3D Studio".to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
+        native_source_sha256: env!("STUDIO_NATIVE_SOURCE_SHA256"),
     }
 }
 
@@ -953,6 +946,7 @@ pub fn shell_info() -> ShellInfo {
 pub struct ShellInfo {
     pub name: String,
     pub version: String,
+    pub native_source_sha256: &'static str,
 }
 
 // ---------------------------------------------------------------------- Forge3D
@@ -1089,6 +1083,7 @@ fn import_dem_with_sampler(
     let mut commands = vec![Command::AddAsset {
         asset: asset.clone(),
     }];
+    let span_metres_per_unit = crate::forge3d::non_metre_ground_unit(&info);
     match snapshot.project.terrain_object() {
         Some(terrain) => commands.push(Command::SetTerrainDem {
             id: terrain.id,
@@ -1097,6 +1092,7 @@ fn import_dem_with_sampler(
             elevation_range,
             world_origin_xz: pair_f64("originXz"),
             world_span_xz: pair_f64("spanXz"),
+            span_metres_per_unit,
             // The new DEM's own relief decides the vertical scale.
             z_scale: None,
         }),
@@ -1108,6 +1104,7 @@ fn import_dem_with_sampler(
                     elevation_range,
                     pair_f64("originXz"),
                     pair_f64("spanXz"),
+                    span_metres_per_unit,
                 );
             }
             let name = std::path::Path::new(&path)
@@ -1343,7 +1340,10 @@ pub fn raster_preview(
 /// by the core's viewport -> render mapping, so the still and the Solid view
 /// cannot disagree about where a model sits.
 fn scene_meshes(project: &studio_core::Project) -> Vec<crate::render::MeshHandoff> {
-    let Some(terrain) = project.terrain_object().and_then(|object| object.terrain()) else {
+    let Some((terrain, placement)) = project
+        .visible_terrain_object()
+        .and_then(|node| node.terrain().map(|terrain| (terrain, &node.transform)))
+    else {
         return Vec::new();
     };
     project
@@ -1365,7 +1365,11 @@ fn scene_meshes(project: &studio_core::Project) -> Vec<crate::render::MeshHandof
                 .map(|item| item.path.clone())?;
             Some(crate::render::MeshHandoff {
                 path,
-                transform: studio_core::workspace::mesh_render_matrix(&object.transform, terrain)?,
+                transform: studio_core::workspace::mesh_render_matrix_with_placement(
+                    &object.transform,
+                    terrain,
+                    placement,
+                )?,
                 node: node.clone(),
             })
         })
@@ -1383,8 +1387,7 @@ fn build_request(
     view: Option<&RenderView>,
     meshes: Vec<crate::render::MeshHandoff>,
 ) -> Result<RenderRequest, String> {
-    Ok(RenderRequest::from_handoff(handoff, width, height)?
-        .with_view(view)
+    Ok(RenderRequest::from_handoff(handoff, width, height, view)?
         .with_settings(settings)
         .with_meshes(meshes))
 }
@@ -1399,12 +1402,18 @@ pub fn render_frame(
     quality: Option<String>,
     view: Option<RenderView>,
 ) -> Result<RenderFrame, String> {
-    let (handoff, settings, meshes) = {
+    let (handoff, settings, meshes, source) = {
         let session = lock(&state)?;
         let snapshot = session
             .state()
             .ok_or_else(|| "no project is open".to_owned())?;
         let meshes = scene_meshes(&snapshot.project);
+        let source = snapshot.project.visible_terrain_object().map(|terrain| {
+            crate::render::RenderFrameSource {
+                session_id: snapshot.session_id,
+                terrain_id: terrain.id,
+            }
+        });
         (
             studio_core::workspace::handoff(
                 &snapshot.project,
@@ -1413,6 +1422,7 @@ pub fn render_frame(
             ),
             snapshot.project.render,
             meshes,
+            source,
         )
     };
     let request = build_request(
@@ -1425,12 +1435,14 @@ pub fn render_frame(
     )?;
     let python = forge.probe(false).python;
     let quality = quality.unwrap_or_else(|| "final".to_owned());
-    render.render(
+    let mut frame = render.render(
         &python,
         &request.dem,
         request.to_payload(&quality, None),
         crate::render::PREVIEW_TIMEOUT,
-    )
+    )?;
+    frame.source = source;
+    Ok(frame)
 }
 
 /// Render a final still at the project's configured resolution and write it to
@@ -1565,7 +1577,7 @@ pub fn render_animation_frame(
     // The evaluated camera's own view, not the viewport's live orbit: a frame
     // must match a camera-view still of the same object (the export used to
     // fall back to `terrain_camera`, which ignores the camera's rotation and
-    // distance). `with_view` also carries the FOV and the terrain-centred aim.
+    // distance). The view also carries the FOV and the terrain-centred aim.
     let view = studio_core::workspace::camera_render_view(&project);
     let request = build_request(
         &handoff,
@@ -1892,11 +1904,12 @@ mod tests {
                 elevation_range: Some([0.0, 100.0]),
                 world_origin_xz: Some([0.0, 0.0]),
                 world_span_xz: Some([640.0, 640.0]),
+                span_metres_per_unit: None,
                 overlay: None,
             }),
         );
         let handoff = studio_core::workspace::handoff(&project, 4, Workspace::Forge3d);
-        let request = RenderRequest::from_handoff(&handoff, 640, 400)
+        let request = RenderRequest::from_handoff(&handoff, 640, 400, None)
             .expect("the starter scene has terrain")
             .with_settings(&project.render);
         let sidecar = still_sidecar(&request, &handoff, 12.5);
@@ -1935,6 +1948,7 @@ mod tests {
                 elevation_range: Some([400.0, 4000.0]),
                 world_origin_xz: Some([0.0, 0.0]),
                 world_span_xz: Some([352_000.0, 226_000.0]),
+                span_metres_per_unit: None,
                 overlay: None,
             }),
         );
@@ -2003,6 +2017,7 @@ mod tests {
                 elevation_range: Some([300.0, 3775.0]),
                 world_origin_xz: Some([0.0, 0.0]),
                 world_span_xz: Some([18_000.0, 18_000.0]),
+                span_metres_per_unit: None,
                 overlay: None,
             }),
         );

@@ -298,6 +298,9 @@ fn migrate_v4_to_v5(mut value: Value) -> Value {
 fn relativize_assets(project: &Project, dir: &Path) -> Project {
     let mut stored = project.clone();
     for asset in &mut stored.assets {
+        if asset.is_remote_dem() {
+            continue;
+        }
         let candidate = Path::new(&asset.path);
         if !candidate.is_absolute() {
             continue;
@@ -316,11 +319,16 @@ fn relativize_assets(project: &Project, dir: &Path) -> Project {
 /// Resolve stored relative asset paths against the project file's directory.
 fn resolve_assets(project: &mut Project, dir: &Path) {
     for asset in &mut project.assets {
+        if asset.is_remote_dem() {
+            continue;
+        }
         let candidate = Path::new(&asset.path);
         if candidate.is_absolute() {
             continue;
         }
-        asset.path = dir.join(candidate).to_string_lossy().into_owned();
+        let mut resolved = dir.to_path_buf();
+        resolved.extend(candidate.components());
+        asset.path = resolved.to_string_lossy().into_owned();
     }
 }
 
@@ -419,6 +427,47 @@ mod tests {
         let parsed = from_json(&json, "test").unwrap();
         assert_eq!(parsed, project);
         assert_eq!(to_json_pretty(&parsed).unwrap(), json);
+    }
+
+    #[test]
+    fn remote_dem_urls_round_trip_without_becoming_local_paths() {
+        use crate::project::{Asset, AssetKind};
+
+        let mut project = Project::new(UNTITLED);
+        for (url, bytes) in [
+            ("http://127.0.0.1:5530/bryce.tif?part=east", 4_052_478),
+            ("HTTPS://example.com/bryce.tif", 10),
+            ("https://example.com/legacy.tif", 0),
+            ("file:///C:/dems/bryce.tif", 10),
+        ] {
+            project.assets.push(Asset {
+                id: crate::ids::new_id(),
+                name: "Bryce.tif".into(),
+                path: url.into(),
+                kind: AssetKind::Dem,
+                byte_size: bytes,
+            });
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("remote.studio3d");
+        save_atomic(&path, &project).unwrap();
+        assert_eq!(load(&path).unwrap().assets, project.assets);
+    }
+
+    #[test]
+    fn legacy_remote_dem_length_is_unknown_but_empty_local_dem_is_invalid() {
+        use crate::project::{Asset, AssetKind};
+
+        let mut asset = Asset {
+            id: crate::ids::new_id(),
+            name: "Bryce.tif".into(),
+            path: "https://example.com/bryce.tif".into(),
+            kind: AssetKind::Dem,
+            byte_size: 0,
+        };
+        assert_eq!(asset.validate(), Ok(()));
+        asset.path = "bryce.tif".into();
+        assert_eq!(asset.validate().unwrap_err(), "asset file is empty");
     }
 
     #[test]

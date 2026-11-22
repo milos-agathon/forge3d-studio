@@ -168,8 +168,13 @@ impl Project {
         let title = seed.title.clone().unwrap_or_else(|| humanize(&seed.name));
         let mut terrain = TerrainObject::new(asset.id);
         if let (Some(dimensions), Some(range)) = (seed.dimensions, seed.elevation_range) {
-            terrain =
-                terrain.with_dem_info(dimensions, range, seed.world_origin_xz, seed.world_span_xz);
+            terrain = terrain.with_dem_info(
+                dimensions,
+                range,
+                seed.world_origin_xz,
+                seed.world_span_xz,
+                seed.span_metres_per_unit,
+            );
         }
         // The starter albedo (the Bryce NAIP image) becomes the map's imagery
         // layer: it is how the engine drapes imagery on terrain.
@@ -231,6 +236,14 @@ impl Project {
     /// The scene's terrain, if any (the viewer renders one).
     pub fn terrain_object(&self) -> Option<&SceneObject> {
         self.scene.objects.iter().find(|object| object.is_terrain())
+    }
+
+    /// The terrain used by the single-terrain render pipeline.
+    pub fn visible_terrain_object(&self) -> Option<&SceneObject> {
+        self.scene
+            .objects
+            .iter()
+            .find(|object| object.visible && object.is_terrain())
     }
 
     /// Assets referenced by at least one object, in registry order.
@@ -601,12 +614,14 @@ pub struct TerrainSeed {
     pub dimensions: Option<[u32; 2]>,
     #[serde(default)]
     pub elevation_range: Option<[f32; 2]>,
-    /// Viewer-basis `[map X, -map Y]` origin in metres.
+    /// Viewer-basis `[map X, -map Y]` origin in source units.
     #[serde(default)]
     pub world_origin_xz: Option<[f64; 2]>,
-    /// Viewer-basis span in metres.
+    /// Horizontal span in source units.
     #[serde(default)]
     pub world_span_xz: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span_metres_per_unit: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -1095,15 +1110,18 @@ pub struct Asset {
     pub id: AssetId,
     /// Display name, normally the imported file name.
     pub name: String,
-    /// Path to the source file. Relative paths resolve against the project
-    /// file's directory; absolute paths survive only when the file cannot be
-    /// expressed relatively.
+    /// Source path or remote DEM URL. Relative file paths resolve against the
+    /// project directory.
     pub path: String,
     pub kind: AssetKind,
     pub byte_size: u64,
 }
 
 impl Asset {
+    pub fn is_remote_dem(&self) -> bool {
+        self.kind == AssetKind::Dem && is_remote_dem_path(&self.path)
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.id.is_nil() {
             return Err("asset id must not be nil".to_owned());
@@ -1115,11 +1133,20 @@ impl Asset {
         if self.path.chars().any(|ch| ch.is_control()) {
             return Err("asset path must not contain control characters".to_owned());
         }
-        if self.byte_size == 0 {
+        // Older gallery-created COG projects recorded an unknown byte length
+        // as zero. Those references can be checked by the remote reader.
+        if self.byte_size == 0 && !self.is_remote_dem() {
             return Err("asset file is empty".to_owned());
         }
         Ok(())
     }
+}
+
+pub fn is_remote_dem_path(path: &str) -> bool {
+    ["http://", "https://", "file://"].iter().any(|prefix| {
+        path.get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -299,6 +299,7 @@ fn bryce_seed() -> studio_core::TerrainSeed {
         elevation_range: Some([2099.23, 2553.58]),
         world_origin_xz: Some([395_998.5, -4_165_574.5]),
         world_span_xz: Some([4000.0, 3800.0]),
+        span_metres_per_unit: None,
         overlay: None,
     }
 }

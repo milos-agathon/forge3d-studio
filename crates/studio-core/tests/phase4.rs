@@ -23,6 +23,7 @@ fn seed() -> TerrainSeed {
         elevation_range: Some([2099.23, 2553.58]),
         world_origin_xz: Some([395_998.5, -4_165_574.5]),
         world_span_xz: Some([4000.0, 3800.0]),
+        span_metres_per_unit: None,
         overlay: None,
     }
 }
@@ -258,7 +259,13 @@ fn v2_projects_migrate_to_v3_and_stay_renderable() {
 fn terrain_and_dem_survive_a_save_and_reload() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("bryce.studio3d");
-    let project = Project::starter("Bryce", Some(seed()));
+    let mut terrain = seed();
+    terrain.path = dir
+        .path()
+        .join(&terrain.name)
+        .to_string_lossy()
+        .into_owned();
+    let project = Project::starter("Bryce", Some(terrain));
     save_atomic(&path, &project).unwrap();
 
     let reloaded = studio_core::persist::load(&path).unwrap();

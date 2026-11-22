@@ -1239,7 +1239,7 @@ kbd {
 }
 
 .viewport-canvas--terrain { pointer-events: none; }
-.viewport-canvas--terrain[hidden] { display: none; }
+.viewport-canvas[hidden] { display: none; }
 .menu__heading { display: block; padding: 4px 10px; color: var(--text-secondary); }
 
 .viewport-canvas:active {

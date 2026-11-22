@@ -369,13 +369,16 @@ pub struct TerrainObject {
     /// DEM pixel dimensions (display + diagnostics).
     #[serde(default)]
     pub dimensions: Option<[u32; 2]>,
-    /// Viewer-basis world origin, `[map X, -map Y]`, metres. Georeferenced DEMs
+    /// Viewer-basis world origin, `[map X, -map Y]`, in source units. Georeferenced DEMs
     /// live far from the origin, so this is not optional in practice.
     #[serde(default)]
     pub world_origin_xz: Option<[f64; 2]>,
-    /// Viewer-basis world span, metres (the viewer's terrain world units).
+    /// Horizontal span in source units.
     #[serde(default)]
     pub world_span_xz: Option<[f64; 2]>,
+    /// Metres per horizontal unit when the source uses a non-metre CRS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span_metres_per_unit: Option<f64>,
     /// Elevation range in metres, `[min, max]`.
     #[serde(default)]
     pub elevation_range: Option<[f32; 2]>,
@@ -424,6 +427,7 @@ impl TerrainObject {
             dimensions: None,
             world_origin_xz: None,
             world_span_xz: None,
+            span_metres_per_unit: None,
             elevation_range: None,
         }
     }
@@ -439,13 +443,20 @@ impl TerrainObject {
         elevation_range: [f32; 2],
         world_origin_xz: Option<[f64; 2]>,
         world_span_xz: Option<[f64; 2]>,
+        span_metres_per_unit: Option<f64>,
     ) -> Self {
         self.dimensions = Some(dimensions);
         self.elevation_range = Some(elevation_range);
         self.world_origin_xz = world_origin_xz;
         self.world_span_xz = world_span_xz;
-        self.z_scale = dem_default_z_scale(self.elevation_range, self.world_span_xz);
+        self.span_metres_per_unit = span_metres_per_unit;
+        self.z_scale = dem_default_z_scale(self.elevation_range, self.metric_span_xz());
         self
+    }
+
+    pub fn metric_span_xz(&self) -> Option<[f64; 2]> {
+        self.world_span_xz
+            .map(|span| span.map(|side| side * self.span_metres_per_unit.unwrap_or(1.0)))
     }
 
     /// The viewer frames terrain as `radius = 1.5 * |(w, 0, h)|` around
@@ -455,8 +466,11 @@ impl TerrainObject {
     pub fn viewer_framing(&self) -> Option<(f64, [f64; 3])> {
         // Georeferenced: origin + span in metres. Local fallback: the viewer uses
         // DEM pixels as world units, origin at zero.
-        let (origin, span) = match (self.world_origin_xz, self.world_span_xz) {
-            (Some(origin), Some(span)) => (origin, span),
+        let (origin, span) = match (self.world_origin_xz, self.metric_span_xz()) {
+            (Some(origin), Some(span)) => (
+                origin.map(|axis| axis * self.span_metres_per_unit.unwrap_or(1.0)),
+                span,
+            ),
             _ => {
                 let [width, height] = self.dimensions?;
                 ([0.0, 0.0], [f64::from(width), f64::from(height)])
@@ -478,6 +492,12 @@ impl TerrainObject {
     fn validate(&self) -> Result<(), String> {
         if self.asset.is_nil() {
             return Err("terrain has no DEM asset".to_owned());
+        }
+        if self
+            .span_metres_per_unit
+            .is_some_and(|unit| !unit.is_finite() || unit <= 0.0)
+        {
+            return Err("terrain horizontal unit must be positive and finite".to_owned());
         }
         // The engine refuses anything outside its range (it raises instead of
         // clamping), so a value in here must be one `TerrainRenderParams`

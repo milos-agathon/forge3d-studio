@@ -68,10 +68,8 @@ def write_sky_hdr(path: Path, width: int = 128, height: int = 64) -> None:
     environment and the renderer requires one, so the service writes its own:
     predictable, licence-free, and identical every run. The viewport builds the
     same gradient in JavaScript, so Solid, Material and Rendered share one sky.
-    The RGBE encoding itself lives in the engine (`forge3d.io.write_hdr`).
+    The sky is stored as a linear Radiance RGBE image.
     """
-    from forge3d import io as fio
-
     v = np.linspace(0.0, 1.0, height)[:, None]  # 0 = zenith, 1 = nadir
     zenith = np.array([0.25, 0.40, 0.75])
     horizon = np.array([0.85, 0.72, 0.55])
@@ -81,7 +79,12 @@ def write_sky_hdr(path: Path, width: int = 128, height: int = 64) -> None:
     sky = horizon[None, None, :] * (1.0 - t) + zenith[None, None, :] * t
     image = np.where(v[..., None] < 0.5, sky, np.broadcast_to(ground, sky.shape))
     image = np.broadcast_to(image.astype(np.float32) * 1.6, (height, width, 3)).copy()
-    fio.write_hdr(path, image)
+    _, exponent = np.frexp(image.max(axis=-1))
+    rgbe = np.empty((height, width, 4), dtype=np.uint8)
+    rgbe[..., :3] = image * np.exp2(8 - exponent[..., None])
+    rgbe[..., 3] = exponent + 128
+    header = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n" + f"-Y {height} +X {width}\n".encode()
+    path.write_bytes(header + rgbe.tobytes())
 
 
 def engine_height_domain(heights) -> tuple[float, float]:
@@ -120,131 +123,25 @@ def _settings_mapping(obj):
     return {name: getattr(obj, name) for name in fields}
 
 
-def dem_span(dem) -> tuple[float, float]:
-    """Metric footprint of a DEM: pixel size when projected, local UTM when not.
-
-    A geographic raster's degrees are not metres — treating them as metres is
-    what made a 353 km DEM report 0.00 km. The zone comes from the engine's own
-    estimator, so the studio and the viewer cannot disagree about it.
-    """
-    from forge3d import gis
-
-    height, width = np.asarray(dem.data).shape[:2]
-    crs = str(dem.crs or "")
-    if ("4326" in crs or "wgs84" in crs.lower()) and dem.bounds is not None:
-        local = gis.estimate_local_utm(dem.bounds)["crs"]
-        left, bottom, right, top = gis.transform_bounds(dem.crs, local, dem.bounds, densify=21)
-        return abs(right - left), abs(top - bottom)
-    resolution = dem.resolution or (1.0, 1.0)
-    return abs(float(resolution[0])) * width, abs(float(resolution[1])) * height
-
-
 def load_dem(path: str):
-    """Read a DEM through the engine's loader and compute the render frame.
+    """Read physical elevation and a metric footprint, with native CRS bounds for draping."""
+    from studio_cog import read_cog_overview, read_dem_overview
 
-    Returns the heights (nodata filled, outliers clamped), the metric span, the
-    robust elevation range, the raster's bounds and its CRS. Reading, nodata
-    masking and CRS handling are the engine's (`forge3d.io`, `forge3d.gis`); only
-    the presentation choices — clamp to [0.01, 99.99] percentiles, fill holes
-    with the floor — are the studio's. The bounds and the CRS are what place a
-    vector layer on the terrain.
-    """
-    from forge3d import io as fio
-
-    dem = fio.load_dem(path, fill_nodata_values=False)
-    raw = np.asarray(dem.data, dtype="float64")
-    nodata = dem.nodata_value
-    if nodata is not None:
-        raw = np.where(np.isclose(raw, float(nodata)), np.nan, raw)
-    valid = np.isfinite(raw)
-    if not valid.any():
-        raise RuntimeError("the DEM contains no valid elevation samples")
-    low, high = np.percentile(raw[valid], [0.01, 99.99])
-    heights = np.where(valid, np.clip(np.nan_to_num(raw, nan=low), low, high), low)
-    span_x, span_y = dem_span(dem)
-    if span_x <= 0.0 or span_y <= 0.0:
-        span_x, span_y = float(raw.shape[1]), float(raw.shape[0])
-    bounds = None
-    if getattr(dem, "bounds", None) is not None:
-        bounds = tuple(float(value) for value in dem.bounds)
-    crs = str(getattr(dem, "crs", "") or "")
-    return (
-        heights.astype(np.float32),
-        span_x,
-        span_y,
-        (float(low), float(high)),
-        bounds,
-        crs,
-    )
-
-
-def is_remote_dem(path: str) -> bool:
-    """A DEM path that is a URL must be streamed, not opened from disk."""
-    return isinstance(path, str) and path.startswith(("http://", "https://", "file://"))
-
-
-def load_remote_dem(url: str, resolution: int = 1024):
-    """Assemble a DEM from the engine's COG range reader — no whole-file copy.
-
-    The engine picks the overview level: the coarsest one still carrying the
-    requested resolution. Only the tiles of that level are fetched; the DEM
-    the renderer sees is the same array shape `load_dem` returns. Degree bounds
-    are reprojected to a local UTM zone for the metric span with the engine's
-    own `forge3d.gis`, exactly as the local loader does.
-    """
-    import forge3d.cog as cog
-    from forge3d import gis
-
-    ds = cog.open_cog(url)
-    levels = max(1, int(ds.overview_count))
-    level = levels - 1
-    for candidate in range(levels):
-        info = ds.ifd_info(candidate)
-        if info.width >= resolution and info.height >= resolution:
-            level = candidate
-    info = ds.ifd_info(level)
-    width, height = int(info.width), int(info.height)
-    grid = np.zeros((height, width), dtype=np.float64)
-    for ty in range(int(info.tiles_down)):
-        for tx in range(int(info.tiles_across)):
-            tile = np.asarray(ds.read_tile(tx, ty, level), dtype=np.float64)
-            if tile.ndim != 2 or tile.size == 0:
-                continue
-            th, tw = tile.shape[:2]
-            y0 = ty * int(info.tile_height)
-            x0 = tx * int(info.tile_width)
-            y1, x1 = min(height, y0 + th), min(width, x0 + tw)
-            if y1 > y0 and x1 > x0:
-                grid[y0:y1, x0:x1] = tile[: y1 - y0, : x1 - x0]
-
+    remote = path.lower().startswith(("http://", "https://", "file://"))
+    grid, _, source = read_cog_overview(path, 1024) if remote else read_dem_overview(path)
     valid = np.isfinite(grid)
     if not valid.any():
-        raise RuntimeError("the remote DEM contains no valid elevation samples")
+        raise RuntimeError("the DEM contains no valid elevation samples")
     low, high = np.percentile(grid[valid], [0.01, 99.99])
     heights = np.where(valid, np.clip(np.nan_to_num(grid, nan=low), low, high), low)
-
-    bounds = tuple(float(value) for value in ds.bounds) if ds.bounds else None
-    crs = ""
-    span_x = span_y = 0.0
-    if bounds is not None and len(bounds) == 4:
-        geographic = (
-            -180.0 <= bounds[0] <= 180.0 and -180.0 <= bounds[2] <= 180.0
-            and -90.0 <= bounds[1] <= 90.0 and -90.0 <= bounds[3] <= 90.0
-        )
-        if geographic:
-            crs = "EPSG:4326"
-            local = gis.estimate_local_utm(bounds)["crs"]
-            left, bottom, right, top = gis.transform_bounds(crs, local, bounds, densify=21)
-            span_x, span_y = abs(right - left), abs(top - bottom)
-    if span_x <= 0.0 or span_y <= 0.0:
-        span_x, span_y = float(width), float(height)
+    span_x, span_y = source["extentMeters"] or source["spanXz"]
     return (
         heights.astype(np.float32),
         span_x,
         span_y,
         (float(low), float(high)),
-        bounds,
-        crs,
+        tuple(source["bounds"]),
+        source["crs"],
     )
 
 
@@ -260,9 +157,7 @@ class StudioRenderer:
             self.range,
             self.dem_bounds,
             self.dem_crs,
-        ) = (
-            load_remote_dem(dem_path, 1024) if is_remote_dem(dem_path) else load_dem(dem_path)
-        )
+        ) = load_dem(dem_path)
         self.dem_path = dem_path
         # The renderer rejects view coordinates beyond +/-65,536 units, so a
         # country-scale DEM is scaled into that budget (proportions preserved).
@@ -869,7 +764,9 @@ class StudioRenderer:
         else:
             scene.render()
         frame = np.asarray(Image.open(output_path).convert("RGB"), dtype=np.float32) / 255.0
-        return frame, scene.last_aov_frame, scene.last_terrain_params
+        # Recent MapScene releases publish the PNG without retaining these
+        # legacy in-memory outputs. The ordinary beauty path can use the PNG.
+        return frame, getattr(scene, "last_aov_frame", None), getattr(scene, "last_terrain_params", None)
 
     def render(self, request: Dict[str, Any]) -> Dict[str, Any]:
         f3d = self.f3d
@@ -1104,15 +1001,16 @@ class StudioRenderer:
         # engine's GPU batches (the lines and the labels drawn in the
         # terrain's own pass) and the numpy overlays the recipe frame cannot
         # carry yet (vectors, labels, graticule drawn as numpy overlays here).
-        cartography = prepare_cartography(
-            params,
-            visible,
-            width,
-            height,
-            self.dem_bounds,
-            self.heights,
-            self.dem_crs,
-        )
+        if params is None:
+            if request.get("meshes") or any(
+                layer.get("type") in ("vector", "polygon", "graticule", "labels") for layer in visible
+            ):
+                raise RuntimeError("This Forge3D MapScene does not expose the terrain projection required by the scene overlays")
+            cartography = PreparedCartography()
+        else:
+            cartography = prepare_cartography(params, visible, width, height, self.dem_bounds, self.heights, self.dem_crs)
+        if aov_frame is None and (want_denoise or want_aov):
+            raise RuntimeError("This Forge3D MapScene does not expose the in-memory frame required by the requested AOVs or denoise")
         rgb = image[:, :, :3].astype(np.uint8)
         mesh_report: Dict[str, Any] = {"meshesRendered": 0, "meshesSkipped": []}
         if request.get("meshes"):

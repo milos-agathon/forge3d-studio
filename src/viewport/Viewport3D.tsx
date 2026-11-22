@@ -7,10 +7,11 @@ import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 
-import { ForgeTerrainViewport } from "./forge3dWebViewport";
-import { studioUnitsPerPreviewUnit, type RendererPreference } from "./forge3dWebMapping";
-import { assetRevision, nativeRenderView, terrainSampleRevision, viewportDimensions, ViewportModel,
-  type ViewportDimensions, type ViewportTerrain } from "./viewportState";
+import { ForgeTerrainViewport, viewportErrorReason, type TerrainPresentation } from "./forge3dWebViewport";
+import { studioUnitsPerGroundUnit, terrainGroundSpan, type RendererPreference } from "./forge3dWebMapping";
+import { assetRevision, boundedTerrainResolution, firstVisibleTerrain, nativeRenderView, terrainSampleRevision, validateTerrainPreview, viewportDimensions, ViewportModel,
+  type TerrainPreviewRequest, type ViewportDimensions, type ViewportTerrain } from "./viewportState";
+import { hillshadePixels } from "./hillshade";
 import { bridge } from "../bridge/env";
 import type {
   CameraObject,
@@ -68,6 +69,7 @@ const ACCENT = 0xefa026;
  * colour. Shape comes from the scene light only.
  */
 const CLAY_COLOUR = 0x8a949a;
+const CLAY = new THREE.Color(CLAY_COLOUR);
 const CAMERA_COLOUR = 0xc6ced2; // --text-secondary: cyan is reserved for measurement (the map grid)
 const SOLID_BACKGROUND = 0x0e1113;
 /** Material preview backdrop: the studio HDRI provides the light, this the
@@ -136,6 +138,12 @@ interface Runtime {
   needsRender: boolean;
   /** Latest selection, so the canvas click handler is not a stale closure. */
   selection: string[];
+}
+
+interface EditorViewport {
+  resize(dimensions: ViewportDimensions): void;
+  update(now: number): boolean;
+  present(frame: TerrainPresentation | undefined, previewError?: string): void;
 }
 
 /** Per-mesh shading state: what the built content looks like, and its clay. */
@@ -553,56 +561,9 @@ function buildLightGizmo(light: LightObject): THREE.Group {
  * the grid's metric resolution, not the preview's world scale. Tracks the
  * terrain data, not the camera, so it composes with any view direction.
  */
-function computeHillshadeTexel(
-  dzDx: number,
-  dzDy: number,
-  azimuth: number,
-  zenith: number,
-): number {
-  const slope = Math.atan(Math.sqrt(dzDx * dzDx + dzDy * dzDy));
-  // ArcGIS aspect convention: 0 = north, clockwise.
-  const aspect = Math.atan2(dzDy, -dzDx);
-  const value = Math.cos(zenith) * Math.cos(slope) +
-                Math.sin(zenith) * Math.sin(slope) * Math.cos(azimuth - aspect);
-  return Math.max(0, Math.min(255, Math.floor(value * 255)));
-}
-
-/** Bake a hillshade texture from the heights: central differences, metric
- *  cell size from the footprint, 315° az / 45° alt, no exaggeration. Linear filter. */
 function bakeHillshade(preview: ViewportTerrain["preview"]): THREE.DataTexture {
-  const resolution = preview.resolution;
-  const heights = preview.heights;
-  const [spanX, spanZ] = preview.spanXz;
-  const cellX = spanX / Math.max(1, resolution - 1);
-  const cellY = spanZ / Math.max(1, resolution - 1);
-  const azimuth = (315 * Math.PI) / 180;
-  // Zenith angle from the vertical, the ESRI formula: matches the standard
-  // "QGIS / ArcGIS" relief shades (SE-lit slopes face dark).
-  const zenith = (45 * Math.PI) / 180;
-  const data = new Uint8Array(resolution * resolution * 4);
-  for (let row = 0; row < resolution; row += 1) {
-    for (let column = 0; column < resolution; column += 1) {
-      const left = column === 0 ? heights[row * resolution + column]
-                                : heights[row * resolution + column - 1];
-      const right = column === resolution - 1 ? heights[row * resolution + column]
-                                : heights[row * resolution + column + 1];
-      const up = row === 0 ? heights[row * resolution + column]
-                          : heights[(row - 1) * resolution + column];
-      const down = row === resolution - 1 ? heights[row * resolution + column]
-                          : heights[(row + 1) * resolution + column];
-      const dzDx = (right - left) / (2 * cellX);
-      const dzDy = (down - up) / (2 * cellY);
-      const value = computeHillshadeTexel(dzDx, dzDy, azimuth, zenith);
-      // PlaneGeometry UVs follow row order; match the mesh's own indexing.
-      // RGBA: three.js .map sampling expects channels the material can read;
-      // replicate the grey into R/G/B so it multiplies cleanly in the shader.
-      const base = (row * resolution + column) * 4;
-      data[base] = value;
-      data[base + 1] = value;
-      data[base + 2] = value;
-      data[base + 3] = 255;
-    }
-  }
+  const { resolution } = preview;
+  const data = hillshadePixels(preview);
   const texture = new THREE.DataTexture(
     data,
     resolution,
@@ -635,8 +596,8 @@ function buildTerrainMesh(
   const geometry = new THREE.PlaneGeometry(1, 1, resolution - 1, resolution - 1);
   geometry.rotateX(-Math.PI / 2);
 
-  const [spanX, spanZ] = preview.spanXz;
-  const horizontal = studioUnitsPerPreviewUnit(preview);
+  const [spanX, spanZ] = terrainGroundSpan(preview);
+  const horizontal = studioUnitsPerGroundUnit(preview);
   const minElevation = preview.minElevation;
 
   const position = geometry.attributes.position as THREE.BufferAttribute;
@@ -682,7 +643,7 @@ function buildTerrainMesh(
       heights: preview.heights,
       resolution: preview.resolution,
       minElevation: preview.minElevation,
-      spanXz: preview.spanXz,
+      spanXz: [spanX, spanZ],
       zScale,
       toward: sun.toward,
       steps: sun.steps,
@@ -992,8 +953,15 @@ export function Viewport3D({ preference, onBackend }: {
   const remoteRung = hasRemoteTerrain ? ladderRung : TERRAIN_RUNGS[0];
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const runtimeRef = useRef<Runtime | null>(null);
+  const editorRef = useRef<EditorViewport | null>(null);
+  const editorErrorRef = useRef<string>(undefined);
+  const hostSyncRef = useRef<() => void>(null);
   const [viewport] = useState(() => new ViewportModel());
+  const [previewVersion, previewsChanged] = useState(0);
+  const previewResolutionRef = useRef({ terrainResolution, remoteRung });
+  previewResolutionRef.current = { terrainResolution, remoteRung };
   const actionsRef = useRef(actions);
   actionsRef.current = actions;
 
@@ -1008,6 +976,8 @@ export function Viewport3D({ preference, onBackend }: {
   const [cursorElevation, setCursorElevation] = useState<number | null>(null);
   const [size, setSize] = useState({ width: 960, height: 600 });
   const [problem, setProblem] = useState<string | null>(null);
+  const [backendProblem, setBackendProblem] = useState<string>();
+  const [editorAvailable, setEditorAvailable] = useState(false);
   /** Shown when the GPU probe had to downgrade a feature (see Runtime.glStep). */
   const [gpuNote, setGpuNote] = useState<string | null>(null);
   const savedView = useRef<{
@@ -1133,7 +1103,10 @@ export function Viewport3D({ preference, onBackend }: {
   const terrainCache = useRef(new Map<string, Map<number, Promise<TerrainPreview>>>());
   useLayoutEffect(() => {
     const replaced = viewport.current.projectGeneration !== projectGeneration || viewport.current.projectId !== (state?.project.id ?? null);
+    const previousTerrains = viewport.current.terrains;
     viewport.setProject(state?.project ?? null, projectGeneration, cameraView, assetGenerations);
+    hostSyncRef.current?.();
+    if (viewport.current.terrains.size !== previousTerrains.size) previewsChanged(version => version + 1);
     const sampleRevisions = new Set(viewport.current.objects.map(object => object.terrainRevision));
     for (const key of terrainCache.current.keys()) {
       if (replaced || !sampleRevisions.has(key)) terrainCache.current.delete(key);
@@ -1147,9 +1120,11 @@ export function Viewport3D({ preference, onBackend }: {
     }
   }, [viewport, state?.project, projectGeneration, cameraView, assetGenerations]);
 
+  useLayoutEffect(() => { hostSyncRef.current?.(); }, [preference, terrainResolution, remoteRung]);
+
   const readTerrain = useCallback(
     (asset: Asset, source: { worldSpanXz: [number, number] | null; worldOriginXz: [number, number] | null },
-      revision: string, resolution: number): Promise<TerrainPreview> => {
+      revision: string, resolution: number, limit = 256): Promise<TerrainPreview> => {
       const { path } = asset;
       let cache = terrainCache.current.get(revision);
       if (!cache) {
@@ -1158,23 +1133,18 @@ export function Viewport3D({ preference, onBackend }: {
       }
       let pending = cache.get(resolution);
       if (!pending) {
-        pending = isRemoteDemPath(path)
+        const sampled = isRemoteDemPath(path)
           ? bridge.remoteCogPreview(path, resolution).then((preview) => ({
-              ok: preview.ok,
-              width: preview.width,
-              height: preview.height,
-              resolution: preview.resolution,
-              minElevation: preview.minElevation,
-              maxElevation: preview.maxElevation,
-              heights: preview.heights,
-              // The project retains the CRS footprint, while the COG
-              // reader has no accessor for the CRS's unit scale.
-              extentMeters: null,
-              spanMetresPerUnit: null,
-              spanXz: source.worldSpanXz ?? [preview.levelWidth, preview.levelHeight],
-              originXz: source.worldOriginXz ?? [0, 0],
+              ...preview,
+              spanXz: source.worldSpanXz ?? preview.spanXz,
+              originXz: source.worldOriginXz ?? preview.originXz,
             }))
           : bridge.terrainPreview(path, resolution);
+        // Only valid grids can be reused by a later visibility or resolution change.
+        pending = sampled.then(preview => {
+          validateTerrainPreview(preview, limit, resolution);
+          return preview;
+        });
         cache.set(resolution, pending);
         const request = pending;
         request.catch(() => { if (cache.get(resolution) === request) cache.delete(resolution); });
@@ -1248,6 +1218,215 @@ export function Viewport3D({ preference, onBackend }: {
     const canvas = canvasRef.current;
     if (!container || !canvas) return;
 
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 2000);
+    const target = new THREE.Vector3(0, 0.8, 0);
+    camera.position.set(9.5, 7, 11);
+    camera.lookAt(target);
+    cameraRef.current = camera;
+
+    // Each mount owns its canvas, including while runtime creation is pending.
+    const terrainCanvas = document.createElement("canvas");
+    terrainCanvas.className = "viewport-canvas viewport-canvas--terrain";
+    terrainCanvas.setAttribute("aria-hidden", "true");
+    terrainCanvas.hidden = true;
+    container.insertBefore(terrainCanvas, canvas);
+    let dirty = true;
+    let mounted = true;
+    const invalidate = () => { dirty = true; };
+    const cameraAxis = new THREE.Vector3();
+    const readCamera = () => {
+      const runtime = runtimeRef.current;
+      const aim = runtime && (inCameraView.current || flyModeRef.current)
+        ? { forward: cameraAxis.set(0, 0, -1).applyQuaternion(camera.quaternion).toArray() }
+        : { orbitTarget: (runtime?.orbit.target ?? target).toArray() };
+      return { eye: camera.position.toArray(), aim,
+        up: cameraAxis.set(0, 1, 0).applyQuaternion(camera.quaternion).toArray(),
+        fovYDegrees: camera.fov, near: camera.near, far: camera.far };
+    };
+    const sampleResolution = (asset: Asset, span: TerrainPreview["spanXz"] | null, limit?: number) => {
+      const { terrainResolution, remoteRung } = previewResolutionRef.current;
+      return boundedTerrainResolution(requestedTerrainResolution(asset, span, terrainResolution, remoteRung), limit);
+    };
+    viewStore.resolve = async () => {
+      const frame = viewport.current;
+      const camera = readCamera();
+      const object = firstVisibleTerrain(frame);
+      if (object?.kind.type !== "terrain") return;
+      const source = object.kind;
+      const asset = frame.assets.find(item => item.id === source.asset);
+      if (!asset || !object.terrainRevision) throw new Error("Missing DEM asset · relink it in the Assets panel");
+      let preview: TerrainPreview | undefined = frame.terrains.get(object.id)?.preview;
+      if (!preview) {
+        const resolution = sampleResolution(asset, source.worldSpanXz) ?? 96;
+        preview = await readTerrain(asset, source, object.terrainRevision, resolution);
+      }
+      const current = viewport.current;
+      const selected = firstVisibleTerrain(current);
+      if (!mounted || current.projectGeneration !== frame.projectGeneration ||
+          selected?.id !== object.id || selected.terrainRevision !== object.terrainRevision ||
+          selected.kind.type !== "terrain" || selected.kind.zScale !== source.zScale) {
+        throw new Error("The render terrain changed while preparing the view");
+      }
+      return nativeRenderView({ ...frame, camera }, preview) ?? undefined;
+    };
+    const terrainViewport = new ForgeTerrainViewport(terrainCanvas, studioSkyRadiance(), invalidate, (status, error) => {
+      onBackend(status);
+      setBackendProblem(error);
+    }, (source, resolution, heights, owner) => {
+      if (viewport.admitTerrain(source, resolution, heights, owner)) previewsChanged(version => version + 1);
+    });
+    hostSyncRef.current = () => {
+      terrainViewport.sync(view());
+      invalidate();
+    };
+    const view = () => {
+      const runtime = runtimeRef.current;
+      const frame = viewport.current;
+      return { frame, preference: preferenceRef.current, sampling: previewResolutionRef.current, clay: CLAY,
+        background: frame.settings.mode === "solid" ? SOLID_BG : MATERIAL_BG,
+        editor: runtime ? { objects: runtime.objects, projectionCamera: camera,
+          sunShadowsDisabled: runtime.glStep >= GPU_STEP_WITHOUT_SUN_SHADOWS,
+          skyEnabled: !!runtime.scene.environment } : undefined,
+        editorError: editorErrorRef.current };
+    };
+
+    type TerrainBackend = ReturnType<ForgeTerrainViewport["prepare"]>;
+    type PendingPreview = { request: TerrainPreviewRequest; owner: TerrainBackend["runtime"]; backend: TerrainBackend["backend"]; error?: string };
+    const previews = new Map<string, PendingPreview>();
+    const preparePreviews = (choice: TerrainBackend) => {
+      const { runtime: owner, maxTextureDimension2D: limit } = choice;
+      for (const [id, entry] of previews) {
+        if (!viewport.isCurrent(entry.request)) previews.delete(id);
+      }
+      const frame = viewport.current;
+      const objects = choice.backend === "native" || (choice.backend === "forge3d-web" && owner)
+        ? choice.object ? [choice.object] : []
+        : choice.backend === "three" && runtimeRef.current ? frame.objects : [];
+      let error: string | undefined;
+      for (const object of objects) {
+        if (!object.visible || object.kind.type !== "terrain") continue;
+        const source = object.kind;
+        const asset = frame.assets.find(item => item.id === source.asset);
+        if (!asset) {
+          error ??= "Missing DEM asset · relink it in the Assets panel";
+          continue;
+        }
+        const desiredResolution = () => sampleResolution(asset, source.worldSpanXz, limit);
+        const resolution = desiredResolution();
+        if (resolution === undefined) {
+          error ??= `No terrain preview fits the GPU texture limit of ${limit} (minimum 8 × 8)`;
+          if (viewport.discardTerrain(object.id)) previewsChanged(version => version + 1);
+          continue;
+        }
+        const accepted = frame.terrains.get(object.id);
+        const admission = accepted?.admission;
+        if (admission ? admission.owner === owner && admission.requestedResolution === resolution
+          : accepted?.request.resolution === resolution) continue;
+        const previous = previews.get(object.id);
+        // Retiring a failed surface can create another runtime for the same request.
+        // Keep the diagnostic until the user changes the terrain or sampling request.
+        if (previous?.request.resolution === resolution && (previous.owner === owner ||
+            (previous.error && previous.backend === choice.backend))) {
+          error ??= previous.error;
+          continue;
+        }
+        const request = viewport.beginTerrain(object.id, resolution);
+        if (!request) continue;
+        if (accepted) previewsChanged(version => version + 1);
+        const entry: PendingPreview = { request, owner, backend: choice.backend };
+        previews.set(object.id, entry);
+        const current = () => mounted && viewport.isCurrent(request) && desiredResolution() === resolution &&
+          (terrainViewport.backend(view()).backend === "forge3d-web"
+            ? owner && terrainViewport.owns(owner) : !owner);
+        void readTerrain(asset, source, request.terrainRevision, request.resolution, limit).then(preview => {
+          if (!current()) return;
+          validateTerrainPreview(preview, limit, request.resolution);
+          if (!viewport.acceptTerrain(request, preview)) return;
+          previews.delete(object.id);
+          publishGroundScale({ path: asset.path, metresPerUnit: preview.spanMetresPerUnit ?? null });
+          previewsChanged(version => version + 1);
+          invalidate();
+        }).catch(cause => {
+          if (!current()) return;
+          entry.error = `Could not sample ${asset.name} · ${viewportErrorReason(cause)}`;
+          invalidate();
+        });
+      }
+      return error;
+    };
+
+    let animation = 0;
+    let resizePending = true;
+    let observedDpr: number | undefined;
+    let lastDimensions: ViewportDimensions | undefined;
+    const observer = new ResizeObserver(() => { resizePending = true; });
+    observer.observe(container);
+    const resize = (dpr: number) => {
+      resizePending = false;
+      observedDpr = dpr;
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+      if (!width || !height) return;
+      const dimensions = viewportDimensions(width, height, dpr);
+      if (lastDimensions?.cssWidth === width && lastDimensions.cssHeight === height &&
+          lastDimensions.pixelRatio === dimensions.pixelRatio) return;
+      lastDimensions = dimensions;
+      viewport.setDimensions(dimensions);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      editorRef.current?.resize(dimensions);
+      setSize({ width, height });
+      invalidate();
+    };
+
+    const tick = (now: number) => {
+      animation = requestAnimationFrame(tick);
+      // A display scale change can leave the CSS box unchanged.
+      const dpr = window.devicePixelRatio;
+      if (resizePending || dpr !== observedDpr) resize(dpr);
+      const editor = editorRef.current;
+      const runtime = runtimeRef.current;
+      const moved = editor?.update(now);
+      const lost = terrainViewport.lost();
+      if (!dirty && !moved && !runtime?.needsRender && !lost) return;
+      dirty = false;
+      if (runtime) runtime.needsRender = false;
+      viewport.setCamera(readCamera());
+      // Rendered frames, still export and timeline recording share this camera.
+      viewStore.cameraTransform = cameraTransform(camera);
+      const quaternion = camera.quaternion.toArray();
+      setQuaternion(previous => previous.some((value, index) => Math.abs(value - quaternion[index]) > 1e-4) ? quaternion : previous);
+      const choice = terrainViewport.prepare(view());
+      const previewError = preparePreviews(choice);
+      const presented = terrainViewport.draw(view(), previewError);
+      editor?.present(presented, previewError);
+    };
+    if (import.meta.env.DEV) {
+      Object.assign(window, { forge3dViewportDiagnostics: () => ({ terrainViewport, runtime: runtimeRef.current,
+        frame: viewport.current, nativeView: nativeRenderView(viewport.current),
+        queryTerrain: (x: number, z: number) => terrainViewport.queryTerrain(viewport.current, x, z) }) });
+    }
+    animation = requestAnimationFrame(tick);
+    return () => {
+      mounted = false;
+      cancelAnimationFrame(animation);
+      observer.disconnect();
+      hostSyncRef.current = null;
+      cameraRef.current = null;
+      viewStore.resolve = null;
+      viewStore.cameraTransform = null;
+      terrainViewport.dispose();
+      terrainCanvas.remove();
+      if (import.meta.env.DEV) Reflect.deleteProperty(window, "forge3dViewportDiagnostics");
+    };
+  }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const canvas = canvasRef.current;
+    const camera = cameraRef.current;
+    if (!container || !canvas || !camera) return;
+
     let renderer: THREE.WebGLRenderer;
     try {
       renderer = new THREE.WebGLRenderer({
@@ -1259,11 +1438,14 @@ export function Viewport3D({ preference, onBackend }: {
         powerPreference: "high-performance",
       });
     } catch (cause) {
-      setProblem(
-        `WebGL is unavailable in this webview: ${cause instanceof Error ? cause.message : cause}`,
-      );
+      editorErrorRef.current = `WebGL unavailable · ${viewportErrorReason(cause)}`;
+      canvas.hidden = true;
+      setEditorAvailable(false);
       return;
     }
+    canvas.hidden = false;
+    editorErrorRef.current = undefined;
+    setEditorAvailable(true);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     // The renderer tone-maps (ACES, exposure 1.35); without this the viewport
     // reads much brighter than the Rendered frame.
@@ -1275,9 +1457,6 @@ export function Viewport3D({ preference, onBackend }: {
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(SOLID_BACKGROUND);
-
-    const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 2000);
-    camera.position.set(9.5, 7, 11);
 
     const orbit = new OrbitControls(camera, canvas);
     orbit.target.set(0, 0.8, 0);
@@ -1379,44 +1558,10 @@ export function Viewport3D({ preference, onBackend }: {
       selection: [],
     };
     runtimeRef.current = runtime;
-    const terrainCanvas = document.createElement("canvas");
-    terrainCanvas.className = "viewport-canvas viewport-canvas--terrain";
-    terrainCanvas.setAttribute("aria-hidden", "true");
-    terrainCanvas.hidden = true;
-    container.insertBefore(terrainCanvas, canvas);
-    const terrainViewport = new ForgeTerrainViewport(terrainCanvas, skyPixels, () => { runtime.needsRender = true; }, onBackend);
-
-    let observedDpr: number | undefined;
-    let resizePending = true;
-    let lastDimensions: ViewportDimensions | undefined;
-    const resize = (dpr: number) => {
-      resizePending = false;
-      observedDpr = dpr;
-      const width = container.clientWidth;
-      const height = container.clientHeight;
-      if (width === 0 || height === 0) return;
-      const dimensions = viewportDimensions(width, height, dpr);
-      if (lastDimensions?.cssWidth === width && lastDimensions.cssHeight === height &&
-          lastDimensions.pixelRatio === dimensions.pixelRatio) return;
-      lastDimensions = dimensions;
-      viewport.setDimensions(dimensions);
-      renderer.setDrawingBufferSize(width, height, dimensions.pixelRatio);
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
-      runtime.overlay.visible = viewportModeRef.current !== "rendered";
-      if (runtime.labelLayer) runtime.labelLayer.style.display = runtime.overlay.visible ? "" : "none";
-      for (const line of runtime.lineMaterials) {
-        line.resolution.set(width, height);
-      }
-      runtime.needsRender = true;
-      setSize((current) =>
-        current.width === width && current.height === height
-          ? current
-          : { width, height },
-      );
+    const resize = ({ cssWidth: width, cssHeight: height, pixelRatio }: ViewportDimensions) => {
+      renderer.setDrawingBufferSize(width, height, pixelRatio);
+      for (const line of runtime.lineMaterials) line.resolution.set(width, height);
     };
-    const observer = new ResizeObserver(() => { resizePending = true; });
-    observer.observe(container);
 
     gizmo.addEventListener("dragging-changed", (event) => {
       // Fly mode owns the camera: re-enabling OrbitControls here would let its
@@ -1602,20 +1747,8 @@ export function Viewport3D({ preference, onBackend }: {
     window.addEventListener("keyup", onFlyKeyUp);
     window.addEventListener("blur", onWindowBlur);
 
-    /**
-     * Publish the viewport camera as a scene transform. The timeline's path
-     * recorder reads it while a take is running, so what gets keyed is exactly
-     * what is on screen — the camera's own orientation, not an orbit aim.
-     */
-    let frame = 0;
-    const cameraAxis = new THREE.Vector3();
-    let lastQuaternion: Quaternion = [0, 0, 0, 1];
     let lastTick = performance.now();
-    const tick = (now: number = performance.now()) => {
-      frame = requestAnimationFrame(tick);
-      // A scale change can leave the CSS box unchanged. Synchronize both sizes just before drawing.
-      const dpr = window.devicePixelRatio;
-      if (resizePending || dpr !== observedDpr) resize(dpr);
+    const update = (now: number) => {
       const dt = Math.min(0.1, (now - lastTick) / 1000);
       lastTick = now;
       // OrbitControls.update() ends with `camera.lookAt(target)`, which would
@@ -1637,18 +1770,10 @@ export function Viewport3D({ preference, onBackend }: {
         if (flyKeys.current.has("q")) camera.position.y -= speed;
         runtime.needsRender = true;
       }
-      const aim = inCameraView.current || flying
-        ? { forward: cameraAxis.set(0, 0, -1).applyQuaternion(camera.quaternion).toArray() }
-        : { orbitTarget: orbit.target.toArray() };
-      viewport.setCamera({ eye: camera.position.toArray(), aim,
-        up: cameraAxis.set(0, 1, 0).applyQuaternion(camera.quaternion).toArray(),
-        fovYDegrees: camera.fov, near: camera.near, far: camera.far });
-      viewStore.current = nativeRenderView(viewport.current);
-      viewStore.cameraTransform = cameraTransform(camera);
       // Cartography labels ride the projection: cheap per frame, and the
       // occlusion pass (a ray per anchor against the terrain) only runs
       // when the camera actually moved.
-      runtime.overlay.visible = viewportModeRef.current !== "rendered";
+      runtime.overlay.visible = viewportModeRef.current !== "rendered" && viewport.current.terrains.size > 0;
       const labelLayerEl = runtime.labelLayer;
       if (labelLayerEl) {
         if (runtime.overlay.visible && anchorsRef.current.length > 0) {
@@ -1730,37 +1855,46 @@ export function Viewport3D({ preference, onBackend }: {
         }
       }
       for (const helper of runtime.helpers) helper.update();
-      const q = camera.quaternion;
-      if (
-        Math.abs(q.x - lastQuaternion[0]) > 1e-4 ||
-        Math.abs(q.y - lastQuaternion[1]) > 1e-4 ||
-        Math.abs(q.z - lastQuaternion[2]) > 1e-4 ||
-        Math.abs(q.w - lastQuaternion[3]) > 1e-4
-      ) {
-        lastQuaternion = [q.x, q.y, q.z, q.w];
-        setQuaternion(lastQuaternion);
+      return moved;
+    };
+    const present: EditorViewport["present"] = (frame, previewError) => {
+      // While WebGPU owns terrain presentation, the editor can only use the
+      // successfully submitted terrain, and only for depth.
+      const depthTerrain = frame?.submitted ? frame.terrain : undefined;
+      const accepted = viewport.current.terrains;
+      for (const { id, kind, visible } of viewport.current.objects) {
+        if (kind.type !== "terrain") continue;
+        const group = runtime.objects.get(id);
+        if (!group) continue;
+        const terrain = accepted.get(id);
+        group.visible = visible && group.userData.terrain === terrain &&
+          (frame ? depthTerrain?.parent === group : !!terrain || !previewError);
+        for (const helper of runtime.helpers) {
+          if (helper.object === group) helper.visible = group.visible;
+        }
       }
-      const lost = terrainViewport.lost();
-      if (!moved && !runtime.needsRender && !lost) return;
-      runtime.needsRender = false;
-      const terrain = terrainViewport.draw({ preference: preferenceRef.current,
-        sunShadowsDisabled: runtime.glStep >= GPU_STEP_WITHOUT_SUN_SHADOWS,
-        background: viewport.current.settings.mode === "solid" ? SOLID_BG : MATERIAL_BG,
-        skyIntensity: scene.environment ? scene.environmentIntensity : 0,
-        frame: viewport.current, objects: runtime.objects, projectionCamera: camera, sun, renderer });
-      if (terrain) {
-        // Opaque meshes must see the terrain depth before writing any colour.
+      if (!accepted.size || (frame && !depthTerrain)) {
+        runtime.overlay.visible = false;
+        if (runtime.labelLayer) runtime.labelLayer.style.display = "none";
+      }
+      if (frame?.submitted) {
+        // Opaque editor meshes must see the terrain depth before writing colour.
+        const { terrain } = frame;
         const background = scene.background;
-        const order = terrain.renderOrder;
-        const colorWrite = terrain.material.colorWrite;
+        const order = terrain?.renderOrder;
+        const colorWrite = terrain?.material.colorWrite;
         scene.background = null;
         renderer.setClearAlpha(0);
-        terrain.renderOrder = -Infinity;
-        terrain.material.colorWrite = false;
+        if (terrain) {
+          terrain.renderOrder = -Infinity;
+          terrain.material.colorWrite = false;
+        }
         try { renderer.render(scene, camera); }
         finally {
-          terrain.material.colorWrite = colorWrite;
-          terrain.renderOrder = order;
+          if (terrain) {
+            terrain.material.colorWrite = colorWrite!;
+            terrain.renderOrder = order!;
+          }
           scene.background = background;
           renderer.setClearAlpha(1);
         }
@@ -1781,17 +1915,10 @@ export function Viewport3D({ preference, onBackend }: {
         }
       }
     };
-    const diagnostic = () => ({ terrainViewport, runtime, frame: viewport.current, nativeView: viewStore.current });
-    if (import.meta.env.DEV) Object.assign(window, { forge3dViewportDiagnostics: diagnostic });
-    tick();
+    editorRef.current = { resize, update, present };
 
     return () => {
-      if (import.meta.env.DEV) Reflect.deleteProperty(window, "forge3dViewportDiagnostics");
-      terrainViewport.dispose();
-      viewport.setProject(null, viewport.current.projectGeneration, false);
-      terrainCanvas.remove();
-      cancelAnimationFrame(frame);
-      observer.disconnect();
+      editorRef.current = null;
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
@@ -1835,10 +1962,6 @@ export function Viewport3D({ preference, onBackend }: {
       runtimeRef.current = null;
     };
   }, []);
-
-  useEffect(() => {
-    if (runtimeRef.current) runtimeRef.current.needsRender = true;
-  }, [preference]);
 
   // Project state → three.js scene. Runs on every edit; the map diff keeps it
   // to what actually changed.
@@ -1912,16 +2035,17 @@ export function Viewport3D({ preference, onBackend }: {
       const sunVision = sunVisionKey(project);
       const terrainAssetId = object.kind.type === "terrain" ? object.kind.asset : null;
       const terrainAsset = terrainAssetId ? project.assets.find(entry => entry.id === terrainAssetId) : undefined;
-      const resolution = requestedTerrainResolution(terrainAsset,
-        object.kind.type === "terrain" ? object.kind.worldSpanXz : null, terrainResolution, remoteRung);
+      const terrain = viewport.current.terrains.get(object.id);
+      const resolution = terrain?.request.resolution ?? 0;
       const imagery = terrainAssetId ? topImagery(project) : null;
       const overlayAsset = imagery ? project.assets.find(entry => entry.id === imagery.asset) : undefined;
       const overlayRevision = overlayAsset ? assetRevision(overlayAsset, assetGenerations.get(overlayAsset.id)) : "";
       const signature = `${project.id}:${projectGeneration}:${contentSignature(object, resolution, rampKey, {
         assetRevision: overlayRevision, opacity: imagery?.opacity ?? 0,
       }, sunVision, terrainSampleRevision(object, terrainAsset, terrainAsset && assetGenerations.get(terrainAsset.id)))}`;
-      if (group.userData.signature !== signature) {
+      if (group.userData.signature !== signature || group.userData.terrain !== terrain) {
         group.userData.signature = signature;
+        group.userData.terrain = terrain;
         disposeChildren(group);
       } else {
         // Rebuilt content keeps its geometry; a mode switch (or a material
@@ -1982,31 +2106,17 @@ export function Viewport3D({ preference, onBackend }: {
             });
         }
       } else if (object.kind.type === "terrain") {
-        const asset = terrainAsset;
-        if (!asset) {
-          setProblem(
-            `Object "${object.name}" references a missing DEM — relink it in the Assets panel.`,
-          );
+        if (!terrain) {
+          if (object.visible && terrainAsset) group.add(buildLoadingPlaceholder());
           continue;
         }
-        const request = viewport.beginTerrain(object.id, resolution);
-        if (!request) continue;
-        group.add(buildLoadingPlaceholder());
-        const current = () => runtimeRef.current === runtime && viewport.isCurrent(request)
+        const { preview } = terrain;
+        const current = () => runtimeRef.current === runtime && viewport.isCurrent(terrain.request)
           && runtime.objects.get(object.id) === group && group.userData.signature === signature;
-        Promise.all([
-          readTerrain(asset, object.kind, request.terrainRevision, request.resolution),
-          rampName
-            ? loadColormapStops(rampName).then((stops) => ({
-                stops,
-                strength: rampStrength,
-              }))
-            : Promise.resolve(null),
-        ])
-          .then(([preview, ramp]) => {
+        const rampData = rampName ? loadColormapStops(rampName).then(stops => ({ stops, strength: rampStrength }))
+          : Promise.resolve(null);
+        void rampData.then(ramp => {
             if (!current()) return;
-            const terrain = viewport.acceptTerrain(request, preview);
-            if (!terrain) return;
             disposeChildren(group);
             const mesh = buildTerrainMesh(
               terrain,
@@ -2020,8 +2130,6 @@ export function Viewport3D({ preference, onBackend }: {
             mapGridRef.current = null;
             setMapGridInterval(null);
             const metresPerUnit = preview.spanMetresPerUnit ?? null;
-            // The inspectors' Footprint and Relief read the same scale.
-            publishGroundScale({ path: asset.path, metresPerUnit });
             const gridHost = containerRef.current;
             // A metre grid needs a known ground scale. Metre CRSs keep their
             // real eastings and northings; other units (US feet, …) get true
@@ -2068,7 +2176,7 @@ export function Viewport3D({ preference, onBackend }: {
           .catch((cause) => {
             if (!current()) return;
             setProblem(
-              `Could not sample ${asset.name}: ${cause instanceof Error ? cause.message : cause}`,
+              `Could not build terrain preview: ${viewportErrorReason(cause)}`,
             );
           });
       } else if (object.kind.type === "camera") {
@@ -2214,15 +2322,13 @@ export function Viewport3D({ preference, onBackend }: {
     assetGenerations,
     cameraView,
     flyMode,
-    remoteRung,
     loadColormapStops,
     loadTexture,
     projectGeneration,
     readMesh,
-    readTerrain,
+    previewVersion,
     space,
     state,
-    terrainResolution,
     tool,
     viewport,
   ]);
@@ -2258,24 +2364,8 @@ export function Viewport3D({ preference, onBackend }: {
           ]),
       )
     : "";
-  // The terrain the overlay drapes on: which object, which DEM, and its
-  // vertical exaggeration. The effect reads all three from stateRef, so they
-  // must be dependencies too, or a zScale edit leaves the lines at the old
-  // height while the mesh moves.
-  const overlayTerrain = state?.project.scene.objects.find(
-    (object) => object.kind.type === "terrain",
-  );
-  const overlayTerrainKind =
-    overlayTerrain?.kind.type === "terrain" ? overlayTerrain.kind : null;
-  const overlayTerrainAsset = state?.project.assets.find(asset => asset.id === overlayTerrainKind?.asset);
-  const overlayTerrainRevision = overlayTerrain && terrainSampleRevision(overlayTerrain,
-    overlayTerrainAsset, overlayTerrainAsset && assetGenerations.get(overlayTerrainAsset.id));
-  const overlayResolution = requestedTerrainResolution(overlayTerrainAsset, overlayTerrainKind?.worldSpanXz ?? null,
-    terrainResolution, remoteRung);
-  const overlayTerrainKey =
-    overlayTerrain && overlayTerrainKind
-      ? JSON.stringify([overlayTerrain.id, overlayTerrainKind.zScale, overlayTerrainRevision])
-      : "";
+  // The overlay uses the same accepted grid and exaggeration as the surface.
+  const overlayTerrainId = state?.project.scene.objects.find(object => object.visible && object.kind.type === "terrain")?.id;
   // The dependency list is the rebuild rule: the visible stack's signature,
   // the terrain key above, or the sampling resolution (the drape must
   // follow the mesh). No extra "same signature" guard: a re-run
@@ -2300,31 +2390,16 @@ export function Viewport3D({ preference, onBackend }: {
     anchorsRef.current = [];
 
     const project = stateRef.current?.project;
-    const terrainObject = project?.scene.objects.find(
-      (object) => object.kind.type === "terrain",
-    );
-    if (!project || !terrainObject || terrainObject.kind.type !== "terrain") {
+    const terrain = overlayTerrainId && viewport.current.terrains.get(overlayTerrainId);
+    const source = project?.scene.objects.find(object => object.id === overlayTerrainId)?.kind;
+    const terrainAsset = source?.type === "terrain" ? project?.assets.find(asset => asset.id === source.asset) : undefined;
+    if (!project || !terrain || !terrainAsset) {
       runtime.needsRender = true;
       return;
     }
-    const terrainKind = terrainObject.kind;
-    const terrainAsset = overlayTerrainAsset;
-    if (!terrainAsset || overlayTerrainRevision == null) {
-      runtime.needsRender = true;
-      return;
-    }
-    const zScale = terrainKind.zScale;
+    const { zScale, preview } = terrain;
 
     (async () => {
-      let preview: TerrainPreview;
-      try {
-        // Shares the terrain cache with the mesh build — one read per DEM.
-        preview = await readTerrain(terrainAsset, terrainKind, overlayTerrainRevision, overlayResolution);
-      } catch {
-        // The terrain's own error path already reports this one.
-        return;
-      }
-      if (cancelled) return;
       const spanXz = preview.spanXz;
       const lift = drapeLift(spanXz, [preview.minElevation, preview.maxElevation], zScale);
       const lineMaterials: LineMaterial[] = [];
@@ -2522,7 +2597,7 @@ export function Viewport3D({ preference, onBackend }: {
     return () => {
       cancelled = true;
     };
-  }, [cartographySignature, overlayTerrainKey, overlayResolution, projectGeneration, readTerrain]);
+  }, [cartographySignature, overlayTerrainId, previewVersion, projectGeneration, viewport]);
 
   // A project HDRI replaces the studio sky for Material and Rendered. The
   // viewport decodes and pre-filters it here (Rendered receives the path and
@@ -2701,7 +2776,7 @@ export function Viewport3D({ preference, onBackend }: {
   type RenderScale = "1" | "2" | "4" | "project" | "dem";
   const [renderScale, setRenderScale] = useState<RenderScale>("1");
 
-  const terrainObject = state?.project.scene.objects.find((object) => object.kind.type === "terrain");
+  const terrainObject = state && firstVisibleTerrain(state.project.scene);
   const demDims = terrainObject?.kind.type === "terrain" ? terrainObject.kind.dimensions : null;
   const terrainKind = terrainObject?.kind.type === "terrain" ? terrainObject.kind : null;
   const terrainSource = terrainKind
@@ -2883,20 +2958,20 @@ export function Viewport3D({ preference, onBackend }: {
   // A frame belongs to the camera and scene that produced it. Entering Rendered
   // drops the previous image so a stale view cannot cover the live scene while
   // the first engine frame is produced.
-  const wasRendered = useRef(false);
+  const renderedProject = useRef<number | null>(null);
   useEffect(() => {
-    if (renderedMode && !wasRendered.current) {
+    if (renderedMode && renderedProject.current !== projectGeneration) {
       actionsRef.current.clearRenderFrame();
     }
-    wasRendered.current = renderedMode;
-  }, [renderedMode]);
+    renderedProject.current = renderedMode ? projectGeneration : null;
+  }, [projectGeneration, renderedMode]);
 
   // Entering Rendered mode renders once at the current viewport size, and a
   // change of that size renders again: a window resize otherwise leaves a frame
   // at the old size covering the new viewport. Orbiting re-renders through the
   // orbit handler, which the session coalesces ("newest wins").
   const renderedOnce = useRef(false);
-  const renderedSize = useRef<{ width: number; height: number } | null>(null);
+  const renderedSize = useRef<{ width: number; height: number; projectGeneration: number } | null>(null);
   useEffect(() => {
     if (!renderedMode) {
       renderedOnce.current = false;
@@ -2911,13 +2986,14 @@ export function Viewport3D({ preference, onBackend }: {
     const target = requestSizeRef.current();
     const resized =
       renderedSize.current === null ||
+      renderedSize.current.projectGeneration !== projectGeneration ||
       renderedSize.current.width !== target.width ||
       renderedSize.current.height !== target.height;
     if (render.busy || (renderedOnce.current && !resized)) return;
     renderedOnce.current = true;
-    renderedSize.current = target;
+    renderedSize.current = { ...target, projectGeneration };
     void actions.renderViewport(target.width, target.height, "preview");
-  }, [actions, render.busy, renderedMode, render.error, size.height, size.width]);
+  }, [actions, projectGeneration, render.busy, renderedMode, render.error, size.height, size.width]);
 
   // Scene edits (sun, exposure, overlay, z-scale, transforms…) re-render the
   // frame after a short pause, so the Rendered view reflects the project
@@ -2952,9 +3028,10 @@ export function Viewport3D({ preference, onBackend }: {
   const scene = state?.project.scene;
   const camera = scene?.objects.find((object) => object.id === scene.activeCamera);
   // The renderer is a terrain pipeline: say which objects it cannot draw.
-  const unrendered = (scene?.objects ?? [])
-    .filter((object) => object.kind.type === "terrain")
-    .length === 0
+  const visibleTerrain = scene?.objects.find(object => object.visible && object.kind.type === "terrain");
+  const renderedFrame = visibleTerrain && render.frame?.source?.sessionId === state?.sessionId &&
+    render.frame?.source?.terrainId === visibleTerrain.id ? render.frame : null;
+  const unrendered = !visibleTerrain
     ? ["everything"]
     : (scene?.objects ?? [])
         .filter((object) => object.kind.type === "mesh" && object.visible)
@@ -2964,15 +3041,15 @@ export function Viewport3D({ preference, onBackend }: {
     <div className="viewport" ref={containerRef}>
       <canvas ref={canvasRef} className="viewport-canvas" />
       {renderedMode && (
-        <div className={`viewport-rendered ${render.frame ? "has-frame" : ""}`}>
-          {render.frame && (
+        <div className={`viewport-rendered ${renderedFrame ? "has-frame" : ""}`}>
+          {renderedFrame && (
             <img
-              src={`data:image/png;base64,${render.frame.png}`}
+              src={`data:image/png;base64,${renderedFrame.png}`}
               alt="Forge3D render of the current scene"
               className={render.busy ? "is-updating" : undefined}
             />
           )}
-          {render.busy && render.frame && (
+          {render.busy && renderedFrame && (
             <div className="viewport-rendered__updating">Updating…</div>
           )}
           {unrendered.length > 0 && (
@@ -2985,11 +3062,11 @@ export function Viewport3D({ preference, onBackend }: {
           <div className="viewport-rendered__bar">
             <span>
               {render.busy
-                ? render.frame
-                  ? `Updating… (showing ${render.frame.width} × ${render.frame.height})`
+                ? renderedFrame
+                  ? `Updating… (showing ${renderedFrame.width} × ${renderedFrame.height})`
                   : "Rendering with the Forge3D terrain pipeline…"
-                : render.frame
-                  ? `${render.frame.width} × ${render.frame.height} · ${(render.frame.ms / 1000).toFixed(2)} s`
+                : renderedFrame
+                  ? `${renderedFrame.width} × ${renderedFrame.height} · ${(renderedFrame.ms / 1000).toFixed(2)} s`
                   : "No frame rendered yet"}
             </span>
             <div className="viewport-rendered__scale" ref={sizeMenuRef}>
@@ -3059,7 +3136,7 @@ export function Viewport3D({ preference, onBackend }: {
           <NorthArrow
             quaternion={quaternion}
             onNorth={viewNorth}
-            disabled={cameraView || flyMode}
+            disabled={!editorAvailable || cameraView || flyMode}
           />
           <dl className="viewport-readout">
             {elevationReadout && (
@@ -3074,7 +3151,7 @@ export function Viewport3D({ preference, onBackend }: {
                 <dd>{footprintReadout}</dd>
               </div>
             )}
-            {!renderedMode && (
+            {editorAvailable && !renderedMode && (
               <div className="viewport-readout__cursor">
                 <dt>CURSOR</dt>
                 <dd>
@@ -3115,31 +3192,31 @@ export function Viewport3D({ preference, onBackend }: {
           )}
         </div>
       ) : (
-        <AxisGizmo quaternion={quaternion} onPick={viewAlong} />
+        editorAvailable && <AxisGizmo quaternion={quaternion} onPick={viewAlong} />
       )}
       {/* Credits the engine only for a frame it actually produced: no stamp
           over "No frame rendered yet" or a failed render. */}
-      {renderedMode && render.frame && (
+      {renderedMode && renderedFrame && (
         <span className="viewport-stamp">Rendered by Forge3D</span>
       )}
       {terrainSource && (
         <span className="viewport-attribution">Elevation source · {terrainSource}</span>
       )}
       <div className="viewport-overlay viewport-overlay--bottom">
-        <span className="viewport-hint">
+        {editorAvailable && <span className="viewport-hint">
           {cameraView
             ? "Camera view · press 0 or the camera button to return to the free view"
             : tool === "select"
               ? "Click to select · drag to orbit · middle-drag to pan · scroll to zoom"
               : `${tool[0].toUpperCase()}${tool.slice(1)} tool · drag the gizmo · G/R/S to switch`}
-        </span>
+        </span>}
         <span className="viewport-camera">
           {camera ? `Active camera: ${camera.name}` : "No active camera"}
           {mode === "rendered" ? " · Forge3D engine" : ""}
         </span>
         {gpuNote && <span className="viewport-gpu-note">{gpuNote}</span>}
       </div>
-      {problem && !renderedMode && <div className="viewport-problem">{problem}</div>}
+      {(backendProblem || problem) && !renderedMode && <div className="viewport-problem">{backendProblem ?? problem}</div>}
       {renderedMode && render.error && (
         <div className="viewport-problem">{render.error}</div>
       )}

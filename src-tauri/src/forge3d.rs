@@ -240,172 +240,22 @@ def main():
 main()
 "#;
 
-/// Sampling script for the Studio heightfield preview.
-///
-/// Reading, nodata masking and the metric footprint are the engine's
-/// (`forge3d.io.load_dem`, `forge3d.gis`), so a preview and a render can never
-/// disagree about a DEM. Only the down-sample and the JSON shape are the
-/// shell's.
-const PREVIEW_SCRIPT: &str = r#"
+/// Sample a local DEM in the same physical units as the Gallery preview.
+const PREVIEW_SCRIPT: &str = concat!(
+    include_str!("studio_cog.py"),
+    "\n",
+    r#"
 import json, sys
-
-try:
-    import numpy as np
-    import forge3d.io as fio
-    from forge3d import gis
-except Exception as exc:
-    print(json.dumps({"ok": False, "detail": "the engine is unavailable: %s" % (exc,)}))
-    raise SystemExit(0)
 
 path = sys.argv[1]
 resolution = max(8, min(256, int(sys.argv[2])))
 try:
-    dem = fio.load_dem(path, fill_nodata_values=False)
+    grid, _, source = read_dem_overview(path, resolution)
+    print(json.dumps({**source, **sample_dem(grid, resolution, "the DEM contains no valid elevation samples")}))
 except Exception as exc:
     print(json.dumps({"ok": False, "detail": "the DEM could not be read: %s" % (exc,)}))
-    raise SystemExit(0)
-
-raw = np.asarray(dem.data, dtype="float64")
-if dem.nodata_value is not None:
-    # A sentinel such as -3.4e38 would otherwise define the range and turn the
-    # mesh into spikes.
-    raw = np.where(np.isclose(raw, float(dem.nodata_value)), np.nan, raw)
-valid = np.isfinite(raw)
-if not valid.any():
-    print(json.dumps({"ok": False, "detail": "the DEM contains no valid elevation samples"}))
-    raise SystemExit(0)
-
-# A robust range: single corrupted samples (one 11 km pixel in the Swiss DEM)
-# would otherwise define the display range and flatten everything.
-values = raw[valid]
-low, high = np.percentile(values, [0.01, 99.99])
-min_elevation = float(low)
-max_elevation = float(high)
-outliers = int(np.count_nonzero((values < low) | (values > high)))
-
-height, width = raw.shape
-ys = np.linspace(0, height, resolution + 1).astype(int)
-xs = np.linspace(0, width, resolution + 1).astype(int)
-out = np.empty((resolution, resolution), dtype="float64")
-for j in range(resolution):
-    for i in range(resolution):
-        block = raw[ys[j]:max(ys[j] + 1, ys[j + 1]), xs[i]:max(xs[i] + 1, xs[i + 1])]
-        good = block[np.isfinite(block)]
-        if good.size:
-            out[j, i] = float(np.clip(good.mean(), min_elevation, max_elevation))
-        else:
-            out[j, i] = min_elevation
-
-def crs_kind_and_unit(text):
-    """("projected" | "geographic" | "unknown", metres per linear unit or None).
-
-    pyproj first (it knows every EPSG unit), then the engine's own table,
-    like forge3d.scale_bar. Anything neither can name is "unknown": its unit
-    is never guessed as metres.
-    """
-    try:
-        from pyproj import CRS
-    except ImportError:
-        CRS = None
-    if CRS is not None:
-        try:
-            parsed = CRS.from_user_input(text)
-        except Exception:
-            return "unknown", None
-        if parsed.is_geographic:
-            return "geographic", None
-        if parsed.is_projected:
-            return "projected", float(parsed.axis_info[0].unit_conversion_factor)
-        return "unknown", None
-    try:
-        info = gis._crs_metadata(text)
-    except Exception:
-        return "unknown", None
-    return str(info.get("kind") or "unknown"), info.get("linear_unit_to_meters")
-
-# World footprint. `span_xz` stays in the CRS's own linear unit (the render
-# path frames with it); `metres_per_unit` says what one unit is on the ground,
-# and is None when that is unknown: a CRS-less raster's span is pixels, and
-# an unnamed CRS's unit cannot be trusted. Geographic rasters (degrees) are
-# reprojected to their local UTM zone, so their span is metres.
-def utm_span(source_crs, bounds):
-    """The bounds' extent in their local UTM zone, metres; None if no
-    backend can transform them. pyproj handles every geographic datum; the
-    engine's own path covers WGS84 when pyproj is absent (it has no PROJ
-    backend for NAD83 or ETRS89 sources)."""
-    try:
-        local = gis.estimate_local_utm(bounds)["crs"]
-    except Exception:
-        return None
-    try:
-        from pyproj import Transformer
-    except ImportError:
-        Transformer = None
-    if Transformer is not None:
-        try:
-            left, bottom, right, top = Transformer.from_crs(
-                source_crs, local, always_xy=True
-            ).transform_bounds(*bounds, densify_pts=21)
-            return [abs(right - left), abs(top - bottom)]
-        except Exception:
-            pass
-    try:
-        left, bottom, right, top = gis.transform_bounds(source_crs, local, bounds, densify=21)
-        return [abs(right - left), abs(top - bottom)]
-    except Exception:
-        return None
-
-crs = str(dem.crs or "")
-kind, unit = crs_kind_and_unit(crs) if crs else ("none", None)
-geographic = kind == "geographic" or "4326" in crs or "wgs84" in crs.lower()
-origin_xz = [0.0, 0.0]
-metres_per_unit = None
-metric_span = (
-    utm_span(dem.crs, tuple(dem.bounds))
-    if crs and geographic and dem.bounds is not None
-    else None
-)
-if not crs:
-    span_xz = [float(width), float(height)]
-elif metric_span is not None:
-    span_xz = metric_span
-    metres_per_unit = 1.0
-else:
-    # Projected, or geographic with no backend for the transform: the span
-    # in the CRS's own unit, with the ground scale left unknown for degrees.
-    res = dem.resolution or (1.0, 1.0)
-    span_xz = [abs(float(res[0])) * width, abs(float(res[1])) * height]
-    transform = dem.transform
-    if transform is not None:
-        origin_xz = [
-            float(getattr(transform, "c", 0.0)),
-            float(-getattr(transform, "f", 0.0)),
-        ]
-    if kind == "projected" and unit and unit > 0:
-        metres_per_unit = float(unit)
-
-payload = {
-    "ok": True,
-    "width": int(width),
-    "height": int(height),
-    "minElevation": min_elevation,
-    "maxElevation": max_elevation,
-    # Ground metres, or None when the ground scale is unknown.
-    "extentMeters": (
-        [span_xz[0] * metres_per_unit, span_xz[1] * metres_per_unit]
-        if metres_per_unit is not None
-        else None
-    ),
-    "originXz": origin_xz,
-    "spanXz": span_xz,
-    "spanMetresPerUnit": metres_per_unit,
-    "geographic": bool(geographic),
-    "outliers": outliers,
-    "resolution": resolution,
-    "heights": [round(float(value), 2) for value in out.ravel()],
-}
-print(json.dumps(payload))
-"#;
+"#
+);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -529,13 +379,16 @@ impl Forge3dState {
         preset: Option<&str>,
     ) -> Result<Option<studio_core::TerrainSeed>, String> {
         if let Some(url) = preset.and_then(|id| id.strip_prefix("url:")) {
-            // Phase 18.3: open without a whole-file download. The engine's
-            // range reader supplies the metadata (one HEAD + one coarse
-            // overview); the still streams the tiles it needs later.
+            // Keep the URL, actual byte length and full-source footprint.
+            // Only the metadata and a coarse overview are read here.
             let python = self.probe(false).python;
             let info = remote_cog_info(&python, url)?;
             let overview = remote_cog_preview(&python, url, 64)?;
-            let trimmed = url.trim_end_matches('/');
+            let trimmed = url
+                .split(['?', '#'])
+                .next()
+                .unwrap_or(url)
+                .trim_end_matches('/');
             let title = trimmed
                 .rsplit('/')
                 .next()
@@ -556,12 +409,13 @@ impl Forge3dState {
                 title: Some(title.clone()),
                 name: title,
                 path: url.to_owned(),
-                byte_size: 0,
+                byte_size: info.byte_size,
                 overlay: None,
                 dimensions,
                 elevation_range,
-                world_origin_xz: None,
-                world_span_xz: None,
+                world_origin_xz: serde_json::from_value(overview["originXz"].clone()).ok(),
+                world_span_xz: serde_json::from_value(overview["spanXz"].clone()).ok(),
+                span_metres_per_unit: non_metre_ground_unit(&overview),
             }));
         }
         if let Some(name) = preset.and_then(|id| id.strip_prefix("dataset:")) {
@@ -625,12 +479,14 @@ impl Forge3dState {
             elevation_range: None,
             world_origin_xz: None,
             world_span_xz: None,
+            span_metres_per_unit: None,
             overlay: None,
         };
 
         let python = self.probe(false).python;
         match sample_terrain(&python, &path_text, 48) {
             Ok(value) => {
+                seed.span_metres_per_unit = non_metre_ground_unit(&value);
                 let width = value.get("width").and_then(|v| v.as_u64());
                 let height = value.get("height").and_then(|v| v.as_u64());
                 if let (Some(width), Some(height)) = (width, height) {
@@ -769,6 +625,12 @@ fn read_all(mut reader: impl std::io::Read) -> String {
     let mut text = String::new();
     let _ = reader.read_to_string(&mut text);
     text
+}
+
+pub fn non_metre_ground_unit(preview: &serde_json::Value) -> Option<f64> {
+    preview["spanMetresPerUnit"]
+        .as_f64()
+        .filter(|unit| *unit > 0.0 && *unit != 1.0)
 }
 
 /// Sample a DEM into a heightfield for the Studio viewport.
@@ -1423,129 +1285,43 @@ pub fn dataset_fetch(python: &str, name: &str) -> Result<String, String> {
         .ok_or_else(|| "the dataset fetch returned no path".to_owned())
 }
 
-/// Probe a remote DEM (a COG, or any file the range-reader can open).
-/// One HEAD + header reads — nothing downloads beyond what the engine needs
-/// to answer the question "what is this file?".
-const REMOTE_COG_INFO_SCRIPT: &str = r#"
+/// Probe the COG's byte length and directory metadata without reading elevations.
+const REMOTE_COG_INFO_SCRIPT: &str = concat!(
+    include_str!("studio_cog.py"),
+    "\n",
+    r#"
 import json, sys
+
 url = sys.argv[1]
 try:
-    import forge3d.cog as cog
-except Exception as exc:
-    print(json.dumps({"ok": False, "detail": "the engine's COG reader is unavailable: %s" % (exc,)}))
-    raise SystemExit(0)
-try:
-    ds = cog.open_cog(url)
-    levels = []
-    total_tiles = 0
-    for level in range(ds.overview_count):
-        info = ds.ifd_info(level)
-        total_tiles += info.tile_count
-        levels.append({
-            "level": level,
-            "width": info.width,
-            "height": info.height,
-            "tileWidth": info.tile_width,
-            "tileHeight": info.tile_height,
-            "tilesAcross": info.tiles_across,
-            "tilesDown": info.tiles_down,
-            "tiles": info.tile_count,
-            "compression": info.compression,
-            "bitsPerSample": info.bits_per_sample,
-        })
-    b = ds.bounds
-    print(json.dumps({
-        "ok": True,
-        "url": url,
-        "overviewCount": ds.overview_count,
-        "bounds": list(b) if b else None,
-        "streamable": True,
-        "levels": levels,
-        "totalTiles": total_tiles,
-    }))
+    print(json.dumps({"ok": True, "url": url, **cog_info(url)}))
 except Exception as exc:
     print(json.dumps({"ok": False, "detail": str(exc)}))
-"#;
+"#
+);
 
-/// A remote DEM's preview, read through the engine's own range reader.
-///
-/// The ladder's first rung: the coarsest overview level that still carries
-/// the requested resolution, assembled from the engine's tiles — no whole
-/// file is downloaded, and the bytes that arrive are the overview's. The
-/// payload matches the local `terrainPreview` shape, so the studio's own
-/// elevation ramp draws both.
-const REMOTE_COG_PREVIEW_SCRIPT: &str = r#"
+/// Sample the coarsest actual COG image directory with enough pixels for the
+/// requested grid. The source and overview dimensions travel separately.
+const REMOTE_COG_PREVIEW_SCRIPT: &str = concat!(
+    include_str!("studio_cog.py"),
+    "\n",
+    r#"
 import json, sys
+
 url = sys.argv[1]
 resolution = max(8, min(256, int(sys.argv[2])))
 try:
-    import numpy as np
-    import forge3d.cog as cog
-except Exception as exc:
-    print(json.dumps({"ok": False, "detail": "the engine is unavailable: %s" % (exc,)}))
-    raise SystemExit(0)
-try:
-    ds = cog.open_cog(url)
-    # `overview_count` counts the levels, full resolution included: the
-    # engine's own probe reads `ifd_info(level)` for level in that range.
-    levels = max(1, int(ds.overview_count))
-    # The coarsest level that still has `resolution` pixels on both sides
-    # (the levels run fine to coarse, so the last acceptable one wins); if
-    # none does, the coarsest available.
-    level = levels - 1
-    for candidate in range(levels):
-        info = ds.ifd_info(candidate)
-        if info.width >= resolution and info.height >= resolution:
-            level = candidate
-    info = ds.ifd_info(level)
-    height, width = int(info.height), int(info.width)
-    grid = np.zeros((height, width), dtype="float64")
-    for ty in range(int(info.tiles_down)):
-        for tx in range(int(info.tiles_across)):
-            tile = np.asarray(ds.read_tile(tx, ty, level), dtype="float64")
-            if tile.ndim != 2 or tile.size == 0:
-                continue
-            th, tw = tile.shape[:2]
-            y0 = ty * int(info.tile_height)
-            x0 = tx * int(info.tile_width)
-            y1 = min(height, y0 + th)
-            x1 = min(width, x0 + tw)
-            if y1 <= y0 or x1 <= x0:
-                continue
-            grid[y0:y1, x0:x1] = tile[: y1 - y0, : x1 - x0]
-    valid = np.isfinite(grid)
-    if not valid.any():
-        print(json.dumps({"ok": False, "detail": "the remote DEM has no valid samples"}))
-        raise SystemExit(0)
-    values = grid[valid]
-    low, high = np.percentile(values, [0.01, 99.99])
-    ys = np.linspace(0, height, resolution + 1).astype(int)
-    xs = np.linspace(0, width, resolution + 1).astype(int)
-    out = np.empty((resolution, resolution), dtype="float64")
-    for j in range(resolution):
-        for i in range(resolution):
-            block = grid[ys[j]:max(ys[j] + 1, ys[j + 1]), xs[i]:max(xs[i] + 1, xs[i + 1])]
-            good = block[np.isfinite(block)]
-            out[j, i] = float(np.clip(good.mean(), low, high)) if good.size else float(low)
+    grid, level, source = read_cog_overview(url, resolution)
+    height, width = grid.shape
     print(json.dumps({
-        "ok": True,
-        "width": width,
-        "height": height,
-        "resolution": resolution,
-        "minElevation": float(low),
-        "maxElevation": float(high),
-        "heights": [round(float(value), 2) for value in out.ravel()],
-        "level": int(level),
-        "levelWidth": width,
-        "levelHeight": height,
-        "overviewCount": int(ds.overview_count),
-        "bounds": list(ds.bounds) if ds.bounds else None,
+        **source, **sample_dem(grid, resolution, "the remote DEM has no valid samples"),
+        "level": level, "levelWidth": width, "levelHeight": height,
     }))
 except Exception as exc:
     print(json.dumps({"ok": False, "detail": str(exc)}))
-"#;
+"#
+);
 
-/// The remote DEM's preview, read through the engine's range reader.
 pub fn remote_cog_preview(
     python: &str,
     url: &str,
@@ -1574,13 +1350,12 @@ pub fn remote_cog_preview(
     Ok(value)
 }
 
-/// Download a remote DEM to the studio cache. `url` must be http(s) or
-/// `file://`; the engine already validated it via `remote_cog_info`.
 /// Remote-DEM probe: what `remote_cog_info` returns to the gallery dialog.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteCogInfo {
     pub url: String,
+    pub byte_size: u64,
     pub overview_count: u32,
     pub bounds: Option<[f64; 4]>,
     pub streamable: bool,
@@ -1588,7 +1363,7 @@ pub struct RemoteCogInfo {
     pub total_tiles: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteCogLevel {
     pub level: u32,
@@ -1604,11 +1379,7 @@ pub struct RemoteCogLevel {
 }
 
 fn validate_remote_url(url: &str) -> Result<(), String> {
-    let lower = url.to_ascii_lowercase();
-    if !(lower.starts_with("http://")
-        || lower.starts_with("https://")
-        || lower.starts_with("file://"))
-    {
+    if !studio_core::project::is_remote_dem_path(url) {
         return Err("a remote DEM URL must be http://, https:// or file://".to_owned());
     }
     if url.len() > 2048 || url.chars().any(|c| c.is_control()) {
@@ -1617,8 +1388,7 @@ fn validate_remote_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Probe a remote DEM with the engine's COG reader (native range reads; one
-/// HEAD request, no pixel data fetched).
+/// Probe the COG file's length and directory metadata without fetching pixels.
 pub fn remote_cog_info(python: &str, url: &str) -> Result<RemoteCogInfo, String> {
     validate_remote_url(url)?;
     let (stdout, stderr) = run_script(
@@ -1640,53 +1410,12 @@ pub fn remote_cog_info(python: &str, url: &str) -> Result<RemoteCogInfo, String>
             .unwrap_or("the remote probe failed")
             .to_owned());
     }
-    let levels = value
-        .get("levels")
-        .and_then(|rows| rows.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let parsed = levels
-        .iter()
-        .map(|row| RemoteCogLevel {
-            level: row.get("level").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            width: row.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            height: row.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            tile_width: row.get("tileWidth").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            tile_height: row.get("tileHeight").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            tiles_across: row.get("tilesAcross").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            tiles_down: row.get("tilesDown").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            tiles: row.get("tiles").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            compression: row.get("compression").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            bits_per_sample: row
-                .get("bitsPerSample")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
-        })
-        .collect();
-    let bounds = value
-        .get("bounds")
-        .and_then(|b| b.as_array())
-        .and_then(|rows| {
-            let nums: Vec<f64> = rows.iter().filter_map(|v| v.as_f64()).collect();
-            (nums.len() == 4).then(|| [nums[0], nums[1], nums[2], nums[3]])
-        });
-    Ok(RemoteCogInfo {
-        url: url.to_owned(),
-        overview_count: value
-            .get("overviewCount")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32,
-        bounds,
-        streamable: value
-            .get("streamable")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        levels: parsed,
-        total_tiles: value
-            .get("totalTiles")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-    })
+    let info: RemoteCogInfo = serde_json::from_value(value)
+        .map_err(|error| format!("the remote probe returned invalid COG metadata: {error}"))?;
+    if info.byte_size == 0 || info.levels.is_empty() {
+        return Err("the COG source has no data".to_owned());
+    }
+    Ok(info)
 }
 
 /// Labelled interpreter candidates, most specific first.

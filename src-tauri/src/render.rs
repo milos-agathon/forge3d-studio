@@ -19,6 +19,7 @@ use serde::Serialize;
 use serde_json::json;
 
 const SERVICE_SCRIPT: &str = include_str!("studio_render.py");
+const COG_SCRIPT: &str = include_str!("studio_cog.py");
 const READY_TIMEOUT: Duration = Duration::from_secs(240);
 pub const FRAME_TIMEOUT: Duration = Duration::from_secs(180);
 /// A viewport frame is a preview: a wedged one must not block the queue behind
@@ -42,6 +43,16 @@ pub struct RenderFrame {
     pub png: String,
     /// Where a still was written, when it was written to disk.
     pub path: Option<String>,
+    /// The scene and terrain selected for a viewport preview.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<RenderFrameSource>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderFrameSource {
+    pub session_id: u64,
+    pub terrain_id: studio_core::ids::ObjectId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -209,6 +220,7 @@ impl RenderState {
                 .unwrap_or_default()
                 .to_owned(),
             path: None,
+            source: None,
         })
     }
 
@@ -252,12 +264,17 @@ impl RenderState {
             *ready = None;
         }
 
-        let directory = std::env::temp_dir().join("forge3d-studio");
+        let directory = std::env::temp_dir()
+            .join("forge3d-studio")
+            .join(std::process::id().to_string());
         std::fs::create_dir_all(&directory)
             .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
         let script = directory.join("studio_render.py");
         std::fs::write(&script, SERVICE_SCRIPT)
             .map_err(|error| format!("could not write {}: {error}", script.display()))?;
+        let cog_script = directory.join("studio_cog.py");
+        std::fs::write(&cog_script, COG_SCRIPT)
+            .map_err(|error| format!("could not write {}: {error}", cog_script.display()))?;
 
         push_log(&self.shared, format!("starting renderer for {dem}"));
         let mut child = Command::new(python)
@@ -479,7 +496,8 @@ pub struct RenderRequest {
     pub dem: String,
     pub phi_deg: f64,
     pub theta_deg: f64,
-    pub radius: f64,
+    /// A legacy remote DEM can defer framing to the renderer's measured footprint.
+    pub radius: Option<f64>,
     pub target: [f64; 3],
     pub fov_deg: f64,
     pub sun_azimuth_deg: f64,
@@ -605,27 +623,6 @@ impl RenderRequest {
         })
     }
 
-    pub fn with_view(mut self, view: Option<&RenderView>) -> Self {
-        if let Some(view) = view {
-            if view.radius.is_finite() && view.radius > 0.0 {
-                self.phi_deg = view.phi_deg;
-                self.theta_deg = view.theta_deg;
-                self.radius = view.radius;
-            }
-            if let Some(target) = view.target {
-                if target.iter().all(|component| component.is_finite()) {
-                    self.target = target;
-                }
-            }
-            if let Some(fov_deg) = view.fov_deg {
-                if fov_deg.is_finite() && (1.0..=179.0).contains(&fov_deg) {
-                    self.fov_deg = fov_deg;
-                }
-            }
-        }
-        self
-    }
-
     pub fn with_meshes(mut self, meshes: Vec<MeshHandoff>) -> Self {
         self.meshes = meshes;
         self
@@ -733,41 +730,68 @@ impl RenderRequest {
         })
     }
 
-    /// Resolve the renderer's camera from a handoff: the renderer measures the
-    /// DEM in its own metres with Z up, so only the direction transfers.
+    /// Use the live or evaluated view when supplied, with the authored scene
+    /// camera and terrain framing as the fallback.
     pub fn from_handoff(
         handoff: &studio_core::Handoff,
         width: u32,
         height: u32,
+        view: Option<&RenderView>,
     ) -> Result<Self, String> {
         let terrain = handoff
             .terrain
             .as_ref()
-            .ok_or_else(|| "the scene has no terrain to render".to_owned())?;
-        let camera = handoff
-            .terrain_camera
-            .ok_or_else(|| "the scene has no camera".to_owned())?;
-
-        let span = terrain
-            .world_span_xz
-            .ok_or_else(|| "the DEM footprint is unknown (open the project again)".to_owned())?;
+            .ok_or_else(|| "the scene has no visible terrain to render".to_owned())?;
+        let camera = handoff.terrain_camera;
+        let live_pose = view.filter(|view| {
+            view.radius.is_finite()
+                && view.radius > 0.0
+                && view.phi_deg.is_finite()
+                && view.theta_deg.is_finite()
+        });
+        if camera.is_none() && live_pose.is_none() {
+            return Err("the scene has no camera".to_owned());
+        }
+        let fallback_radius = match terrain.world_span_xz {
+            Some(span) => Some(
+                camera
+                    .and_then(|camera| camera.radius)
+                    .unwrap_or_else(|| span[0].max(span[1]) * 1.5),
+            ),
+            // Older Gallery projects stored pixel dimensions only. MapScene
+            // measures the remote footprint when it opens the DEM.
+            None if live_pose.is_some()
+                || studio_core::project::is_remote_dem_path(&terrain.path) =>
+            {
+                None
+            }
+            None => return Err("the DEM footprint is unknown (open the project again)".to_owned()),
+        };
+        let target = view
+            .and_then(|view| view.target)
+            .filter(|target| target.iter().all(|component| component.is_finite()));
+        let fov_deg = view
+            .and_then(|view| view.fov_deg)
+            .filter(|fov_deg| (1.0..=179.0).contains(fov_deg));
 
         Ok(Self {
             width,
             height,
             dem: terrain.path.clone(),
-            phi_deg: f64::from(camera.phi_deg),
-            theta_deg: f64::from(camera.theta_deg),
-            // Use the radius the camera's distance implies, so the frame matches
-            // the viewport; fall back to the viewer's framing only when the
-            // project cannot say (no camera distance available).
-            radius: camera.radius.unwrap_or_else(|| span[0].max(span[1]) * 1.5),
-            // The terrain mesh is vertically centred on Z=0 in the render world
-            // (the shader centres it "so the camera at origin can see it"), so
-            // the fallback aim is the mesh centre — aiming at absolute
-            // mid-elevation framed empty sky for high-altitude DEMs.
-            target: [0.0, 0.0, 0.0],
-            fov_deg: f64::from(camera.fov_deg),
+            phi_deg: live_pose
+                .map(|view| view.phi_deg)
+                .or_else(|| camera.map(|camera| f64::from(camera.phi_deg)))
+                .unwrap_or_default(),
+            theta_deg: live_pose
+                .map(|view| view.theta_deg)
+                .or_else(|| camera.map(|camera| f64::from(camera.theta_deg)))
+                .unwrap_or_default(),
+            radius: live_pose.map(|view| view.radius).or(fallback_radius),
+            // MapScene centres the terrain mesh on zero.
+            target: target.unwrap_or([0.0, 0.0, 0.0]),
+            fov_deg: fov_deg
+                .or_else(|| camera.map(|camera| f64::from(camera.fov_deg)))
+                .unwrap_or(45.0),
             sun_azimuth_deg: handoff
                 .sun
                 .map(|sun| f64::from(sun.azimuth_deg))
@@ -851,7 +875,7 @@ mod tests {
             dem: "/data/dem.tif".to_owned(),
             phi_deg: 310.0,
             theta_deg: 68.0,
-            radius: 6100.0,
+            radius: Some(6100.0),
             target: [0.0, 0.0, 39.5],
             fov_deg: 45.0,
             sun_azimuth_deg: 60.0,
@@ -1573,7 +1597,7 @@ mod tests {
                 .expect("the lighting-rig fixture parses");
         let project = rig_project(&fixture);
         let handoff = studio_core::workspace::handoff(&project, 1, studio_core::Workspace::Forge3d);
-        let payload = RenderRequest::from_handoff(&handoff, 640, 400)
+        let payload = RenderRequest::from_handoff(&handoff, 640, 400, None)
             .expect("the fixture scene has terrain")
             .with_settings(&project.render)
             .to_payload("final", None);
@@ -1671,6 +1695,7 @@ mod tests {
             elevation_range: Some([0.0, 100.0]),
             world_origin_xz: Some([0.0, 0.0]),
             world_span_xz: Some([640.0, 640.0]),
+            span_metres_per_unit: None,
             overlay: None,
         };
         let mut project = studio_core::Project::starter("Rig", Some(seed));
@@ -1719,9 +1744,8 @@ mod tests {
 
     #[test]
     fn view_override_still_wins_over_the_handoff_camera() {
-        let mut frame = request();
-        frame.phi_deg = 10.0;
-        frame.target = [1.0, 2.0, 3.0];
+        let project = rig_project(&serde_json::Value::Null);
+        let handoff = studio_core::workspace::handoff(&project, 1, studio_core::Workspace::Forge3d);
         let view = RenderView {
             phi_deg: 200.0,
             theta_deg: 55.0,
@@ -1729,11 +1753,43 @@ mod tests {
             target: Some([4.0, 5.0, 6.0]),
             fov_deg: Some(30.0),
         };
-        let frame = frame.with_view(Some(&view));
+        let frame = RenderRequest::from_handoff(&handoff, 640, 400, Some(&view)).unwrap();
         assert_eq!(frame.phi_deg, 200.0);
         assert_eq!(frame.theta_deg, 55.0);
-        assert_eq!(frame.radius, 900.0);
+        assert_eq!(frame.radius, Some(900.0));
         assert_eq!(frame.target, [4.0, 5.0, 6.0]);
         assert_eq!(frame.fov_deg, 30.0);
+    }
+
+    #[test]
+    fn legacy_remote_dem_uses_the_live_pose_or_the_renderers_measured_radius() {
+        let project = rig_project(&serde_json::Value::Null);
+        let mut handoff =
+            studio_core::workspace::handoff(&project, 1, studio_core::Workspace::Forge3d);
+        let terrain = handoff.terrain.as_mut().unwrap();
+        terrain.path = "https://example.com/elevations.tif".to_owned();
+        terrain.world_span_xz = None;
+        assert!(handoff.terrain_camera.unwrap().radius.is_some());
+        let fallback = RenderRequest::from_handoff(&handoff, 640, 400, None).unwrap();
+        assert_eq!(
+            fallback.to_payload("final", None)["camera"]["radius"],
+            serde_json::Value::Null
+        );
+
+        handoff.terrain_camera = None;
+        let view = RenderView {
+            phi_deg: 200.0,
+            theta_deg: 55.0,
+            radius: 5000.0,
+            target: Some([0.0, 200.0, 0.0]),
+            fov_deg: Some(30.0),
+        };
+        let live = RenderRequest::from_handoff(&handoff, 640, 400, Some(&view)).unwrap();
+        assert_eq!(live.radius, Some(5000.0));
+        assert_eq!(live.target, [0.0, 200.0, 0.0]);
+        assert_eq!(
+            RenderRequest::from_handoff(&handoff, 640, 400, None).unwrap_err(),
+            "the scene has no camera"
+        );
     }
 }

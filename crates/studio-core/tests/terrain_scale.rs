@@ -37,6 +37,7 @@ fn seed(asset: &Asset, range: [f32; 2], span: [f64; 2]) -> TerrainSeed {
         elevation_range: Some(range),
         world_origin_xz: Some([0.0, 0.0]),
         world_span_xz: Some(span),
+        span_metres_per_unit: None,
         overlay: None,
     }
 }
@@ -91,6 +92,7 @@ fn attaching_a_dem_derives_the_scale() {
         SWISS_RANGE,
         Some([0.0, 0.0]),
         Some(SWISS_SPAN),
+        None,
     );
     assert!(
         (terrain.z_scale - 5.246).abs() < 0.001,
@@ -125,6 +127,7 @@ fn replacing_the_dem_re_derives_the_scale_and_undo_restores_it() {
             elevation_range: Some(BRYCE_RANGE),
             world_origin_xz: Some([0.0, 0.0]),
             world_span_xz: Some(BRYCE_SPAN),
+            span_metres_per_unit: None,
             z_scale: None,
         })
         .expect("a DEM replacement is valid");

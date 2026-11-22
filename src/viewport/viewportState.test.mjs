@@ -5,7 +5,8 @@ import {
   cameraInput, runtimeToStudio, studioToRuntime, terrainInput, terrainSamplePoint, terrainTransform,
 } from "./forge3dWebMapping.ts";
 import {
-  assetRevision, cameraTarget, nativeRenderView, viewportDimensions, ViewportModel, viewportTerrainBackend,
+  assetRevision, boundedTerrainResolution, cameraTarget, nativeRenderView, validateTerrainPreview,
+  viewportDimensions, ViewportModel, viewportTerrainBackend,
 } from "./viewportState.ts";
 
 function sample(name) {
@@ -148,11 +149,11 @@ test("backend eligibility follows the headless project's mode, environment and s
   const project = { ...bryce, viewport: { ...bryce.viewport, mode: "material" },
     render: { ...bryce.render, environment: null, shadows: false, sunVisibility: false } };
   const model = new ViewportModel(project, 1);
-  model.acceptTerrain(model.beginTerrain(terrainObject.id, 2), brycePreview());
   const choose = (device = { gpu: true }) => viewportTerrainBackend(model.current, "auto", device);
+  assert.equal(choose().terrain, undefined);
   assert.equal(choose().backend, "forge3d-web");
+  model.acceptTerrain(model.beginTerrain(terrainObject.id, 2), brycePreview());
   assert.equal(choose({ gpu: false }).reason, "WebGPU unavailable");
-  assert.equal(choose({ gpu: true, maxTextureDimension2D: 1 }).reason, "Terrain exceeds GPU texture limit");
   for (const [delta, reason] of [[{ shadows: true }, "Terrain shadows"],
     [{ sunVisibility: true }, "Terrain shadows"], [{ environment: "project-hdri" }, "Material HDRI"]]) {
     model.setProject({ ...project, render: { ...project.render, ...delta } }, 1, false);
@@ -164,6 +165,32 @@ test("backend eligibility follows the headless project's mode, environment and s
   assert.equal(choose({ gpu: true, sunShadowsDisabled: true }).reason, "Terrain shadows");
   model.setProject({ ...project, viewport: { ...project.viewport, mode: "rendered" } }, 1, false);
   assert.equal(choose().backend, "native");
+});
+
+test("hiding a terrain invalidates its pending and accepted previews", () => {
+  const model = new ViewportModel(bryce, 1);
+  const pending = model.beginTerrain(terrainObject.id, 2);
+  const hidden = { ...terrainObject, visible: false };
+  model.setProject({ ...bryce, scene: { ...bryce.scene, objects: [hidden] } }, 1, false);
+  assert.equal(model.acceptTerrain(pending, brycePreview()), undefined);
+  assert.equal(model.beginTerrain(terrainObject.id, 2), undefined);
+
+  model.setProject(bryce, 1, false);
+  assert.ok(model.acceptTerrain(model.beginTerrain(terrainObject.id, 2), brycePreview()));
+  model.setProject({ ...bryce, scene: { ...bryce.scene, objects: [hidden] } }, 1, false);
+  assert.equal(model.current.terrains.size, 0);
+});
+
+test("the preview limit is applied to the sampled grid, independent of source dimensions", () => {
+  assert.equal(boundedTerrainResolution(256, 128), 128);
+  assert.equal(boundedTerrainResolution(256, 7), undefined);
+  const preview = { ...brycePreview(), resolution: 128, heights: Array(128 ** 2).fill(2210) };
+  assert.deepEqual([preview.width, preview.height], [1024, 1024]);
+  assert.doesNotThrow(() => validateTerrainPreview(preview, 128));
+  assert.throws(() => validateTerrainPreview(preview, 127), /GPU texture limit of 127/);
+  assert.throws(() => validateTerrainPreview({ ...preview, heights: [] }), /invalid height grid/);
+  const wrongSize = { ...preview, resolution: 8, heights: Array(8 ** 2).fill(2210) };
+  assert.throws(() => validateTerrainPreview(wrongSize, 256, 160), /8 × 8.*160 × 160/);
 });
 
 test("translated, uniformly scaled unequal spans round-trip all four corners and the aim", () => {
@@ -216,7 +243,7 @@ test("translated, uniformly scaled unequal spans round-trip all four corners and
   const feetInput = terrainInput(inFeet, zScale, [0.2, 0.3, 0.4]);
   near(feetInput.spacing[0], 1219.2);
   near(feetInput.spacing[1], 609.6);
-  nearPoint(runtimeToStudio(terrainSamplePoint(inFeet, zScale, 0, 0), feetTransform), [-9, 4.12, -11]);
+  nearPoint(runtimeToStudio(terrainSamplePoint(inFeet, zScale, 0, 0), feetTransform), [-9, 4 + 0.12 / 0.3048, -11]);
 });
 
 test("camera aim distances and half-relief preserve the native handoff", () => {
@@ -237,6 +264,46 @@ test("camera aim distances and half-relief preserve the native handoff", () => {
   assert.equal(native.fovDeg, orbitCamera.fovYDegrees);
 });
 
+test("native orbit and forward cameras use the translated and uniformly scaled terrain frame", () => {
+  const moved = structuredClone(bryce);
+  const placement = moved.scene.objects.find(node => node.kind.type === "terrain").transform;
+  placement.translation = { x: 2.5, y: 1, z: -3 };
+  placement.scale = { x: 1.5, y: 1.5, z: 1.5 };
+  const identity = new ViewportModel(bryce, 1);
+  const model = new ViewportModel(moved, 1);
+  const [low, high] = terrainObject.kind.elevationRange;
+  const halfRelief = (high - low) * terrainObject.kind.zScale / 2;
+  for (const camera of [orbitCamera, { ...orbitCamera, aim: { forward: [0, 0, -1] } }]) {
+    identity.setCamera(camera);
+    model.setCamera(camera);
+    const previous = nativeRenderView(identity.current);
+    const current = nativeRenderView(model.current);
+    const aim = cameraTarget(camera, 10);
+    const unit = 4000 / 12 / 1.5;
+    nearPoint(current.target, [(aim[0] - 2.5) * unit, -(aim[2] + 3) * unit, (aim[1] - 1) * unit - halfRelief]);
+    near(current.radius, previous.radius / 1.5);
+    near(current.phiDeg, previous.phiDeg);
+    near(current.thetaDeg, previous.thetaDeg);
+  }
+});
+
+test("legacy remote camera framing waits for the current measured footprint", () => {
+  const legacyTerrain = { ...terrainObject, kind: { ...terrainObject.kind,
+    worldSpanXz: null, worldOriginXz: null, elevationRange: null } };
+  const legacy = { ...bryce, assets: bryce.assets.map(asset => asset.id === terrainObject.kind.asset
+    ? { ...asset, path: "https://example.com/elevations.tif" } : asset),
+  scene: { ...bryce.scene, objects: [legacyTerrain, authoredCamera] } };
+  const model = new ViewportModel(legacy, 1);
+  model.setCamera(orbitCamera);
+  assert.equal(nativeRenderView(model.current), null);
+  model.acceptTerrain(model.beginTerrain(legacyTerrain.id, 2), brycePreview());
+  const known = new ViewportModel(bryce, 1);
+  known.setCamera(orbitCamera);
+  assert.deepEqual(nativeRenderView(model.current), nativeRenderView(known.current));
+  model.setProject(legacy, 2, false);
+  assert.equal(nativeRenderView(model.current), null);
+});
+
 test("the viewport keeps CSS size and caps and floors physical size", () => {
   assert.deepEqual(viewportDimensions(801, 599, 1.5), {
     cssWidth: 801, cssHeight: 599, width: 1201, height: 898, pixelRatio: 1.5,
@@ -244,4 +311,29 @@ test("the viewport keeps CSS size and caps and floors physical size", () => {
   assert.deepEqual(viewportDimensions(801, 599, 2.5), {
     cssWidth: 801, cssHeight: 599, width: 1602, height: 1198, pixelRatio: 2,
   });
+});
+
+test("admitted heights belong only to the current terrain and retain its source footprint", () => {
+  const model = new ViewportModel(bryce, 3);
+  const grid = { ...brycePreview(), resolution: 16, heights: Array(256).fill(10) };
+  const request = model.beginTerrain(terrainObject.id, 16);
+  const source = model.acceptTerrain(request, grid);
+  const owner = {};
+  assert.throws(() => model.admitTerrain(source, 12, new Float32Array(143), owner), /invalid height grid/);
+  assert.equal(model.current.terrains.get(terrainObject.id), source);
+  const heights = Float32Array.from({ length: 144 }, (_, i) => i);
+  const reduced = model.admitTerrain(source, 12, heights, owner);
+  assert.equal(reduced.preview.resolution, 12);
+  assert.equal(reduced.request.resolution, 12);
+  assert.deepEqual(reduced.preview.heights, Array.from(heights));
+  assert.deepEqual(reduced.preview.spanXz, grid.spanXz);
+  assert.equal(reduced.preview.width, grid.width);
+  assert.equal(reduced.admission.owner, owner);
+  assert.equal(reduced.admission.requestedResolution, 16);
+  assert.equal(model.admitTerrain(source, 8, new Float32Array(64), owner), undefined);
+  const again = model.admitTerrain(reduced, 8, new Float32Array(64), owner);
+  assert.equal(again.admission.requestedResolution, 16);
+  model.setProject(bryce, 4, false);
+  assert.equal(model.admitTerrain(again, 8, new Float32Array(64), owner), undefined);
+  assert.equal(grid.resolution, 16);
 });
