@@ -1,7 +1,7 @@
 import type { Asset, Project, SceneObject, TerrainPreview, ViewportMode } from "../bridge/types";
 import { topImagery, topRamp } from "../state/cartography.ts";
 import { isRemoteDemPath } from "../state/terrainLadder.ts";
-import { chooseViewportBackend, studioToRuntime, supportsTransform, terrainGroundSpan, type BackendState, type RendererPreference, type Triple } from "./forge3dWebMapping.ts";
+import { chooseViewportBackend, studioToRuntime, supportsTransform, terrainGroundSpan, terrainHeightOrigin, type BackendState, type RendererPreference, type Triple } from "./forge3dWebMapping.ts";
 import { lightingRig, type LightingSun } from "./lighting.ts";
 import { computeRenderView } from "./viewMath.ts";
 
@@ -30,6 +30,8 @@ export interface TerrainPreviewRequest {
 export interface ViewportTerrain {
   request: TerrainPreviewRequest;
   preview: ViewportTerrainPreview;
+  /** Metre offset used to encode this grid, including GPU-admitted descendants. */
+  heightOrigin: number;
   zScale: number;
   admission?: { owner: object; requestedResolution: number };
 }
@@ -260,18 +262,30 @@ export class ViewportModel {
   admitTerrain(source: ViewportTerrain, resolution: number, heights: Float32Array, owner: object) {
     const { objectId } = source.request;
     if (this.frame.terrains.get(objectId) !== source || !this.isCurrent(source.request)) return;
-    const preview = { ...source.preview, resolution, heights: Array.from(heights) };
+    const origin = source.heightOrigin;
+    // The dense runtime reduces by nearest source texel, including both
+    // endpoints. Retain that texel's accepted metre elevation when it encodes
+    // to the observed GPU value. This preserves sub-Float32 datum precision
+    // for the editor mesh, drapes and subsequent uploads.
+    const parent = source.preview;
+    const sourceIndex = (i: number) => Math.round(i * (parent.resolution - 1) / (resolution - 1));
+    const preview = { ...parent, resolution, heights: Array.from(heights, (height, i) => {
+      const row = sourceIndex(Math.floor(i / resolution)), col = sourceIndex(i % resolution);
+      const accepted = parent.heights[row * parent.resolution + col];
+      return Math.fround(accepted - origin) === height ? accepted : height + origin;
+    }) };
     validateTerrainPreview(preview, source.preview.resolution - 1, resolution);
     const request = this.beginTerrain(objectId, resolution);
     if (request) return this.acceptTerrain(request, preview, {
       owner, requestedResolution: source.admission?.requestedResolution ?? source.request.resolution,
-    });
+    }, origin);
   }
 
-  acceptTerrain(request: TerrainPreviewRequest, preview: TerrainPreview, admission?: ViewportTerrain["admission"]): ViewportTerrain | undefined {
+  acceptTerrain(request: TerrainPreviewRequest, preview: TerrainPreview, admission?: ViewportTerrain["admission"],
+    inheritedOrigin?: number): ViewportTerrain | undefined {
     if (!this.isCurrent(request)) return;
     if (this.frame.terrains.get(request.objectId)?.request === request) return;
-    const terrain = { request, preview: { ...preview, spanMetresPerUnit: preview.spanMetresPerUnit ?? null }, zScale: request.zScale, admission };
+    const terrain = { request, heightOrigin: inheritedOrigin ?? terrainHeightOrigin(preview), preview: { ...preview, spanMetresPerUnit: preview.spanMetresPerUnit ?? null }, zScale: request.zScale, admission };
     const terrains = new Map(this.frame.terrains);
     terrains.set(request.objectId, terrain);
     this.frame = { ...this.frame, terrains };

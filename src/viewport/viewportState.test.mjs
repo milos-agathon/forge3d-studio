@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { TerrainDataset } from "@forge3d/web";
+import { queryTerrainDataset } from "./forge3dWebMapping.ts";
+import { worldPosition } from "./cartography.ts";
 import {
   cameraInput, runtimeToStudio, studioToRuntime, terrainInput, terrainSamplePoint, terrainTransform,
 } from "./forge3dWebMapping.ts";
@@ -311,6 +314,80 @@ test("the viewport keeps CSS size and caps and floors physical size", () => {
   assert.deepEqual(viewportDimensions(801, 599, 2.5), {
     cssWidth: 801, cssHeight: 599, width: 1602, height: 1198, pixelRatio: 2,
   });
+});
+
+test("queries include exact projected corners and exclude the adjacent exterior coordinates", () => {
+  // Exact rational half-spans rounded once to binary64, and their next floats.
+  for (const [width, depth, edgeZ, exteriorZ, scale = 1] of [
+    [171.2, 85.6, 3, 3.0000000000000004],
+    [25.1, 12.55, 3, 3.0000000000000004],
+    [10, 7, 4.2, 4.200000000000001],
+    [10.2, 7.1, 4.176470588235294, 4.176470588235295],
+    [100.3, 51.1, 3.056829511465603, 3.0568295114656037],
+    [84, 61, 30.5, 30.500000000000004, 7],
+    [42, 29, 29, 29.000000000000004, 7],
+    [4000, 3800, 5.7, 5.700000000000001],
+  ]) {
+    for (const unit of [1, 0.3048]) {
+      const preview = { ...brycePreview(), resolution: 96, spanXz: [width, depth], spanMetresPerUnit: unit,
+        minElevation: 0, maxElevation: 9215, heights: Array.from({length: 96 ** 2}, (_, i) => i) };
+      const terrain = {preview, zScale: 1, heightOrigin: 0};
+      const dataset = TerrainDataset.fromArray(terrainInput(preview, 1, [1,1,1]));
+      const transform = terrainTransform(preview, [0,0,0], scale);
+      const query = (x, z) => queryTerrainDataset(dataset, terrain, transform, x, z);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        const row = sz > 0 ? 95 : 0, col = sx > 0 ? 95 : 0;
+        const [x,,z] = runtimeToStudio(terrainSamplePoint(preview, 1, row, col), transform);
+        assert.deepEqual([x,z], [sx * 6 * scale, sz * edgeZ]);
+        near(query(x,z)?.elevation, row * 96 + col);
+        assert.equal(query(sx * (scale === 7 ? 42.00000000000001 : 6.000000000000001), z), undefined);
+        assert.equal(query(x, sz * exteriorZ), undefined);
+      }
+    }
+  }
+});
+
+test("a reduced datum-relative texture retains the original raw elevation and relief", () => {
+  const model = new ViewportModel(bryce, 3);
+  const preview = { ...brycePreview(), resolution: 16, spanXz: [2, 1],
+    minElevation: 4150.24, maxElevation: 4150.25, heights: Array(256).fill(4150.25) };
+  const source = model.acceptTerrain(model.beginTerrain(terrainObject.id, 16), preview);
+  const relative = Math.fround(4150.25 - 4150.24);
+  const reduced = model.admitTerrain(source, 12, new Float32Array(144).fill(relative), {});
+  assert.equal(reduced.preview.heights[0], 4150.25);
+  const upload = terrainInput(reduced.preview, 20, [1, 1, 1]);
+  assert.equal(upload.heights[0], relative);
+  nearPoint(terrainSamplePoint(reduced.preview, 20, 0, 0), [-1, 0.2, -0.5]);
+});
+
+test("admitted texels keep their source vertex and draped line on the two plateaux", () => {
+  const model = new ViewportModel(bryce, 3);
+  for (const width of [2, 4000]) {
+    const preview = { ...brycePreview(), resolution: 256, spanXz: [width, width / 2],
+      minElevation: 4150.24, maxElevation: 4151.24,
+      heights: Array.from({length: 256 ** 2}, (_, i) => i % 256 < 128 ? 4150.24 : 4151.24) };
+    const source = model.acceptTerrain(model.beginTerrain(terrainObject.id, 256), preview);
+    const upload = terrainInput(preview, 20, [1,1,1]);
+    const texture = Float32Array.from({length: 148 ** 2}, (_, i) => upload.heights[i % 148 < 74 ? 0 : 255]);
+    const reduced = model.admitTerrain(source, 148, texture, {});
+    for (const [u, expected] of [[0, 4150.24], [1, 4151.24]]) {
+      assert.equal(reduced.preview.heights[147 * u], expected);
+      const fullY = terrainSamplePoint(preview, 20, 0, 255 * u)[1];
+      assert.equal(terrainSamplePoint(reduced.preview, 20, 0, 147 * u)[1], fullY);
+      assert.equal(worldPosition(reduced.preview, preview.spanXz, 20, u, 0, 0.96)[1], fullY * (12 / width) + 0.96);
+    }
+  }
+});
+
+test("admission preserves the encoding when the only fractional interior column is dropped", () => {
+  const model = new ViewportModel(bryce, 3);
+  const preview = { ...brycePreview(), resolution: 16, spanXz: [2, 1], minElevation: 4150.24, maxElevation: 4151.24,
+    heights: Array.from({length:256}, (_, i) => i % 16 === 1 ? 4150.25 : i % 16 < 8 ? 4150.24 : 4151.24) };
+  const source = model.acceptTerrain(model.beginTerrain(terrainObject.id, 16), preview);
+  const reduced = model.admitTerrain(source, 12, Float32Array.from({length:144}, (_, i) => Number(i % 12 >= 6)), {});
+  assert.equal(source.heightOrigin, 4150.24);
+  assert.equal(reduced.heightOrigin, source.heightOrigin);
+  assert.equal(reduced.preview.heights[0], source.preview.heights[0]);
 });
 
 test("admitted heights belong only to the current terrain and retain its source footprint", () => {

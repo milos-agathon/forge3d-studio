@@ -278,6 +278,18 @@ export function installProbe(config, observeStartup, observeContexts) {
 
   const lowerCanvas = () => document.querySelector("canvas.viewport-canvas--terrain");
   const activeRuntime = () => diagnostic()?.terrainViewport.diagnosticRuntime;
+  // Independently encode accepted metre samples in the accepted grid's datum.
+  // Neither the WASM submission nor the query dataset supplies this oracle.
+  function encoding(terrain) {
+    const { minElevation, maxElevation } = terrain.preview;
+    const origin = terrain.heightOrigin;
+    if (origin !== 0 && origin !== minElevation) throw Error("Unexpected terrain height origin");
+    const low = minElevation - origin, high = maxElevation - origin;
+    const flat = Math.fround(low) === Math.fround(high);
+    return { origin, flat, domain: [low, flat ? low + Math.max(1, Math.abs(low)) : high],
+      sample: raw => Math.fround(raw - origin) };
+  }
+
   function gridQuery(node, terrain, point) {
     if (!node?.visible || !terrain) return null;
     const { resolution, heights, minElevation } = terrain.preview;
@@ -291,15 +303,22 @@ export function installProbe(config, observeStartup, observeContexts) {
     const j = Math.min(Math.floor(z), intervals - 1);
     const fx = x - i;
     const fz = z - j;
-    const samples = [0, 1, resolution, resolution + 1].map(offset => Math.fround(heights[j * resolution + i + offset]));
+    const encoded = encoding(terrain);
+    const samples = [0, 1, resolution, resolution + 1].map(offset => encoded.sample(heights[j * resolution + i + offset]));
     const [nw, ne, sw, se] = samples;
-    const elevation = (nw * (1 - fx) + ne * fx) * (1 - fz) + (sw * (1 - fx) + se * fx) * fz;
+    const bilinear = (nw * (1 - fx) + ne * fx) * (1 - fz) + (sw * (1 - fx) + se * fx) * fz;
+    const elevation = encoded.flat && encoded.origin === 0 && minElevation !== 0 ? minElevation : encoded.origin + bilinear;
+    // Raw query attributes follow bilinear interpolation. The drawn triangle
+    // uses each accepted vertex's signed difference from the encoded datum.
+    const low = Math.fround(encoded.domain[0]);
+    const [a,b,c,d] = samples.map(v => v - low);
+    const relief = fx + fz <= 1 ? a*(1-fx-fz) + b*fx + c*fz : d*(fx+fz-1) + b*(1-fz) + c*(1-fx);
     const derivativeX = ((ne - nw) * (1 - fz) + (se - sw) * fz) * terrain.zScale * intervals / spanXz[0];
     const derivativeZ = ((sw - nw) * (1 - fx) + (se - ne) * fx) * terrain.zScale * intervals / spanXz[1];
     const length = Math.hypot(derivativeX, 1, derivativeZ);
     const aspect = derivativeX || derivativeZ ? Math.atan2(-derivativeX, -derivativeZ) : 0;
     return { elevation, gridPosition: [x, z], samples, resolution,
-      worldPosition: [point[0], node.translation[1] + (elevation - minElevation) * terrain.zScale * scale, point[1]],
+      worldPosition: [point[0], node.translation[1] + relief * terrain.zScale * scale, point[1]],
       normal: [-derivativeX / length, 1 / length, -derivativeZ / length],
       slopeRadians: Math.atan(Math.hypot(derivativeX, derivativeZ)), aspectRadians: (aspect + 2 * Math.PI) % (2 * Math.PI) };
   }
@@ -326,10 +345,11 @@ export function installProbe(config, observeStartup, observeContexts) {
     const frame = record.frames.findLast(frame => frame.submitted);
     const upload = record.uploads[frame.uploads - 1];
     if (!upload) throw Error("No WASM terrain upload for the submitted frame");
-    const { resolution, minElevation, maxElevation, heights } = terrain.preview;
+    const { resolution, heights } = terrain.preview;
+    const encoded = encoding(terrain);
     const acceptedGeometry = { width: resolution, height: resolution,
       spacing: groundSpan(terrain.preview).map(side => side / (resolution - 1)), exaggeration: terrain.zScale,
-      domain: [minElevation, maxElevation > minElevation ? maxElevation : minElevation + Math.max(1, Math.abs(minElevation))] };
+      domain: encoded.domain };
     const queries = [config.ground, config.offCenter].flatMap(point => {
       const { hit, owner } = sampleQuery(d, point);
       if (!hit) return [];
@@ -345,25 +365,23 @@ export function installProbe(config, observeStartup, observeContexts) {
       throw Error("Viewport changed during terrain height verification");
     }
     const [acceptedSha256, gpuSha256, , ...queryDigests] = await Promise.all([
-      heightDigest(heights), heightDigest(heightsOnGpu), uploadDigests.get(upload), ...queries.map(query => query.digest),
+      heightDigest(Float32Array.from(heights, encoded.sample)), heightDigest(heightsOnGpu), uploadDigests.get(upload), ...queries.map(query => query.digest),
     ]);
-    return { acceptedSha256, acceptedGeometry, upload, frame: frame.at, submission: submission.sequence,
+    return { acceptedSha256, acceptedGeometry, heightOrigin:encoded.origin, upload, frame: frame.at, submission: submission.sequence,
       gpu: { dimensions, count: heightsOnGpu.length, sha256: gpuSha256 },
       queries: queries.map(({ point, owner, geometry }, index) => ({ point, owner, geometry, heightSha256: queryDigests[index] })) };
   };
-  probe.retainTerrain = () => {
+  probe.retainTerrain = async () => {
+    const { queryTerrainDataset } = await import("/src/viewport/forge3dWebViewport.ts");
+    const { terrainTransform } = await import("/src/viewport/forge3dWebMapping.ts");
     const d = diagnostic();
     const request = d.terrainViewport.diagnosticSubmission.terrain;
     const node = d.frame.objects.find(object => object.id === request.objectId);
-    const { preview } = d.frame.terrains.get(request.objectId);
+    const terrain = d.frame.terrains.get(request.objectId);
     const dataset = datasets.get(activeRecord());
-    const [tx, ty, tz] = node.translation;
-    const scale = 12 * node.scale[0] / Math.max(...groundSpan(preview));
-    probe.retainedHeights = Float32Array.from(preview.heights);
-    probe.retainedQuery = (x, z) => {
-      const hit = dataset.query((x - tx) / scale, (z - tz) / scale);
-      if (hit) return { ...hit, worldPosition: [x, ty + hit.worldPosition[1] * scale, z] };
-    };
+    const transform = terrainTransform(terrain.preview, node.translation, node.scale[0]);
+    probe.retainedHeights = Float32Array.from(terrain.preview.heights, encoding(terrain).sample);
+    probe.retainedQuery = (x, z) => queryTerrainDataset(dataset, terrain, transform, x, z);
   };
 
   probe.snapshot = () => {

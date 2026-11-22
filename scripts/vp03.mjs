@@ -20,7 +20,7 @@ const { values: args } = parseArgs({ options: {
   shell: { type: "string" }, "shell-sha256": { type: "string" }, endpoint: { type: "string" }, out: { type: "string" }, historical: { type: "string" },
   origin: { type: "string", default: "http://localhost:1426" },
   upstream: { type: "string", default: "http://localhost:1427" },
-  "cdp-port": { type: "string" },
+  "cdp-port": { type: "string" }, "fractional-fixture": { type: "string" },
   "cog-fixture": { type: "string" },
   "public-cog": { type: "boolean" },
 }});
@@ -33,7 +33,7 @@ const out = resolve(args.out);
 const origin = loopbackUrl(args.origin);
 const upstream = loopbackUrl(args.upstream);
 const endpoint = loopbackUrl(args.endpoint ?? `http://127.0.0.1:${args["cdp-port"] ?? 9456}`);
-assert.ok(Number(endpoint.port) > 0 && origin.port !== endpoint.port && upstream.port !== endpoint.port && origin.origin !== upstream.origin);
+assert.ok((Number(endpoint.port) > 0 || args["cdp-port"] === "0") && origin.port !== endpoint.port && upstream.port !== endpoint.port && origin.origin !== upstream.origin);
 if (args.endpoint && args["cdp-port"]) assert.equal(endpoint.port, args["cdp-port"], "CDP endpoint and port disagree");
 const shell = resolve(args.shell ?? process.env.FORGE3D_STUDIO_SHELL ??
   join(process.env.CARGO_TARGET_DIR ?? join(root, "target"), "debug", "forge3d-studio-shell.exe"));
@@ -138,11 +138,24 @@ async function fixtureSet() {
 const expectedNativeSource = await nativeSourceHash(root);
 
 async function onDesktop(role, run, { lane = role, upstreamOrigin = upstream } = {}) {
+  try {
+    await desktopAttempt(role, run, lane, upstreamOrigin, lane);
+  } catch (error) {
+    if (error.code !== "VP03_STARTUP_STALL") throw error;
+    // Only a fresh document that stalled before the first check is eligible.
+    // Keep its profile and diagnosis. A second failure ends the whole gate.
+    (report.startupRetries ??= []).push({ lane, cause: error.message });
+    console.warn(`Restarting the unopened ${lane} WebView after a startup stall`);
+    await desktopAttempt(role, run, lane, upstreamOrigin, lane + "-restart");
+  }
+}
+
+async function desktopAttempt(role, run, lane, upstreamOrigin, profile) {
   const blocked = role === "webgl-blocked";
   const gate = await gateStudio(origin, upstreamOrigin);
   let desktop;
   try {
-    desktop = await launchStudio({ shell, origin, endpoint, dir: join(out, lane), root, blocked });
+    desktop = await launchStudio({ shell, origin, endpoint, dir: join(out, profile), root, blocked });
     const { cdp } = desktop;
     await cdp.send("Page.enable");
     await cdp.send("Runtime.enable");
@@ -183,10 +196,41 @@ async function onDesktop(role, run, { lane = role, upstreamOrigin = upstream } =
     });
     const armed = await cdp.evaluate(`__vp03?.runId === ${e(runId)} && performance.timeOrigin`);
     assert.equal(armed, before.timeOrigin);
-    gate.start();
-    await until(cdp, 'window.__vp03?.instrumented && !!document.querySelector(".menu__button")', "First Studio startup");
-    const dismiss = '.recovery button[aria-label="Dismiss"]';
-    if (await cdp.evaluate(`!!document.querySelector(${e(dismiss)})`)) await click(cdp, dismiss);
+    // Install the observers on the real runtime before Studio can import it.
+    // Releasing both module graphs together made first-document startup race.
+    gate.startRuntime();
+    const loadErrors = [];
+    cdp.on("Runtime.exceptionThrown", ({ exceptionDetails }) =>
+      loadErrors.push(exceptionDetails.exception?.description ?? exceptionDetails.text));
+    cdp.on("Network.loadingFailed", failure => {
+      if (!failure.canceled) loadErrors.push(`${failure.type}: ${failure.errorText}`);
+    });
+    try {
+      const probe = await until(cdp, "window.__vp03?.instrumentationError || window.__vp03?.instrumented", "Runtime observation", 75_000);
+      assert.equal(probe, true, "Runtime instrumentation failed: " + probe);
+      gate.start();
+      await until(cdp, '!!document.querySelector(".menu__button")', "First Studio startup", 75_000);
+    } catch (error) {
+      const startup = await cdp.evaluate(`({document:document.readyState, title:document.title, text:document.body.innerText.slice(0,1000),
+        armed:window.__vp03?.runId, instrumented:window.__vp03?.instrumented, error:window.__vp03?.instrumentationError,
+        resources:performance.getEntriesByType("resource").slice(-12).map(e=>[new URL(e.name).pathname,e.responseStatus])})`);
+      const diagnosis = Error(`First Studio startup in ${profile}: ${e({ ...startup, loadErrors })}`, { cause: error });
+      if (startup.armed === runId && startup.document !== "complete" && !startup.error && !loadErrors.length) {
+        diagnosis.code = "VP03_STARTUP_STALL";
+      }
+      throw diagnosis;
+    }
+    // Recovery is refreshed asynchronously at startup and after opening files.
+    // Its banner wraps filenames and can change the framebuffer between controls.
+    await cdp.evaluate(`(() => {
+      const dismiss = () => {
+        const button = document.querySelector('.recovery button[aria-label="Dismiss"]');
+        if (button) { observer.disconnect(); button.click(); }
+      };
+      const observer = new MutationObserver(dismiss);
+      observer.observe(document.querySelector("#root"), { childList: true, subtree: true });
+      dismiss();
+    })()`);
     try {
       await run(cdp, { measured, realms, crossFrame: gate.crossFrame, before,
         held: [...gate.held], flags: desktop.flags, pid: desktop.pid, timeOrigin: armed, nativeSourceSha256: info.nativeSourceSha256 });
@@ -212,7 +256,12 @@ const queuePicker = (cdp, action, path) => cdp.evaluate(`__vp03.picker = ${e({ a
 const snapshot = cdp => cdp.evaluate("__vp03.snapshot()");
 const withSnapshot = expression => `(() => {const s = window.__vp03?.snapshot(); return s && (${expression}) && s})()`;
 const settle = (cdp, expression, label, timeout) => until(cdp, withSnapshot(expression), label, timeout);
+// Older bare-terrain files gain a base relief layer during Studio's v4→v5
+// migration. Determine that expectation from the file being opened.
+const legacyReliefProjects = new WeakMap();
 async function openAction(cdp, fixture) {
+  const source = await json(fixture.path);
+  legacyReliefProjects.set(cdp, source.schemaVersion < 5 && source.cartography === undefined ? source.id : null);
   await queuePicker(cdp, "open", fixture.path);
   await click(cdp, ".menu__button", "File");
   await click(cdp, '[role="menuitem"]', "Open…");
@@ -290,7 +339,7 @@ async function capture(cdp, name, condition, expectTerrain, prior = 0, { status 
   assert.deepEqual([state.submission.width, state.submission.height], [width, height]);
   const native = await projectState(cdp);
   assert.equal(state.projectId, native.project.id);
-  if (strictSettings) checkToggles(native.project);
+  if (strictSettings) checkToggles(native.project, legacyReliefProjects.get(cdp) === native.project.id);
   assert.equal(await cdp.evaluate('localStorage.getItem("studio.viewport.renderer")'), "auto");
   // Enclose the viewport in an integer CSS clip. The compositor comparison
   // accounts for the CDP crop origin at the current display scale.
@@ -394,13 +443,16 @@ function withStaleQuery(cdp, hit, run) {
   return withQueryOverride(cdp, `() => (${e(hit)})`, run);
 }
 
-function checkToggles(project) {
+function checkToggles(project, migratedRelief = false) {
+  const visible = project.cartography?.filter(layer => layer.visible) ?? [];
+  assert.deepEqual(visible.map(layer => layer.type), migratedRelief ? ["relief"] : [],
+    "Visible cartography layers differ from the expected fixture settings");
   const settings = { mode: project.viewport.mode, grid: project.viewport.gridVisible, hillshade: project.viewport.hillshade,
     sunShadows: project.render.shadows, terrainSunShadows: project.render.sunVisibility, hdri: project.render.environment,
     imagery: !!project.cartography?.some(layer => layer.type === "imagery" && layer.visible),
-    cartography: project.cartography?.filter(layer => layer.visible).length ?? 0 };
+    cartography: visible.length };
   assert.deepEqual(settings, { mode: "solid", grid: false, hillshade: false, sunShadows: false, terrainSunShadows: false,
-    hdri: null, imagery: false, cartography: 0 });
+    hdri: null, imagery: false, cartography: migratedRelief ? 1 : 0 });
   return { renderer: "auto", mapGrid: false, ...settings };
 }
 
@@ -726,7 +778,8 @@ async function staleQueryHeights(cdp, fixtures) {
     assert.equal(evidence.upload.heightSha256, current.uploadEvidence.acceptedSha256);
     const [staleRgba, currentRgba] = await Promise.all(["control-stale-query-heights.rgba", current.files.rgba]
       .map(file => readFile(join(out, file))));
-    assert.ok(staleRgba.equals(currentRgba));
+    assert.deepEqual(stale.dimensions, current.dimensions, "Stale-query control changed the framebuffer dimensions");
+    assert.ok(staleRgba.equals(currentRgba), "Changing only the query heights must preserve every framebuffer byte");
     report.checks.staleQueryHeights = { passed: true, old, current, stale, evidence, thirdPoint, oldThird, currentThird, staleThird };
   } finally {
     await cdp.evaluate("__vp03.restoreDataset(); delete __vp03.restoreDataset; delete __vp03.retainedHeights; delete __vp03.retainedQuery");
@@ -1951,7 +2004,7 @@ try {
   if (args["shell-sha256"]) {
     assert.equal(report.shell.sha256, args["shell-sha256"].toLowerCase(), "Native shell executable SHA-256 differs from the supplied build");
   }
-  report.endpoint = endpoint.href;
+  report.endpoint = endpoint.port === "0" ? "Per-lane loopback port (recorded in WebView2 flags)" : endpoint.href;
   report.fixtures = await fixtureSet();
   reference = await compileReference(root, join(out, "reference-vite-cache"));
   if (args.historical) {
@@ -2035,6 +2088,22 @@ try {
   // A fresh blocked document keeps the raster and native-placement controls
   // independent of the faults injected into the core lifecycle run.
   await onDesktop("webgl-blocked", async (cdp, { measured, nativeSourceSha256 }) => {
+    if (args["fractional-fixture"]) {
+      const path = resolve(args["fractional-fixture"]), project = await json(path);
+      await open(cdp, {id:project.id, path});
+      const frame = await capture(cdp, "fractional-datum", "s.object?.visible", true);
+      const migrated = (await projectState(cdp)).project;
+      if (project.schemaVersion < 5 && project.cartography === undefined) {
+        checkToggles(migrated, true);
+        assert.throws(() => checkToggles({ ...migrated, cartography: [] }, true), /Visible cartography layers/);
+      }
+      assert.equal(frame.uploadEvidence.heightOrigin, 4150.24);
+      assert.deepEqual(frame.uploadEvidence.acceptedGeometry.domain, [0, 4150.25 - 4150.24]);
+      assert.ok(Math.abs(frame.offCenter.hit.worldPosition[1] - 1.2) < 1e-6);
+      assert.ok(Math.abs(frame.offCenter.hit.elevation - 4150.25) < 1e-6);
+      report.checks.fractionalDatum = {passed:true, frame};
+      await closeProject(cdp);
+    }
     await remoteScale(cdp, report.fixtures);
     await wrongPreviewSource(cdp, report.fixtures);
     await fractionalDisplay(cdp, report.fixtures);

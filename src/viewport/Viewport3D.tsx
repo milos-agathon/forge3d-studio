@@ -8,7 +8,7 @@ import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 
 import { ForgeTerrainViewport, viewportErrorReason, type TerrainPresentation } from "./forge3dWebViewport";
-import { studioUnitsPerGroundUnit, terrainGroundSpan, type RendererPreference } from "./forge3dWebMapping";
+import { studioUnitsPerGroundUnit, terrainGroundSpan, terrainVertexRelief, type RendererPreference } from "./forge3dWebMapping";
 import { assetRevision, boundedTerrainResolution, firstVisibleTerrain, nativeRenderView, terrainSampleRevision, validateTerrainPreview, viewportDimensions, ViewportModel,
   type TerrainPreviewRequest, type ViewportDimensions, type ViewportTerrain } from "./viewportState";
 import { hillshadePixels } from "./hillshade";
@@ -607,7 +607,7 @@ function buildTerrainMesh(
     const row = Math.floor(index / resolution);
     const column = index % resolution;
     const elevation = preview.heights[row * resolution + column] ?? minElevation;
-    position.setY(index, (elevation - minElevation) * zScale * horizontal);
+    position.setY(index, terrainVertexRelief(preview, elevation) * zScale * horizontal);
     if (colours && ramp) {
       // The same elevation domain the renderer maps through the LUT, and the
       // engine's linear stops — which is the space vertex colours live in.
@@ -719,8 +719,7 @@ function buildTerrainMesh(
   // Whether this mesh carries an elevation ramp at all (the attribute is fixed
   // once built; the mode decides if it is shown).
   mesh.userData.ramp = colours !== null;
-  // Local Y is (elevation - min) * zScale * horizontal: what the cursor
-  // readout inverts to report the elevation under the pointer.
+  // Used by the viewport diagnostics to convert local units to ground units.
   mesh.userData.elevation = { min: minElevation, scale: Math.max(1e-9, zScale * horizontal) };
   return mesh;
 }
@@ -735,8 +734,8 @@ interface CartographyAnchor {
   /** Text-shadow halo: readable on any ground. */
   haloCss: string;
   fontSizePx: number;
-  /** World position on the terrain (the div rides the projection). */
-  world: THREE.Vector3;
+  /** Position on the terrain before the terrain object's transform. */
+  local: THREE.Vector3;
   /** Hidden this frame because the ground stands in front of the anchor. */
   occluded: boolean;
 }
@@ -1404,6 +1403,14 @@ export function Viewport3D({ preference, onBackend }: {
     if (import.meta.env.DEV) {
       Object.assign(window, { forge3dViewportDiagnostics: () => ({ terrainViewport, runtime: runtimeRef.current,
         frame: viewport.current, nativeView: nativeRenderView(viewport.current),
+        setOrbitPose: (eye: [number, number, number], aim: [number, number, number]) => {
+          const orbit = runtimeRef.current?.orbit;
+          const orbitTarget = (orbit?.target ?? target).fromArray(aim);
+          camera.position.fromArray(eye);
+          camera.lookAt(orbitTarget);
+          orbit?.update();
+          invalidate();
+        },
         queryTerrain: (x: number, z: number) => terrainViewport.queryTerrain(viewport.current, x, z) }) });
     }
     animation = requestAnimationFrame(tick);
@@ -1524,6 +1531,7 @@ export function Viewport3D({ preference, onBackend }: {
     scene.add(axes);
 
     const overlay = new THREE.Group();
+    overlay.matrixAutoUpdate = false;
     overlay.name = "cartography-overlay";
     overlay.userData.owned = true;
     scene.add(overlay);
@@ -1774,6 +1782,21 @@ export function Viewport3D({ preference, onBackend }: {
       // occlusion pass (a ray per anchor against the terrain) only runs
       // when the camera actually moved.
       runtime.overlay.visible = viewportModeRef.current !== "rendered" && viewport.current.terrains.size > 0;
+      const hasOverlay = runtime.overlay.children.length > 0 || anchorsRef.current.length > 0;
+      const surface = runtime.overlay.visible && hasOverlay ? firstVisibleTerrain(viewport.current) : undefined;
+      const terrainGroup = surface && runtime.objects.get(surface.id);
+      if (terrainGroup) {
+        // The overlay and terrain group are siblings. Follow live gizmo edits
+        // as well as project edits without fetching the layer geometry again.
+        terrainGroup.updateMatrix();
+        if (!runtime.overlay.matrix.equals(terrainGroup.matrix)) {
+          terrainGroup.updateMatrixWorld(true);
+          runtime.overlay.matrix.copy(terrainGroup.matrix);
+          runtime.overlay.updateMatrixWorld(true);
+          anchorsVersionRef.current++;
+          runtime.needsRender = true;
+        }
+      }
       const labelLayerEl = runtime.labelLayer;
       if (labelLayerEl) {
         if (runtime.overlay.visible && anchorsRef.current.length > 0) {
@@ -1789,12 +1812,6 @@ export function Viewport3D({ preference, onBackend }: {
             Math.abs(camera.quaternion.w - occlusionQuatRef.current.w) > 1e-4 ||
             anchorsVersionRef.current !== occlusionVersionRef.current;
           if (cameraMoved) {
-            const terrainObject = stateRef.current?.project.scene.objects.find(
-              (object) => object.kind.type === "terrain",
-            );
-            const terrainGroup = terrainObject
-              ? runtime.objects.get(terrainObject.id)
-              : undefined;
             let terrainMesh: THREE.Mesh | undefined;
             for (const child of terrainGroup?.children ?? []) {
               if ((child as THREE.Mesh).isMesh) {
@@ -1808,7 +1825,7 @@ export function Viewport3D({ preference, onBackend }: {
                 anchor.occluded = false;
                 continue;
               }
-              const direction = anchor.world.clone().sub(camera.position);
+              const direction = anchor.local.clone().applyMatrix4(runtime.overlay.matrixWorld).sub(camera.position);
               const distance = direction.length();
               ray.set(camera.position, direction.normalize());
               ray.far = distance - 0.05;
@@ -1824,12 +1841,12 @@ export function Viewport3D({ preference, onBackend }: {
             const div = labelDivsRef.current.get(anchor.id);
             if (!div) continue;
             // Behind the camera: a view-space test, not the projected z.
-            const view = anchor.world.clone().applyMatrix4(camera.matrixWorldInverse);
-            if (view.z >= -0.05 || anchor.occluded) {
+            screen.copy(anchor.local).applyMatrix4(runtime.overlay.matrixWorld).applyMatrix4(camera.matrixWorldInverse);
+            if (screen.z >= -0.05 || anchor.occluded) {
               div.style.display = "none";
               continue;
             }
-            screen.copy(anchor.world).project(camera);
+            screen.applyMatrix4(camera.projectionMatrix);
             const x = (screen.x * 0.5 + 0.5) * width;
             const y = (-screen.y * 0.5 + 0.5) * height;
             if (x < -80 || y < -40 || x > width + 80 || y > height + 40) {
@@ -2400,7 +2417,7 @@ export function Viewport3D({ preference, onBackend }: {
     const { zScale, preview } = terrain;
 
     (async () => {
-      const spanXz = preview.spanXz;
+      const spanXz = terrainGroundSpan(preview);
       const lift = drapeLift(spanXz, [preview.minElevation, preview.maxElevation], zScale);
       const lineMaterials: LineMaterial[] = [];
       const anchors: CartographyAnchor[] = [];
@@ -2501,7 +2518,7 @@ export function Viewport3D({ preference, onBackend }: {
               className: "cartography-label--feature",
               ...ink,
               fontSizePx: layer.sizePx ?? 13,
-              world: new THREE.Vector3(
+              local: new THREE.Vector3(
                 ...anchorWorld(preview, spanXz, zScale, point.u, point.v),
               ),
               occluded: false,
@@ -2538,7 +2555,7 @@ export function Viewport3D({ preference, onBackend }: {
               ...ink,
               // The engine's own grid annotation size.
               fontSizePx: 12,
-              world: new THREE.Vector3(
+              local: new THREE.Vector3(
                 ...anchorWorld(preview, spanXz, zScale, annotation.u, annotation.v),
               ),
               occluded: false,

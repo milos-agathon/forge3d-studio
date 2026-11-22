@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { CameraInput, Forge3DRuntime, LightCollection, TerrainDataset, TerrainMaterialImage, IblSnapshot, RgbeImage } from "@forge3d/web";
-import { cameraInput, imageryMipLevel, imageryOverlays, runtimeToStudio, studioToRuntime, terrainInput, terrainTransform,
+import { cameraInput, imageryMipLevel, imageryOverlays, queryTerrainDataset, terrainInput, terrainTransform,
   type RendererPreference, type TerrainTransform } from "./forge3dWebMapping";
 import { hillshadePixels } from "./hillshade";
 import { cameraTarget, firstVisibleTerrain, validateTerrainPreview, viewportTerrainBackend,
@@ -49,7 +49,12 @@ interface SubmittedFrame {
   terrain?: { upload: UploadedTerrain; transform: TerrainTransform };
 }
 
-const emptyTransform: TerrainTransform = { translation: [0, 0, 0], scale: 1 };
+const emptyTransform = { translation: [0, 0, 0] as [number, number, number], scale: 1 };
+
+function samePlacement(transform: TerrainTransform, object: ViewportObject) {
+  return transform.objectScale === object.scale[0] &&
+    transform.translation.every((value, axis) => value === object.translation[axis]);
+}
 const defaultSun = { direction: new THREE.Vector3(-6, -9, -4).normalize().toArray(), color: [1, 1, 1] as [number, number, number], intensity: 3 };
 
 export function viewportErrorReason(error: unknown): string {
@@ -63,6 +68,9 @@ function visibleSource(frame: ViewportFrame, terrain: ViewportTerrain): Viewport
   return frame.objects.find(object => object.id === request.objectId && object.visible &&
     object.kind.type === "terrain" && object.terrainRevision === request.terrainRevision && object.kind.zScale === request.zScale);
 }
+
+// The desktop retained-dataset control exercises the same query as the viewport.
+export { queryTerrainDataset };
 
 // Display mutations on the pinned facade are synchronous only outside a capture.
 // All Studio GPU reads go through this handle, including development diagnostics.
@@ -515,7 +523,7 @@ export class ForgeTerrainViewport {
             ? !drape && map && map === mesh.userData.hillshade ? mesh.userData.hillshade.image.data : undefined
             : hillshade ? hillshadePixels(terrain.preview) : undefined;
           const input = terrainInput(terrain.preview, terrain.zScale, [color.r, color.g, color.b], shade,
-            { drape: image, vertexColors: ramp ? mesh?.geometry.getAttribute("color").array : undefined });
+            { drape: image, vertexColors: ramp ? mesh?.geometry.getAttribute("color").array : undefined }, terrain.heightOrigin);
           web.setTerrain(input);
           this.admittedRead = undefined;
           const dataset = this.module!.TerrainDataset.fromArray(input);
@@ -528,8 +536,11 @@ export class ForgeTerrainViewport {
         }
         this.uploadedImage = image;
         if (this.verifyUpload && !this.gridReady(web, terrain)) return { submitted: false };
-        transform = terrainTransform(terrain.preview, object.translation, object.scale[0]);
-        presentedTerrain = { upload: this.uploaded!, transform };
+        const previous = this.submitted?.terrain;
+        const placement = previous && previous.upload === this.uploaded && samePlacement(previous.transform, object)
+          ? previous.transform : terrainTransform(terrain.preview, object.translation, object.scale[0]);
+        transform = placement;
+        presentedTerrain = { upload: this.uploaded!, transform: placement };
       }
 
       const sun = settings.sun ?? defaultSun;
@@ -587,9 +598,7 @@ export class ForgeTerrainViewport {
     if (!terrain || submitted.projectId !== frame.projectId || this.#web?.disposed !== false) return;
     const object = visibleSource(frame, terrain.upload.terrain);
     if (!object || terrain.upload.terrain !== frame.terrains.get(object.id)) return;
-    const current = terrainTransform(terrain.upload.terrain.preview, object.translation, object.scale[0]);
-    if (current.scale !== terrain.transform.scale ||
-        current.translation.some((value, index) => value !== terrain.transform.translation[index])) return;
+    if (!samePlacement(terrain.transform, object)) return;
     return terrain;
   }
 
@@ -597,9 +606,7 @@ export class ForgeTerrainViewport {
   queryTerrain(frame: ViewportFrame, x: number, z: number) {
     const terrain = this.visibleSubmission(frame);
     if (!terrain) return;
-    const [groundX, , groundZ] = studioToRuntime([x, 0, z], terrain.transform);
-    const hit = terrain.upload.dataset.query(groundX, groundZ);
-    if (hit) return { ...hit, worldPosition: runtimeToStudio(hit.worldPosition, terrain.transform) };
+    return queryTerrainDataset(terrain.upload.dataset, terrain.upload.terrain, terrain.transform, x, z);
   }
 
   // Exposed by the development viewport's verification hook.

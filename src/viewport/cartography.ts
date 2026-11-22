@@ -6,6 +6,7 @@
  * Pure math, no three.js — the meshes are assembled by the caller, the tests
  * pin the numbers.
  */
+import { terrainSurfaceRelief } from "./forge3dWebMapping.ts";
 import { TERRAIN_VIEW_SIZE } from "./viewMath.ts";
 
 export interface HeightPreview {
@@ -22,6 +23,7 @@ export interface HeightPreview {
  * preview normalises onto.
  */
 export function sampleHeight(preview: HeightPreview, u: number, v: number): number {
+  if (preview.minElevation === preview.maxElevation) return preview.minElevation;
   const res = preview.resolution;
   const gx = Math.min(Math.max(u, 0), 1) * (res - 1);
   const gy = Math.min(Math.max(v, 0), 1) * (res - 1);
@@ -33,7 +35,7 @@ export function sampleHeight(preview: HeightPreview, u: number, v: number): numb
   const ty = gy - y0;
   const at = (col: number, row: number): number => {
     const value = preview.heights[row * res + col];
-    return Number.isFinite(value) ? value : preview.minElevation;
+    return Math.fround(Number.isFinite(value) ? value : preview.minElevation);
   };
   const south = at(x0, y0) * (1 - tx) + at(x1, y0) * tx;
   const north = at(x0, y1) * (1 - tx) + at(x1, y1) * tx;
@@ -69,7 +71,7 @@ export function worldPosition(
   lift: number,
 ): [number, number, number] {
   const horizontal = TERRAIN_VIEW_SIZE / Math.max(spanXz[0], spanXz[1]);
-  const elevation = sampleHeight(preview, u, v) - preview.minElevation;
+  const elevation = terrainSurfaceRelief(preview, u * (preview.resolution - 1), v * (preview.resolution - 1));
   return [
     (u - 0.5) * spanXz[0] * horizontal,
     elevation * zScale * horizontal + lift,
