@@ -539,8 +539,9 @@ consumed is gone.
   because the webview cannot read neighbouring files.
 - **Imported meshes are transform-editable, relinkable, and node-selectable.**
   Solid draws them as clay; the Material preview draws their glTF materials,
-  and Rendered composites them over the still at the viewport camera's aim.
-  Built-in primitives still do not reach Forge3D (see Primitives below).
+  and Rendered composites them at their own scene transforms, not at the
+  camera aim. Built-in primitives still do not reach Forge3D (see Primitives
+  below).
 - **No shadows or PBR environment** in the Solid viewport; it is a modelling
   view, not the Forge3D render. The Material preview is where HDRI lighting and
   soft shadows live (Phase 4).
@@ -552,9 +553,10 @@ consumed is gone.
 - **Primitives still do not reach Forge3D.** The Phase 4 default scene is terrain
   precisely because that path is complete; exporting primitive meshes as glTF is
   the remaining piece of Rendered mode.
-- **Object animation (Phases 6) is evaluated in the model and exported per frame,
-  but the engine cannot draw those objects**, so only camera animation shows up
-  in Rendered frames.
+- **Object animation (Phase 6) is evaluated in the model and exported per
+  frame.** Whole imported meshes reach Rendered at their evaluated scene
+  transforms, including keyed transforms during export; node-scoped imports
+  are reported as skipped and built-in primitives have no render geometry.
 - **Rendered shows one still frame at a time.** Playback animates the Solid and
   Material viewports live; Rendered re-renders on edits, orbit/zoom, and camera
   changes (throttled), not per playback frame. Use **Export frames…** for the

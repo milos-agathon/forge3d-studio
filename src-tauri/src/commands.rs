@@ -2101,7 +2101,13 @@ mod tests {
             id: studio_core::ids::new_id(),
             name: "Imported".to_owned(),
             parent: None,
-            transform: Transform::default(),
+            // A deliberately visible, off-centre transform; the Python gate
+            // renders exactly these serialized values.
+            transform: studio_core::Transform {
+                translation: studio_core::Vec3::new(0.0, 0.0, -7.0),
+                rotation_deg: studio_core::Vec3::ZERO,
+                scale: studio_core::Vec3::new(6.0, 6.0, 6.0),
+            },
             visible: true,
             locked: false,
             kind: ObjectKind::Mesh(studio_core::MeshObject::gltf(asset.id, None)),
@@ -2114,12 +2120,19 @@ mod tests {
         let handoff = studio_core::workspace::handoff(&project, 1, Workspace::Forge3d);
         let request = build_request(&handoff, &project.render, 256, 256, None, meshes).unwrap();
         let payload = request.to_payload("final", None);
-        let mesh = &payload["meshes"][0];
-        assert_eq!(mesh["path"], "assets/models/campus.glb");
-        assert!(
-            mesh["node"].is_null(),
-            "a whole-asset import has no node filter"
+        if std::env::var_os("WRITE_MESH_HANDOFF_FIXTURE").is_some() {
+            let fixture = root.join("tests/fixtures/mesh-handoff.json");
+            std::fs::write(
+                fixture,
+                serde_json::to_string_pretty(&payload["meshes"]).unwrap(),
+            )
+            .unwrap();
+        }
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/mesh-handoff.json")).unwrap();
+        assert_eq!(
+            payload["meshes"], fixture,
+            "the serialized handoff must match the fixture Python renders"
         );
-        assert_eq!(mesh["transform"].as_array().unwrap().len(), 16);
     }
 }

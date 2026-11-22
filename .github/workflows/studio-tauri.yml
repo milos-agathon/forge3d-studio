@@ -101,9 +101,12 @@ jobs:
           GIT_LFS_SKIP_SMUDGE: "1"
         shell: pwsh
         run: |
-          python -m venv "$env:USERPROFILE\studio-gpu-venv"
-          & "$env:USERPROFILE\studio-gpu-venv\Scripts\python.exe" -m pip install --upgrade pip
-          & "$env:USERPROFILE\studio-gpu-venv\Scripts\python.exe" -m pip install `
+          # Fresh per-job environment: a self-hosted runner must not reuse a venv.
+          $venv = Join-Path $env:RUNNER_TEMP "studio-gpu-venv"
+          if (Test-Path -LiteralPath $venv) { Remove-Item -Recurse -Force -LiteralPath $venv }
+          python -m venv $venv
+          & "$venv\Scripts\python.exe" -m pip install --upgrade pip
+          & "$venv\Scripts\python.exe" -m pip install `
             'forge3d @ git+https://github.com/milos-agathon/forge3d.git@9804091086364a1824ea8bb0e7f9f2a172fddf45' `
             pytest pillow rasterio pyproj
 
@@ -111,10 +114,12 @@ jobs:
         shell: pwsh
         env:
           FORGE3D_TESSELLA_REQUIRED_GPU: '1'
+          FORGE3D_ALLOW_HOSTED_WINDOWS_TERRAIN: '1'
           WGPU_BACKEND: vulkan
           WGPU_BACKENDS: vulkan
         run: |
-          & "$env:USERPROFILE\studio-gpu-venv\Scripts\python.exe" -m pytest tests/test_studio_mesh_composite.py -v --tb=short
+          $venv = Join-Path $env:RUNNER_TEMP "studio-gpu-venv"
+          & "$venv\Scripts\python.exe" -m pytest tests/test_studio_mesh_composite.py -v --tb=short
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   deb-audit:

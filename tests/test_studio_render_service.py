@@ -1770,3 +1770,35 @@ def _render_reply_reply_image(service, reply):
     return np.asarray(
         Image.open(io.BytesIO(base64.b64decode(reply["png"]))).convert("RGB"), dtype=np.int32
     )
+
+
+@engine_required
+def test_non_default_cloud_values_reach_the_render_recipe(monkeypatch):
+    """A swapped density/strength mapping must fail at the recipe boundary."""
+    service = load_service()
+    renderer = service.StudioRenderer(str(STUDIO_DEM))
+    original = service.StudioRenderer._mapscene_still
+    captured = {}
+
+    def capture(self, *args, **kwargs):
+        captured.update(kwargs.get("studio_settings") or {})
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(service.StudioRenderer, "_mapscene_still", capture)
+    request = {
+        "width": 128, "height": 128,
+        "camera": {"phiDeg": 37.0, "thetaDeg": 42.0, "radius": 24000.0,
+                   "target": [0.0, 0.0, 0.0], "fovDeg": 45.0},
+        "sun": {"azimuthDeg": 315.0, "elevationDeg": 30.0,
+                "intensity": 3.0, "color": [1.0, 0.97, 0.92]},
+        "exposure": 1.35,
+        "quality": {
+            "shadows": True,
+            "clouds": {"enabled": True, "shadowsEnabled": True, "coverage": 0.5,
+                       "density": 0.20, "shadowStrength": 0.77, "quality": "high"},
+        },
+    }
+    _render_reply(service, renderer, request)
+    clouds = captured["clouds"]
+    assert clouds["density"] == pytest.approx(0.20)
+    assert clouds["shadow_strength"] == pytest.approx(0.77)

@@ -39,23 +39,51 @@ def _service():
     return module
 
 
-def _handoff_meshes(glb: Path, *, scale: float = 1.0) -> list[dict]:
-    """The shell's serialized `meshes` payload for a visible import.
-
-    `scale` only enlarges the fixture's own transform so a sub-pixel model at
-    country scale produces a measurable pixel gate; the shape and translation
-    still come from the shell's handoff fixture.
-    """
+def _handoff_meshes(glb: Path) -> list[dict]:
+    """The shell's serialized `meshes` payload, with only the path resolved."""
     import json
 
     entries = json.loads((REPO / "tests" / "fixtures" / "mesh-handoff.json").read_text())
     for entry in entries:
         entry["path"] = str(glb)
-        if scale != 1.0:
-            transform = np.asarray(entry["transform"], dtype=np.float32).reshape(4, 4)
-            transform[:3, :3] *= scale
-            entry["transform"] = transform.reshape(16).tolist()
     return entries
+
+
+def _projected_centre(glb: Path, camera: dict, width: int, height: int) -> np.ndarray:
+    """Where the fixture's mesh centre must land under this camera.
+
+    Mirrors the service's orbit and the engine's row-major transform.
+    """
+    import json
+    import math
+
+    import forge3d.io as fio
+
+    positions = np.asarray(fio.import_gltf(str(glb)).positions, dtype=np.float64)
+    centre = np.append((positions.min(axis=0) + positions.max(axis=0)) * 0.5, 1.0)
+    entry = _handoff_meshes(glb)[0]
+    matrix = np.asarray(entry["transform"], dtype=np.float64).reshape(4, 4)
+    world = (matrix @ centre)[:3]
+
+    azimuth = math.radians(float(camera["phiDeg"]))
+    elevation = math.radians(90.0 - float(camera["thetaDeg"]))
+    radius = float(camera["radius"])
+    eye = np.array([
+        radius * math.cos(elevation) * math.cos(azimuth),
+        radius * math.cos(elevation) * math.sin(azimuth),
+        radius * math.sin(elevation),
+    ])
+    target = np.asarray(camera["target"], dtype=np.float64)
+    forward = eye - target
+    forward /= np.linalg.norm(forward)
+    right = np.cross([0.0, 0.0, 1.0], forward)
+    right /= np.linalg.norm(right)
+    up = np.cross(forward, right)
+    view = world - eye
+    tan_half = math.tan(math.radians(float(camera["fovDeg"])) * 0.5)
+    x = (view @ right) / (-(view @ forward) * tan_half)
+    y = (view @ up) / (-(view @ forward) * tan_half)
+    return np.array([(x * 0.5 + 0.5) * width, (1.0 - (y * 0.5 + 0.5)) * height])
 
 
 def _decode(service, reply) -> np.ndarray:
@@ -97,7 +125,7 @@ def test_serialized_handoff_mesh_reaches_the_still(tmp_path):
     }
 
     baseline = _decode(service, renderer.render(dict(base_request)))
-    with_mesh = dict(base_request, meshes=_handoff_meshes(glb, scale=4.0))
+    with_mesh = dict(base_request, meshes=_handoff_meshes(glb))
     reply = renderer.render(with_mesh)
     image = _decode(service, reply)
 
@@ -106,10 +134,12 @@ def test_serialized_handoff_mesh_reaches_the_still(tmp_path):
     changed = diff > 8
     assert int(changed.sum()) > 20, "the imported mesh did not reach the still"
 
-    # The mesh comes from the shell's serialized handoff fixture, not from a
-    # transform invented here, so returning an empty `meshes` list in the
-    # shell would leave this frame identical to the baseline.
-    assert int(changed.sum()) > 20
+    # The mesh is the shell's serialized payload unchanged. Its pixels must
+    # land where the viewport projection says, not just anywhere in frame.
+    ys, xs = np.nonzero(changed)
+    centroid = np.array([float(xs.mean()), float(ys.mean())])
+    expected = _projected_centre(glb, camera, 256, 256)
+    assert np.allclose(centroid, expected, atol=7.0), (centroid, expected)
 
     # Ablation: without the mesh key, the frame is byte-identical to baseline.
     without = renderer.render(dict(base_request))
@@ -150,16 +180,14 @@ def test_off_aim_handoff_mesh_tracks_the_requested_fov(tmp_path):
     _write_material_glb(glb)
     renderer = service.StudioRenderer(str(REPO / "assets" / "tif" / "Mount_Fuji_30m.tif"), z_scale=1.0)
 
-    meshes = _handoff_meshes(glb, scale=6.0)
-    moved = np.asarray(meshes[0]["transform"], dtype=np.float32).reshape(4, 4)
-    moved[0, 3] += 3.0 * (max(renderer.span_x, renderer.span_y) / 12.0)
-    meshes[0]["transform"] = moved.reshape(16).tolist()
+    meshes = _handoff_meshes(glb)
 
-    def centroid(fov: float) -> float:
+    def centroid(fov: float) -> np.ndarray:
+        camera = {"phiDeg": 135.0, "thetaDeg": 35.0, "radius": 26000.0,
+                  "target": [0.0, 0.0, 0.0], "fovDeg": fov}
         request = {
             "width": 256, "height": 256,
-            "camera": {"phiDeg": 135.0, "thetaDeg": 35.0, "radius": 26000.0,
-                       "target": [0.0, 0.0, 0.0], "fovDeg": fov},
+            "camera": camera,
             "sun": {"azimuthDeg": 315.0, "elevationDeg": 30.0,
                     "intensity": 3.0, "color": [1.0, 0.97, 0.92]},
             "exposure": 1.35,
@@ -170,12 +198,16 @@ def test_off_aim_handoff_mesh_tracks_the_requested_fov(tmp_path):
         assert reply["meshReport"]["meshesRendered"] == 1
         baseline = renderer.render({key: value for key, value in request.items() if key != "meshes"})
         changed = np.abs(_decode(service, reply) - _decode(service, baseline)).sum(axis=2) > 8
-        assert int(changed.sum()) > 20, "the moved mesh did not reach the preview frame"
+        assert int(changed.sum()) > 20, "the mesh did not reach the preview frame"
         ys, xs = np.nonzero(changed)
-        return float(xs.mean())
+        measured = np.array([float(xs.mean()), float(ys.mean())])
+        expected = _projected_centre(glb, camera, 256, 256)
+        assert np.allclose(measured, expected, atol=7.0), (fov, measured, expected)
+        return measured
 
     narrow, wide = centroid(40.0), centroid(70.0)
-    assert (narrow - 128.0) * (wide - 128.0) > 0, "the mesh changed sides with FOV"
-    assert abs(narrow - 128.0) > abs(wide - 128.0) + 4.0, (
-        f"the requested FOV did not move the projection: {narrow:.1f}, {wide:.1f}"
+    assert narrow[0] < 128.0 < 256.0 - narrow[0], f"wrong side at 40°: {narrow}"
+    assert wide[0] < 128.0 < 256.0 - wide[0], f"wrong side at 70°: {wide}"
+    assert abs(narrow[0] - 128.0) > abs(wide[0] - 128.0) + 4.0, (
+        f"the requested FOV did not move the projection: {narrow}, {wide}"
     )
