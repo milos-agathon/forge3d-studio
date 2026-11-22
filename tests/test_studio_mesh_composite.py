@@ -31,7 +31,10 @@ from _engine_gate import engine_required  # noqa: E402
 def _service():
     import importlib.util
 
-    path = REPO / "src-tauri" / "src" / "studio_render.py"
+    source_dir = REPO / "src-tauri" / "src"
+    if str(source_dir) not in sys.path:
+        sys.path.insert(0, str(source_dir))
+    path = source_dir / "studio_render.py"
     spec = importlib.util.spec_from_file_location("studio_render_service", path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
