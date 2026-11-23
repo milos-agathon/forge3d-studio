@@ -1,5 +1,6 @@
 import type { CameraInput, TerrainDataset, TerrainHeightmapInput, TerrainMaterialImage, TerrainOverlayLayerInput, TerrainOverlaysInput } from "@forge3d/web";
-import type { ViewportTerrain } from "./viewportState.ts";
+import { BoxGeometry, Euler, MathUtils, Matrix4, Vector3 } from "three";
+import type { ViewportObject, ViewportTerrain } from "./viewportState.ts";
 import type { TerrainPreview, ViewportMode } from "../bridge/types";
 import { TERRAIN_VIEW_SIZE } from "./viewMath.ts";
 
@@ -102,6 +103,31 @@ export function terrainTransform(preview: TerrainPreview, translation: Triple, o
 
 export function studioToRuntime([x, y, z]: Triple, { translation: [tx, ty, tz], scale }: UniformTransform): Triple {
   return [(x - tx) / scale, (y - ty) / scale, (z - tz) / scale];
+}
+
+export function cubeScatterGeometry(size: number, object: ViewportObject, placement: UniformTransform, editorWorld?: Matrix4) {
+  const [x, y, z] = object.rotationDeg.map(MathUtils.degToRad);
+  const world = editorWorld?.clone() ?? new Matrix4().makeRotationFromEuler(new Euler(x, y, z, "ZYX"))
+    .scale(new Vector3(...object.scale)).setPosition(...object.translation);
+  // Subtract the Studio origin in double precision before changing units.
+  // Three stores columns; the scatter ABI consumes four packed rows.
+  for (let axis = 0; axis < 3; axis++) world.elements[12 + axis] -= placement.translation[axis];
+  const inverseScale = 1 / placement.scale;
+  world.premultiply(new Matrix4().makeScale(inverseScale, inverseScale, inverseScale));
+  const geometry = new BoxGeometry(size, size, size);
+  // Match the pinned scatter ABI's determinant check on the packed matrix.
+  // Keep the shape of a flattened box, including its two opposing faces.
+  world.fromArray(new Float32Array(world.elements));
+  const determinant = world.determinant();
+  if (Math.abs(determinant) < 1e-12) {
+    const origin = new Vector3().setFromMatrixPosition(world);
+    world.setPosition(0, 0, 0);
+    geometry.attributes.position.applyMatrix4(world);
+    geometry.computeVertexNormals();
+    if (determinant < 0) geometry.attributes.normal.applyMatrix4(new Matrix4().makeScale(-1, -1, -1));
+    world.makeTranslation(origin);
+  }
+  return { geometry, transforms: new Float32Array(world.transpose().elements) };
 }
 
 export function runtimeToStudio([x, y, z]: Triple, transform: UniformTransform | TerrainTransform): Triple {

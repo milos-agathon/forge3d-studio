@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { TerrainDataset } from "@forge3d/web";
+import { MeshLayer, TerrainDataset } from "@forge3d/web";
 import { queryTerrainDataset } from "./forge3dWebMapping.ts";
 import { worldPosition } from "./cartography.ts";
 import {
-  cameraInput, runtimeToStudio, studioToRuntime, terrainInput, terrainSamplePoint, terrainTransform,
+  cameraInput, cubeScatterGeometry, runtimeToStudio, studioToRuntime, terrainInput, terrainSamplePoint, terrainTransform,
 } from "./forge3dWebMapping.ts";
 import {
   assetRevision, boundedTerrainResolution, cameraTarget, nativeRenderView, validateTerrainPreview,
@@ -168,6 +168,59 @@ test("backend eligibility follows the headless project's mode, environment and s
   assert.equal(choose({ gpu: true, sunShadowsDisabled: true }).reason, "Terrain shadows");
   model.setProject({ ...project, viewport: { ...project.viewport, mode: "rendered" } }, 1, false);
   assert.equal(choose().backend, "native");
+});
+
+test("one untextured cube shares the terrain backend and keeps its UUID without a DEM", () => {
+  const model = new ViewportModel();
+  const choose = (objects, editorAvailable, layers = []) => {
+    model.setProject({ ...bryce, scene: { ...bryce.scene, objects }, cartography: layers,
+      viewport: { ...bryce.viewport, mode: "material" },
+      render: { ...bryce.render, environment: null, shadows: false } }, 1, false);
+    return viewportTerrainBackend(model.current, "auto", { gpu: true, editorAvailable });
+  };
+  for (const objects of [[meshObject], [meshObject, terrainObject]]) {
+    for (const editor of [false, true]) {
+      const result = choose(objects, editor);
+      assert.equal(result.backend, "forge3d-web");
+      assert.equal(result.cube.object.id, meshObject.id);
+      assert.equal(result.cube.size, 2);
+    }
+  }
+  const duplicate = { ...meshObject, id: "second-cube" };
+  assert.equal(choose([meshObject, duplicate], false).backend, "three");
+  assert.equal(choose([meshObject, duplicate], true).cube, undefined);
+  assert.equal(choose([{ ...meshObject, visible: false }], false).cube, undefined);
+  const imagery = [{ type: "imagery", visible: true, asset: "photo" }];
+  assert.equal(choose([meshObject, terrainObject], true, imagery).cube, undefined);
+  assert.equal(choose([meshObject, terrainObject], false, imagery).backend, "three");
+});
+
+test("scatter packs rotated and nonuniformly scaled cube axes and relative translations into rows", () => {
+  const cube = { rotationDeg: [90,90,0], scale: [2,3,4], translation: [4e9+3,8,1] };
+  const { transforms: rows } = cubeScatterGeometry(2, cube, { translation: [4e9,10,-4], scale: 0.5 });
+  const expected = [0,6,0,6, 0,0,-8,-4, -4,0,0,10, 0,0,0,1];
+  expected.forEach((value, i) => near(rows[i], value));
+});
+
+test("flattened and very thin cubes retain their transformed faces in a valid scatter batch", () => {
+  for (const scaleX of [0, 1e-16, -1e-16]) {
+    const cube = { rotationDeg: [0, 0, 90], scale: [scaleX, 3, 2], translation: [4e9+2, 9, 4] };
+    const { geometry, transforms } = cubeScatterGeometry(2, cube, { translation: [4e9, 10, -4], scale: 0.5 });
+    assert.deepEqual([...transforms], [1,0,0,4, 0,1,0,-2, 0,0,1,16, 0,0,0,1]);
+    const { position, normal } = geometry.attributes;
+    for (let i = 0; i < position.count; i++) {
+      near(Math.abs(position.getX(i)), 6);
+      near(position.getY(i), 0);
+      near(Math.abs(position.getZ(i)), 4);
+    }
+    // The two X faces become opposite sides of an XZ plane after rotation.
+    near(Math.abs(normal.getY(0)), 1);
+    near(normal.getY(4), -normal.getY(0));
+    const layer = new MeshLayer({ positions: position.array, normals: normal.array,
+      indices: new Uint32Array(geometry.index.array) }, { transforms });
+    assert.ok(layer.toBatch());
+    layer.dispose();
+  }
 });
 
 test("hiding a terrain invalidates its pending and accepted previews", () => {

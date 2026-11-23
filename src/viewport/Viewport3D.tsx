@@ -1895,22 +1895,23 @@ export function Viewport3D({ preference, onBackend }: {
         if (runtime.labelLayer) runtime.labelLayer.style.display = "none";
       }
       if (frame?.submitted) {
-        // Opaque editor meshes must see the terrain depth before writing colour.
-        const { terrain } = frame;
+        // Retain depth for editor helpers and gizmos over WebGPU-owned surfaces.
+        const cube = frame.cubeId && runtime.objects.get(frame.cubeId)?.children[0];
+        const surfaces = [frame.terrain, cube].filter((mesh): mesh is THREE.Mesh<THREE.BufferGeometry, THREE.Material> =>
+          mesh instanceof THREE.Mesh);
         const background = scene.background;
-        const order = terrain?.renderOrder;
-        const colorWrite = terrain?.material.colorWrite;
+        const saved = surfaces.map(mesh => ({ mesh, order: mesh.renderOrder, colorWrite: mesh.material.colorWrite }));
         scene.background = null;
         renderer.setClearAlpha(0);
-        if (terrain) {
-          terrain.renderOrder = -Infinity;
-          terrain.material.colorWrite = false;
+        for (const mesh of surfaces) {
+          mesh.renderOrder = -Infinity;
+          mesh.material.colorWrite = false;
         }
         try { renderer.render(scene, camera); }
         finally {
-          if (terrain) {
-            terrain.material.colorWrite = colorWrite!;
-            terrain.renderOrder = order!;
+          for (const { mesh, order, colorWrite } of saved) {
+            mesh.material.colorWrite = colorWrite;
+            mesh.renderOrder = order;
           }
           scene.background = background;
           renderer.setClearAlpha(1);

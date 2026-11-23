@@ -96,11 +96,11 @@ const fixedViewport = `(function () {
     style.replaceSync(".viewport {box-sizing:content-box!important;width:256px!important;height:256px!important;min-height:256px!important;flex:none!important}");
     document.adoptedStyleSheets = [...document.adoptedStyleSheets, style];
 })()`;
-const limitedBudget = `(async () => {
+const limitedBudget = `window.vp04LimitBudget = async () => {
     const {Forge3DRuntime}=await import("/forge3d-web/forge3d_web.js");
     const create=Forge3DRuntime.create;
     Forge3DRuntime.create=function(canvas, options) { return create.call(this,canvas,{...options,memoryBudgetBytes:2*1024*1024}); };
-})()`;
+}`;
 
 export async function checkAdmission(cdp, fixture, loadProject, until, report) {
   // Pin just this fixture's host so sidebar layout cannot change depth allocation
