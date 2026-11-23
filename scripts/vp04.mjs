@@ -5,15 +5,13 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { setTimeout as delay } from "node:timers/promises";
+import { buildShell, desktop as runDesktop, fieldCheckout, until } from "./viewport-desktop.mjs";
 import { parseArgs } from "node:util";
 import { createServer } from "vite";
 import "./prepare-viewport-runtime.mjs";
-import { FIELD_REVISION, isPinnedRuntimeInventory, verifyProvenance } from "./vp01/fixture.mjs";
+import { FIELD_REVISION, verifyProvenance } from "./vp01/fixture.mjs";
 import { installProbe } from "./vp01/page.mjs";
-import { observeFieldRuntime, verifyRuntimeAssets } from "./vp01/startup.mjs";
-import { gateStudio, launchStudio } from "./vp03/desktop.mjs";
-import { nativeSourceHash, sha256 } from "./vp03/identity.mjs";
+import { sha256 } from "./vp03/identity.mjs";
 import { checkFootprint, checkPlacement, measureFootprint } from "./vp04/projection.mjs";
 import { checkExaggeration, setVerticalScale } from "./vp04/exaggeration.mjs";
 import { checkHover, checkRoundedMesh } from "./vp04/hover.mjs";
@@ -26,73 +24,29 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 process.env.PYTHONDONTWRITEBYTECODE = "1";
 const { values } = parseArgs({ options: { field: { type: "string" }, shell: { type: "string" },
   "field-shell": { type: "string" }, "with-vp03": { type: "boolean" }, out: { type: "string" } } });
-const field = resolve(values.field ?? join(root, "../studio-field-instrument"));
+const field = fieldCheckout(root, values.field);
 const out = values.out ? resolve(values.out) : await mkdtemp(join(tmpdir(), "studio-vp04-"));
 if (values.out) await mkdir(out);
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
-assert.equal(git(field, "rev-parse", "HEAD"), FIELD_REVISION);
-assert.equal(git(field, "status", "--porcelain", "--untracked-files=no"), "", "Field Instrument source must be clean");
 const report = { base: git(root, "rev-parse", "HEAD"), field: FIELD_REVISION, runtime: await verifyProvenance(), placement: {}, poses: {} };
 report.sourceSha256 = {};
 for (const path of ["src/viewport/Viewport3D.tsx", "src/viewport/forge3dWebViewport.ts", "src/viewport/forge3dWebMapping.ts",
   "src/viewport/cartography.ts", "src/viewport/viewportState.ts", "src-tauri/src/studio_cog.py",
-  "scripts/vp01/cdp.mjs", "scripts/vp03.mjs", "scripts/vp03/desktop.mjs", "scripts/vp03/page.mjs", "scripts/vp04.mjs", "scripts/vp04/datum.mjs",
+  "scripts/vp01/cdp.mjs", "scripts/vp03.mjs", "scripts/vp03/desktop.mjs", "scripts/vp03/page.mjs", "scripts/viewport-desktop.mjs", "scripts/vp04.mjs", "scripts/vp04/datum.mjs",
   "scripts/vp04/exaggeration.mjs", "scripts/vp04/fixtures.mjs", "scripts/vp04/hover.mjs", "scripts/vp04/page.mjs", "scripts/vp04/projection.mjs"]) {
   report.sourceSha256[path] = sha256(await readFile(join(root, path)));
 }
 const projects = await fixtures(root, out);
-const endpoint = new URL("http://127.0.0.1:9464");
 console.log("VP-04 evidence", out);
 
-async function until(cdp, expr) {
-  const deadline = Date.now() + 75_000;
-  do {
-    if (await cdp.evaluate(expr)) return;
-    await delay(80);
-  } while (Date.now() < deadline);
-  throw Error("Timed out waiting for " + expr + "\n" + await cdp.evaluate("document.body.innerText.slice(-2500)"));
-}
-
-function buildShell(source, role, origin) {
-  const target = join(tmpdir(), "studio-vp04-target", role);
-  execFileSync("cargo", ["build", "--locked", "--manifest-path", "src-tauri/Cargo.toml"], {
-    cwd: source, stdio: "inherit", env: { ...process.env, CARGO_TARGET_DIR: target, CARGO_PROFILE_DEV_DEBUG: "0",
-      TAURI_CONFIG: JSON.stringify({ identifier: "dev.forge3d.studio.vp04." + role, build: { devUrl: origin.origin } }) } });
-  return join(target, "debug/forge3d-studio-shell.exe");
-}
-
-async function desktop(role, run) {
-  const blocked = role === "candidate";
-  const candidate = role !== "field";
-  const source = candidate ? root : field;
-  const origin = new URL("http://localhost:" + (candidate ? 1426 : 1422));
-  const shell = values[candidate ? "shell" : "field-shell"] ?? buildShell(source, candidate ? "candidate" : "field", origin);
-  const vite = await createServer({ root: source, server: { host: "localhost", port: 0, hmr: false }, logLevel: "error" });
-  let gate, app;
-  try {
-    await vite.listen();
-    const upstream = new URL(vite.resolvedUrls.local[0]);
-    gate = await gateStudio(origin, upstream);
-    app = await launchStudio({ root: source, origin, endpoint, shell, dir: join(out, role), blocked });
-    const { cdp } = app;
-    await cdp.send("Page.enable");
-    await cdp.send("Page.bringToFront");
-    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
-    await until(cdp, "!!window.__TAURI_INTERNALS__?.invoke");
-    report[role + "Shell"] = { sha256: sha256(await readFile(shell)), flags: app.flags, pid: app.pid };
-    if (candidate) {
-      const info = await cdp.evaluate('__TAURI_INTERNALS__.invoke("shell_info")');
-      assert.equal(info.nativeSourceSha256, await nativeSourceHash(root), "Rebuild the candidate shell for this checkout");
-      assert.ok(isPinnedRuntimeInventory(await verifyRuntimeAssets(upstream)));
-      if (blocked) assert.equal(await cdp.evaluate('document.createElement("canvas").getContext("webgl2") === null'), true);
-      await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `(${observeUpload})().catch(e => console.error(e))` });
-    } else {
-      await observeFieldRuntime(cdp, origin.origin);
-    }
-    gate.start();
-    await run(cdp);
-  } finally { await app?.close(); await gate?.close(); await vite.close(); }
-}
+const desktop = (role, run, beforeStudio) => runDesktop({ root, field, out, values, report, role, beforeStudio,
+  // Run the real entry only after the observers for this document are installed.
+  candidatePlugins: [{ name: "vp04-observe-before-mount", transform(code, id) {
+    if (id.endsWith("/src/main.tsx")) return "await window.vp04BeforeStudio();\n" + code;
+  } }],
+  observeCandidate: cdp => cdp.send("Page.addScriptToEvaluateOnNewDocument", { runImmediately: true,
+    source: `window.vp04BeforeStudio = async () => { await window.vp04LimitBudget?.(); await (${observeUpload})(); }` }),
+}, run);
 
 async function loadProject(cdp, fixture, blocked) {
   const opened = await cdp.evaluate(`__TAURI_INTERNALS__.invoke("open_project", {path:${JSON.stringify(fixture.path)}})
@@ -307,7 +261,7 @@ try {
       assert.deepEqual(report.fallbackHover[key], report.fieldHover[key], "fallback hover " + key);
     }
   });
-  await desktop("candidate", async cdp => {
+  async function packagedControls(cdp) {
     const control = report.control = await cdp.evaluate(`(${packagedControl})()`);
     const mask = Buffer.from(control.footprintMask, "base64");
     delete control.footprintMask;
@@ -328,6 +282,8 @@ try {
     near(control.hit.elevation, 11.4, "packaged query");
     vector(control.hit.worldPosition, [4,1.4,1], "packaged position");
     assert.equal(control.outside, null);
+  }
+  await desktop("candidate", async cdp => {
     await loadProject(cdp, projects.bryce, true);
     const initialResizes = await cdp.evaluate("vp04Calls.resizes");
     for (const [name, ref] of Object.entries(reference)) {
@@ -383,7 +339,7 @@ try {
     }
     report.exactEdges = await checkExactEdges(cdp, projects, loadProject, until);
     await checkDatums(cdp, projects, loadProject, until, report, out);
-  });
+  }, packagedControls);
   if (values["with-vp03"]) {
     const origin = new URL("http://localhost:1426");
     const shell = values.shell ?? buildShell(root, "candidate", origin);

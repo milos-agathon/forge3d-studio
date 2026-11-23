@@ -102,14 +102,23 @@ export function viewportTerrainBackend(frame: ViewportFrame, preference: Rendere
     terrainCount: terrains.length,
     transformSupported: !object || supportsTransform(object.rotationDeg, object.scale),
     terrainShadows: terrainSunShadows || (sunShadows && !sunShadowsDisabled) });
+  const meshes = frame.objects.filter(item => item.visible && item.kind.type === "mesh");
+  const mesh = meshes[0];
+  const kind = mesh?.kind;
+  const terrainNeedsEditor = object && (frame.settings.drapedLayers ||
+    (mode === "material" && (frame.settings.imageryAsset || frame.settings.elevationRamp)));
+  const cube = choice.backend === "forge3d-web" && !terrainNeedsEditor && meshes.length === 1 &&
+    kind?.type === "mesh" && kind.source.type === "primitive" && kind.source.primitive.type === "cube" &&
+    !(mode === "material" && kind.material.texture) && !(sunShadows && !sunShadowsDisabled)
+    ? { object: mesh, size: kind.source.primitive.size, material: kind.material } : undefined;
   if (choice.backend === "forge3d-web" && editorAvailable === false) {
-    const editorReason = frame.objects.some(item => item.visible && item.kind.type === "mesh") ? "Mesh objects"
+    const editorReason = meshes.length && !cube ? "Mesh objects"
       : object && frame.settings.drapedLayers ? "Cartographic layers"
       : object && mode === "material" && (frame.settings.imageryAsset || frame.settings.elevationRamp) ? "Terrain material layers"
       : null;
-    if (editorReason) return { backend: "three" as const, reason: editorReason + " require three.js", object, terrain };
+    if (editorReason) return { backend: "three" as const, reason: editorReason + " require three.js", object, terrain, cube: undefined };
   }
-  return { ...choice, object, terrain };
+  return { ...choice, object, terrain, cube };
 }
 
 // The shell's local and COG samplers both clamp requests to this range.

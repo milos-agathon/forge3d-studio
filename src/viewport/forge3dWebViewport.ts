@@ -1,13 +1,13 @@
 import * as THREE from "three";
-import type { CameraInput, Forge3DRuntime, LightCollection, TerrainDataset, TerrainMaterialImage, IblSnapshot, RgbeImage } from "@forge3d/web";
-import { cameraInput, imageryMipLevel, imageryOverlays, queryTerrainDataset, terrainInput, terrainTransform,
+import type { CameraInput, Forge3DRuntime, LightCollection, MeshLayer, TerrainDataset, TerrainMaterialImage, IblSnapshot, RgbeImage } from "@forge3d/web";
+import { cameraInput, cubeScatterGeometry, imageryMipLevel, imageryOverlays, queryTerrainDataset, terrainInput, terrainTransform,
   type RendererPreference, type TerrainTransform } from "./forge3dWebMapping";
 import { hillshadePixels } from "./hillshade";
-import { cameraTarget, firstVisibleTerrain, validateTerrainPreview, viewportTerrainBackend,
+import { cameraTarget, validateTerrainPreview, viewportTerrainBackend,
   type ViewportDimensions, type ViewportFrame, type ViewportObject, type ViewportTerrain } from "./viewportState";
 
 export type TerrainMesh = THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhysicalMaterial>;
-export type TerrainPresentation = { submitted: false } | { submitted: true; terrain?: TerrainMesh };
+export type TerrainPresentation = { submitted: false } | { submitted: true; terrain?: TerrainMesh; cubeId?: string };
 interface DrapeLevel { image?: TerrainMaterialImage; error?: string }
 interface PresentedAppearance {
   skyIntensity: number;
@@ -89,6 +89,7 @@ class ViewportReadback {
   getCapabilities() { return this.#web.getCapabilities(); }
   getTerrainOverlayReport() { return this.#web.getTerrainOverlayReport(); }
   getTerrainGeometryReport() { return this.#web.getTerrainGeometryReport(); }
+  getScatterStats() { return this.#web.getScatterStats(); }
   getMemoryReport() { return this.#web.getMemoryReport(); }
 
   private async track<T>(operation: Promise<T>): Promise<T> {
@@ -111,8 +112,7 @@ class ViewportReadback {
 function drawInputs({ frame, sampling }: View) {
   // Capture only inputs to the failed scene. A corrected camera, placement or
   // sampling request may draw again, even when the editor backend is unavailable.
-  const object = firstVisibleTerrain(frame);
-  return JSON.stringify([object, frame.camera, frame.dimensions, frame.settings, sampling]);
+  return JSON.stringify([frame.objects, frame.camera, frame.dimensions, frame.settings, sampling]);
 }
 
 // Presence of an entry reserves this document's Studio viewport runtime.
@@ -131,6 +131,7 @@ export class ForgeTerrainViewport {
   private failure?: { reason: string; inputs?: string };
   private scope?: { id: string | null; generation: number; preference: RendererPreference };
   private uploaded?: UploadedTerrain;
+  private cube?: { key: string; layer: MeshLayer };
   private module?: WebModule;
   private sky?: { snapshot?: IblSnapshot; error?: string };
   private appliedSkyIntensity = 0;
@@ -195,6 +196,8 @@ export class ForgeTerrainViewport {
     this.lights = undefined;
     this.maxDimension = undefined;
     this.uploaded = undefined;
+    this.cube?.layer.dispose();
+    this.cube = undefined;
     this.uploadedImage = undefined;
     this.presentedAppearance = undefined;
     this.verifyUpload = false;
@@ -434,9 +437,46 @@ export class ForgeTerrainViewport {
     return false;
   }
 
+  private submitCube(web: Forge3DRuntime, cube: ReturnType<typeof viewportTerrainBackend>["cube"],
+    placement: typeof emptyTransform, view: View) {
+    if (!cube) {
+      if (this.cube) {
+        web.setScatterBatches([]);
+        this.cube.layer.dispose();
+        this.cube = undefined;
+      }
+      return;
+    }
+    const { object, material, size } = cube;
+    const group = view.editor?.objects.get(object.id);
+    group?.updateWorldMatrix(true, false);
+    const solid = view.frame.settings.mode === "solid";
+    const baseColor = solid ? view.clay.toArray() : material.baseColor;
+    const roughness = solid ? 0.62 : material.roughness, metallic = solid ? 0 : material.metallic;
+    const key = JSON.stringify([object.id, size, group?.matrixWorld.elements ?? [object.translation, object.rotationDeg, object.scale],
+      placement.translation, placement.scale, baseColor, roughness, metallic]);
+    if (this.cube?.key === key) return;
+
+    const module = this.module!;
+    const { geometry, transforms } = cubeScatterGeometry(size, object, placement, group?.matrixWorld);
+    const materials = new module.MaterialCollection();
+    materials.set(object.id, { id: object.id, baseColor: [baseColor[0], baseColor[1], baseColor[2], 1], roughness, metallic });
+    const slots = materials.snapshot();
+    const layer = new module.MeshLayer({
+      positions: new Float32Array(geometry.attributes.position.array),
+      normals: new Float32Array(geometry.attributes.normal.array),
+      indices: new Uint32Array(geometry.index!.array),
+    }, { name: object.id, materialIndex: slots.materials.find(slot => slot.slot === object.id)!.index,
+      color: [1, 1, 1, 1], transforms });
+    web.setMaterials(slots);
+    web.setScatterBatches([layer.toBatch()]);
+    this.cube?.layer.dispose();
+    this.cube = { key, layer };
+  }
+
   draw(view: View, previewError?: string): TerrainPresentation | undefined {
     const { frame, editor } = view;
-    const { backend, reason, terrain, object } = this.backend(view);
+    const { backend, reason, terrain, object, cube } = this.backend(view);
     if (backend === "native") {
       this.report("Viewport native · Rendered mode");
       return;
@@ -472,7 +512,7 @@ export class ForgeTerrainViewport {
     const drape: THREE.Texture<HTMLImageElement> | undefined = material ? mesh?.userData.drape : undefined;
     const level = drape && editor && mesh ? this.drapeLevel(editor.projectionCamera, dimensions, mesh, drape.image) : 0;
     const decoded = drape ? this.drapes.get(drape)?.get(level) : undefined;
-    const skyIntensity = material && terrain && (editor?.skyEnabled ?? true) ? settings.studioSkyIntensity : 0;
+    const skyIntensity = material && (terrain || cube) && (editor?.skyEnabled ?? true) ? settings.studioSkyIntensity : 0;
     try {
       const appearanceError = decoded?.error ?? (skyIntensity ? this.sky?.error : undefined);
       if (appearanceError) throw new Error(appearanceError);
@@ -486,7 +526,7 @@ export class ForgeTerrainViewport {
       if (skyIntensity && !this.sky) this.prepareSky();
       const image = decoded?.image ??
         (drape && this.uploaded?.mesh === mesh && this.uploaded?.map === drape ? this.uploadedImage : undefined);
-      const waiting = !object ? undefined : !terrain ? "Loading terrain" : editor && !mesh ? "Preparing terrain"
+      const waiting = object && !terrain ? "Loading terrain" : terrain && editor && !mesh ? "Preparing terrain"
         : drape && !image ? "Preparing imagery" : skyIntensity && !this.sky?.snapshot ? "Preparing studio sky" : undefined;
       const ready = terrain?.admission
         ? `WebGPU available · ${terrain.preview.resolution} × ${terrain.preview.resolution} terrain (${terrain.admission.requestedResolution} × ${terrain.admission.requestedResolution} requested)`
@@ -509,7 +549,11 @@ export class ForgeTerrainViewport {
         web.setPostFx(material ? [{ kind: "tonemap", operator: "aces", exposure: -0.75 }] : null);
         this.materialDisplay = material;
       }
-      let transform = emptyTransform;
+      // A cube-only frame has Studio units. Keep its origin near the camera
+      // before packing either into floats. Snap so orbiting rarely reuploads the mesh.
+      const target = cameraTarget(camera);
+      let transform = cube && !terrain ? { scale: 1,
+        translation: target.map(v => Math.round(v / 1024) * 1024) as typeof camera.eye } : emptyTransform;
       let presentedTerrain: SubmittedFrame["terrain"];
       if (terrain && !waiting && !previewError) {
         const map = mesh?.material.map;
@@ -553,8 +597,9 @@ export class ForgeTerrainViewport {
         web.setLighting(lights.snapshot());
         this.lightKey = key;
       }
-      this.setCamera(web, cameraInput(camera.eye, cameraTarget(camera), camera.up, camera.fovYDegrees,
+      this.setCamera(web, cameraInput(camera.eye, target, camera.up, camera.fovYDegrees,
         camera.near, camera.far, transform.translation, transform.scale));
+      this.submitCube(web, cube, transform, view);
       if (!web.render()) {
         this.hide();
         this.report("Viewport forge3d-web · Waiting for WebGPU frame", previewError);
@@ -579,7 +624,7 @@ export class ForgeTerrainViewport {
       this.presentedAppearance = { skyIntensity: this.appliedSkyIntensity,
         drape: image && { width: image.width, height: image.height, level, settled: image === decoded?.image } };
       this.report(status, previewError);
-      return { submitted: true, terrain: presentedTerrain && mesh };
+      return { submitted: true, terrain: presentedTerrain && mesh, cubeId: cube?.object.id };
     } catch (error) {
       const reason = viewportErrorReason(error);
       const deviceFailure = error && typeof error === "object" && "code" in error &&
