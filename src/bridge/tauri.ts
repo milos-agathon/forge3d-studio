@@ -55,7 +55,7 @@ export const tauriBridge: StudioBridge = {
 
   redo: (sessionId) => invoke<EditResult>("redo", { sessionId }),
 
-  setSelection: (ids, sessionId) => invoke<SessionState>("set_selection", { ids, sessionId }),
+  setSelection: (ids, sessionId, selectionOrder, expectedRevision) => invoke<SessionState>("set_selection", { ids, sessionId, selectionOrder, expectedRevision }),
 
   setPlayhead: (frame, sessionId) => invoke<PlayheadResult>("set_playhead", { frame, sessionId }),
 

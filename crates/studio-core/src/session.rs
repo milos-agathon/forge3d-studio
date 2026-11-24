@@ -171,11 +171,24 @@ impl Session {
     }
 
     pub fn set_selection(&mut self, ids: Vec<ObjectId>) -> Result<SessionState, StudioError> {
+        self.set_selection_ordered(ids, None, None)
+    }
+
+    pub fn set_selection_ordered(
+        &mut self,
+        ids: Vec<ObjectId>,
+        order: Option<u64>,
+        expected_revision: Option<u64>,
+    ) -> Result<SessionState, StudioError> {
         let editor = self
             .editor
             .as_mut()
             .ok_or_else(|| StudioError::invalid("no project is open"))?;
-        editor.set_selection(ids)?;
+        // A delayed request sampled before an edit (including undo) belongs to
+        // a different scene, even when the object IDs still exist.
+        if expected_revision.is_none_or(|revision| revision == editor.revision()) {
+            editor.set_selection_ordered(ids, order)?;
+        }
         Ok(editor.state_for_session(self.session_id))
     }
 
@@ -357,6 +370,24 @@ mod tests {
         let sequences = [initial, selected, early, latest, edited].map(|s| s.snapshot_sequence);
         assert!(sequences.windows(2).all(|pair| pair[0] < pair[1]));
         assert_eq!(session.state().unwrap().snapshot_sequence, sequences[4]);
+    }
+
+    #[test]
+    fn a_delayed_click_on_a_previous_revision_preserves_the_current_selection() {
+        let mut session = Session::new();
+        let initial = session.new_project(None);
+        let cube = cube_id(&session);
+        let (_, edited) = session
+            .apply(Command::SetLocked {
+                id: cube,
+                locked: true,
+            })
+            .unwrap();
+        let late = session
+            .set_selection_ordered(vec![cube], Some(1), Some(initial.revision))
+            .unwrap();
+        assert_eq!(late.snapshot_sequence, edited.snapshot_sequence);
+        assert_eq!(late.project.selection, edited.project.selection);
     }
 
     #[test]

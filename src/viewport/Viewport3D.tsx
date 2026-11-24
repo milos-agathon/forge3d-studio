@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
@@ -9,8 +9,10 @@ import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 
 import { ForgeTerrainViewport, viewportErrorReason, type TerrainPresentation } from "./forge3dWebViewport";
 import { studioUnitsPerGroundUnit, terrainGroundSpan, terrainVertexRelief, type RendererPreference } from "./forge3dWebMapping";
-import { assetRevision, boundedTerrainResolution, firstVisibleTerrain, nativeRenderView, terrainSampleRevision, validateTerrainPreview, viewportDimensions, ViewportModel,
-  type TerrainPreviewRequest, type ViewportDimensions, type ViewportTerrain } from "./viewportState";
+import { assetRevision, boundedTerrainResolution, firstVisibleTerrain, nativeRenderView, sceneObjectVisibility, terrainSampleRevision, validateTerrainPreview, viewportDimensions, ViewportModel,
+  type TerrainPreviewRequest, type ViewportDimensions, type ViewportFrame, type ViewportTerrain } from "./viewportState";
+import { editorDepthWinner, editorPrimitiveVisible, editorRasterDepths } from "./editorDepthWinner";
+import { canvasPixel, pickEditor, type StudioHit } from "./viewportPicking";
 import { hillshadePixels } from "./hillshade";
 import { bridge } from "../bridge/env";
 import type {
@@ -100,6 +102,9 @@ interface LoadedEnvironment {
 }
 
 interface Runtime {
+  pointSizeRange: Float32Array;
+  maxLineWidth: number;
+  depthBits: number;
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
@@ -136,14 +141,13 @@ interface Runtime {
   glProbed: boolean;
   /** Set by anything that changes the picture; the loop renders and clears it. */
   needsRender: boolean;
-  /** Latest selection, so the canvas click handler is not a stale closure. */
-  selection: string[];
+  selectionNeedsRender: boolean;
 }
 
 interface EditorViewport {
   resize(dimensions: ViewportDimensions): void;
   update(now: number): boolean;
-  present(frame: TerrainPresentation | undefined, previewError?: string): void;
+  present(frame: TerrainPresentation | undefined, previewError?: string, camera?: THREE.PerspectiveCamera): void;
 }
 
 /** Per-mesh shading state: what the built content looks like, and its clay. */
@@ -943,6 +947,14 @@ export function Viewport3D({ preference, onBackend }: {
     flyMode,
     setCameraView,
   } = useSession();
+  const project = state?.project;
+  const scene = project?.scene;
+  const visibility = useMemo(() => sceneObjectVisibility(scene?.objects), [scene?.objects]);
+  const visibleTerrain = scene?.objects.find(object => object.kind.type === "terrain" && visibility.get(object.id));
+  // These references survive selection acknowledgements, including when
+  // React batches them with an edit. Selection decorations use live state.
+  const sceneProject = useMemo(() => project, [project?.id, project?.scene, project?.assets,
+    project?.viewport, project?.render, project?.cartography, projectGeneration]);
   const [ladderRung, setLadderRung] = useState<number>(TERRAIN_RUNGS[0]);
   const hasRemoteTerrain = state?.project.scene.objects.some(object => {
     if (object.kind.type !== "terrain") return false;
@@ -954,6 +966,7 @@ export function Viewport3D({ preference, onBackend }: {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const runtimeRef = useRef<Runtime | null>(null);
+  const pressRef = useRef<{ id: number; x: number; y: number; generation: number } | null>(null);
   const editorRef = useRef<EditorViewport | null>(null);
   const editorErrorRef = useRef<string>(undefined);
   const hostSyncRef = useRef<() => void>(null);
@@ -1101,9 +1114,9 @@ export function Viewport3D({ preference, onBackend }: {
 
   const terrainCache = useRef(new Map<string, Map<number, Promise<TerrainPreview>>>());
   useLayoutEffect(() => {
-    const replaced = viewport.current.projectGeneration !== projectGeneration || viewport.current.projectId !== (state?.project.id ?? null);
+    const replaced = viewport.current.projectGeneration !== projectGeneration || viewport.current.projectId !== (sceneProject?.id ?? null);
     const previousTerrains = viewport.current.terrains;
-    viewport.setProject(state?.project ?? null, projectGeneration, cameraView, assetGenerations);
+    viewport.setProject(sceneProject ?? null, projectGeneration, cameraView, assetGenerations, visibility);
     hostSyncRef.current?.();
     if (viewport.current.terrains.size !== previousTerrains.size) previewsChanged(version => version + 1);
     const sampleRevisions = new Set(viewport.current.objects.map(object => object.terrainRevision));
@@ -1117,7 +1130,7 @@ export function Viewport3D({ preference, onBackend }: {
         void pending.then(texture => texture.dispose()).catch(() => undefined);
       }
     }
-  }, [viewport, state?.project, projectGeneration, cameraView, assetGenerations]);
+  }, [viewport, sceneProject, projectGeneration, cameraView, assetGenerations, visibility]);
 
   useLayoutEffect(() => { hostSyncRef.current?.(); }, [preference, terrainResolution, remoteRung]);
 
@@ -1378,8 +1391,87 @@ export function Viewport3D({ preference, onBackend }: {
       invalidate();
     };
 
-    const tick = (now: number) => {
-      animation = requestAnimationFrame(tick);
+    // Orbit damping can move the live camera below its redraw threshold.
+    // Both pickers must use the pose that produced the displayed pixels.
+    const displayedCamera = new THREE.PerspectiveCamera();
+    let displayed: { frame: ViewportFrame; gpu: boolean; revision: number } | undefined;
+    let lastPick: { pixel: [number, number]; hit: StudioHit | null; projectGeneration: number } | undefined;
+    let revision = 0;
+    let lastTerrain: TerrainPresentation | undefined;
+    let lastPreviewError: string | undefined;
+    const inputSurface = (event: PointerEvent) =>
+      event.target === canvas || event.target === container || event.target === terrainCanvas;
+    const pointerDown = (event: PointerEvent) => {
+      // A second contact starts a navigation gesture even if the first finger stays still.
+      const canPick = event.isPrimary && event.button === 0 && inputSurface(event) && viewportModeRef.current !== "rendered";
+      pressRef.current = canPick
+        ? { id: event.pointerId, x: event.clientX, y: event.clientY, generation: viewport.current.projectGeneration } : null;
+    };
+    const pointerCancel = () => { pressRef.current = null; };
+    const exceedsClickRadius = (press: { x: number; y: number }, point: PointerEvent) =>
+      Math.hypot(point.clientX - press.x, point.clientY - press.y) > 4;
+    const pointerMove = (event: PointerEvent) => {
+      const press = pressRef.current;
+      if (press?.id !== event.pointerId) return;
+      if (exceedsClickRadius(press, event) || event.getCoalescedEvents?.().some(point => exceedsClickRadius(press, point))) {
+        pressRef.current = null;
+      }
+    };
+    const pointerUp = (event: PointerEvent) => {
+      const press = pressRef.current;
+      if (!press || press.id !== event.pointerId || event.button !== 0) return;
+      pressRef.current = null;
+      if (!inputSurface(event) || viewportModeRef.current === "rendered" ||
+          press.generation !== viewport.current.projectGeneration ||
+          exceedsClickRadius(press, event)) return;
+
+      // OrbitControls can dirty the release pose between animation frames,
+      // even for a one-pixel gesture. Submit it before binding the pick.
+      if (dirty || runtimeRef.current?.needsRender) drawFrame(performance.now());
+      const presentation = displayed;
+      const frame = presentation?.frame, dimensions = frame?.dimensions;
+      if (!presentation || !frame || !dimensions) return;
+      const surface = presentation.gpu ? terrainCanvas : canvas;
+      const rect = surface.getBoundingClientRect();
+      const pixel = canvasPixel(event.clientX, event.clientY, rect, dimensions);
+      const runtime = runtimeRef.current;
+      const current = () => {
+        const bounds = surface.getBoundingClientRect();
+        return mounted && displayed === presentation && frame === viewport.current &&
+          !dirty && !runtime?.needsRender && viewportModeRef.current !== "rendered" &&
+          dimensions.cssWidth === container.clientWidth && dimensions.cssHeight === container.clientHeight &&
+          dimensions.pixelRatio === Math.min(2, window.devicePixelRatio || 1) &&
+          bounds.width === rect.width && bounds.height === rect.height && bounds.left === rect.left && bounds.top === rect.top;
+      };
+      if (!pixel || !current()) return;
+
+      const pick = presentation.gpu ? terrainViewport.pick(frame, pixel) : undefined;
+      const additive = event.shiftKey || event.ctrlKey || event.metaKey;
+      const selectedIds = async () => {
+        const gpu = await pick;
+        if (!current() || (presentation.gpu && !gpu)) return;
+        const owned = gpu?.visibleIds ?? [];
+        const hit = runtime ? pickEditor(displayedCamera, dimensions, pixel, frame.objects, runtime.objects,
+          owned, gpu?.revision ?? presentation.revision, {
+            pointSizeRange: runtime.pointSizeRange, maxLineWidth: runtime.maxLineWidth,
+            gpuHit: gpu?.hit,
+            rasterDepths: candidates => editorRasterDepths(runtime, displayedCamera, dimensions, pixel, candidates),
+            primitiveVisible: (object, offset, instanceId) => editorPrimitiveVisible(runtime.renderer, runtime.depthBits, displayedCamera,
+              dimensions, pixel, object, offset, instanceId),
+            resolveDepth: candidates => editorDepthWinner(runtime, displayedCamera, dimensions, pixel, candidates, owned),
+          })
+          : gpu?.hit ?? null;
+        if (import.meta.env.DEV) lastPick = { pixel, hit, projectGeneration: frame.projectGeneration };
+        return hit ? [hit.id] : additive ? undefined : [];
+      };
+      void actionsRef.current.select({ pick: selectedIds(), isCurrent: current }, additive);
+    };
+    container.addEventListener("pointerdown", pointerDown, true);
+    container.ownerDocument.addEventListener("pointermove", pointerMove, true);
+    container.addEventListener("pointerup", pointerUp);
+    container.addEventListener("pointercancel", pointerCancel);
+
+    const drawFrame = (now: number) => {
       // A display scale change can leave the CSS box unchanged.
       const dpr = window.devicePixelRatio;
       if (resizePending || dpr !== observedDpr) resize(dpr);
@@ -1387,7 +1479,12 @@ export function Viewport3D({ preference, onBackend }: {
       const runtime = runtimeRef.current;
       const moved = editor?.update(now);
       const lost = terrainViewport.lost();
-      if (!dirty && !moved && !runtime?.needsRender && !lost) return;
+      const redrawSelection = runtime?.selectionNeedsRender;
+      if (runtime) runtime.selectionNeedsRender = false;
+      if (!dirty && !moved && !runtime?.needsRender && !lost) {
+        if (redrawSelection && displayed) editor?.present(lastTerrain, lastPreviewError, displayedCamera);
+        return;
+      }
       dirty = false;
       if (runtime) runtime.needsRender = false;
       viewport.setCamera(readCamera());
@@ -1398,11 +1495,21 @@ export function Viewport3D({ preference, onBackend }: {
       const choice = terrainViewport.prepare(view());
       const previewError = preparePreviews(choice);
       const presented = terrainViewport.draw(view(), previewError);
+      lastTerrain = presented;
+      lastPreviewError = previewError;
       editor?.present(presented, previewError);
+      if (editor) displayedCamera.copy(camera, false);
+      displayed = presented?.submitted || editor
+        ? { frame: viewport.current, gpu: !!presented?.submitted, revision: ++revision } : undefined;
+    };
+    const tick = (now: number) => {
+      animation = requestAnimationFrame(tick);
+      drawFrame(now);
     };
     if (import.meta.env.DEV) {
       Object.assign(window, { forge3dViewportDiagnostics: () => ({ terrainViewport, runtime: runtimeRef.current,
         frame: viewport.current, nativeView: nativeRenderView(viewport.current),
+        lastPick: lastPick?.projectGeneration === viewport.current.projectGeneration ? lastPick : undefined,
         setOrbitPose: (eye: [number, number, number], aim: [number, number, number]) => {
           const orbit = runtimeRef.current?.orbit;
           const orbitTarget = (orbit?.target ?? target).fromArray(aim);
@@ -1416,6 +1523,10 @@ export function Viewport3D({ preference, onBackend }: {
     animation = requestAnimationFrame(tick);
     return () => {
       mounted = false;
+      container.removeEventListener("pointerdown", pointerDown, true);
+      container.ownerDocument.removeEventListener("pointermove", pointerMove, true);
+      container.removeEventListener("pointerup", pointerUp);
+      container.removeEventListener("pointercancel", pointerCancel);
       cancelAnimationFrame(animation);
       observer.disconnect();
       hostSyncRef.current = null;
@@ -1540,7 +1651,11 @@ export function Viewport3D({ preference, onBackend }: {
     labelLayer.setAttribute("aria-hidden", "true");
     container.appendChild(labelLayer);
 
+    const gl = renderer.getContext();
     const runtime: Runtime = {
+      pointSizeRange: gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE),
+      maxLineWidth: gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE)[1],
+      depthBits: gl.getParameter(gl.DEPTH_BITS),
       renderer,
       scene,
       camera,
@@ -1563,19 +1678,23 @@ export function Viewport3D({ preference, onBackend }: {
       glStep: 0,
       glProbed: false,
       needsRender: true,
-      selection: [],
+      selectionNeedsRender: false,
     };
     runtimeRef.current = runtime;
     const resize = ({ cssWidth: width, cssHeight: height, pixelRatio }: ViewportDimensions) => {
       renderer.setDrawingBufferSize(width, height, pixelRatio);
+      // Three rounds the viewport on resize but floors the drawing buffer.
+      // Rebind the display target so its first draw uses the same physical
+      // viewport as subsequent draws after an offscreen pick.
+      renderer.setRenderTarget(null);
       for (const line of runtime.lineMaterials) line.resolution.set(width, height);
     };
 
     gizmo.addEventListener("dragging-changed", (event) => {
       // Fly mode owns the camera: re-enabling OrbitControls here would let its
       // own pointer handlers rotate the camera behind the fly-look handler.
-      orbit.enabled =
-        !(event as unknown as { value: boolean }).value && !flyModeRef.current;
+      if (event.value) pressRef.current = null;
+      orbit.enabled = !event.value && !flyModeRef.current;
     });
     gizmo.addEventListener("objectChange", () => {
       for (const helper of runtime.helpers) helper.update();
@@ -1624,14 +1743,10 @@ export function Viewport3D({ preference, onBackend }: {
       });
     });
 
-    // Click (not drag) selects; dragging orbits the viewport, or looks around
-    // in fly mode.
-    let pressed: { x: number; y: number } | null = null;
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
 
     const onPointerDown = (event: PointerEvent) => {
-      pressed = { x: event.clientX, y: event.clientY };
       if (flyModeRef.current && event.button === 0) {
         flyLook.current = { x: event.clientX, y: event.clientY };
       }
@@ -1667,7 +1782,7 @@ export function Viewport3D({ preference, onBackend }: {
     const onPointerMove = (event: PointerEvent) => {
       const look = flyLook.current;
       if (!look) {
-        if (pressed) return;
+        if (event.buttons) return;
         window.clearTimeout(hoverTimer);
         const wait = 60 - (performance.now() - hoverAt);
         if (wait <= 0) {
@@ -1690,41 +1805,7 @@ export function Viewport3D({ preference, onBackend }: {
       runtime.needsRender = true;
     };
 
-    const onPointerUp = (event: PointerEvent) => {
-      flyLook.current = null;
-      if (!pressed) return;
-      const travelled = Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y);
-      pressed = null;
-      if (travelled > 4 || gizmo.dragging) return;
-      // In Rendered the engine image covers this canvas; a click would select
-      // whatever happens to sit under the pointer in the hidden scene. Orbit
-      // and zoom still work because the overlay no longer eats them.
-      if (modeRef.current) return;
-
-      const rect = canvas.getBoundingClientRect();
-      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(pointer, camera);
-
-      const hits = raycaster.intersectObjects([...runtime.objects.values()], true);
-      let node: THREE.Object3D | null = hits[0]?.object ?? null;
-      while (node && !node.userData.studioId) node = node.parent;
-      const id = node?.userData.studioId as string | undefined;
-
-      const additive = event.shiftKey || event.ctrlKey || event.metaKey;
-      if (!id) {
-        if (!additive) void actionsRef.current.select([]);
-        return;
-      }
-      if (!additive) {
-        void actionsRef.current.select([id]);
-        return;
-      }
-      const next = new Set(runtime.selection);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      void actionsRef.current.select([...next]);
-    };
+    const onPointerUp = () => { flyLook.current = null; };
 
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointermove", onPointerMove);
@@ -1874,7 +1955,7 @@ export function Viewport3D({ preference, onBackend }: {
       for (const helper of runtime.helpers) helper.update();
       return moved;
     };
-    const present: EditorViewport["present"] = (frame, previewError) => {
+    const present: EditorViewport["present"] = (frame, previewError, drawCamera = camera) => {
       // While WebGPU owns terrain presentation, the editor can only use the
       // successfully submitted terrain, and only for depth.
       const depthTerrain = frame?.submitted ? frame.terrain : undefined;
@@ -1907,7 +1988,7 @@ export function Viewport3D({ preference, onBackend }: {
           mesh.renderOrder = -Infinity;
           mesh.material.colorWrite = false;
         }
-        try { renderer.render(scene, camera); }
+        try { renderer.render(scene, drawCamera); }
         finally {
           for (const { mesh, order, colorWrite } of saved) {
             mesh.material.colorWrite = colorWrite;
@@ -1918,7 +1999,7 @@ export function Viewport3D({ preference, onBackend }: {
         }
       } else {
         renderer.setClearAlpha(1);
-        renderer.render(scene, camera);
+        renderer.render(scene, drawCamera);
       }
       // Some webviews reject the first draw of a shadow/float-texture pass.
       // Probe once per change; a rejected draw downgrades one step and the
@@ -1986,7 +2067,7 @@ export function Viewport3D({ preference, onBackend }: {
   useEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
-    const project = state?.project;
+    const project = sceneProject;
     // The viewport hillshade flag (shared for both call sites in this effect).
     const hillshade = project?.viewport.hillshade ?? true;
     if (!project) {
@@ -1995,7 +2076,6 @@ export function Viewport3D({ preference, onBackend }: {
         runtime.scene.remove(group);
       }
       runtime.objects.clear();
-      runtime.selection = [];
       runtime.gizmo.detach();
       for (const helper of runtime.helpers) {
         runtime.scene.remove(helper);
@@ -2015,8 +2095,7 @@ export function Viewport3D({ preference, onBackend }: {
       return;
     }
 
-    runtime.selection = project.selection;
-    const activeCameraId = project.scene.activeCamera;
+    const visibleIds = new Set(viewport.current.objects.filter(o => o.visible).map(o => o.id));
     const live = new Map(project.scene.objects.map((object) => [object.id, object]));
     for (const [id, group] of runtime.objects) {
       if (live.has(id)) continue;
@@ -2035,7 +2114,7 @@ export function Viewport3D({ preference, onBackend }: {
         runtime.scene.add(group);
         runtime.objects.set(object.id, group);
       }
-      group.visible = object.visible && !(cameraView && object.id === activeCameraId);
+      group.visible = visibleIds.has(object.id);
       // The cursor readout measures the terrain; once it is hidden the last
       // reading no longer describes anything on screen.
       if (object.kind.type === "terrain" && !group.visible) setCursorElevation(null);
@@ -2290,12 +2369,23 @@ export function Viewport3D({ preference, onBackend }: {
       project.viewport.gridVisible &&
       !project.scene.objects.some((object) => object.kind.type === "terrain");
 
+    runtime.needsRender = true;
+  }, [assetGenerations, cameraView, flyMode, loadColormapStops, loadTexture, projectGeneration,
+    readMesh, previewVersion, sceneProject, viewport]);
+
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime || !project) return;
+    const activeCameraId = project.scene.activeCamera;
     // Selection boxes follow their objects every tick (playback moves them at
     // the timeline's rate), so only rebuild them when the selection or the
     // camera view changes.
     const helperKey = `${project.selection.join(",")}|${cameraView ? activeCameraId ?? "" : ""}`;
     if (runtime.helperKey === helperKey) {
-      for (const helper of runtime.helpers) helper.update();
+      for (const helper of runtime.helpers) {
+        helper.visible = helper.object.visible;
+        helper.update();
+      }
     } else {
       runtime.helperKey = helperKey;
       for (const helper of runtime.helpers) {
@@ -2311,6 +2401,7 @@ export function Viewport3D({ preference, onBackend }: {
         // itself and reads as stray lines across the view.
         if (cameraView && id === activeCameraId) continue;
         const helper = new THREE.BoxHelper(group, ACCENT);
+        helper.visible = group.visible;
         runtime.scene.add(helper);
         runtime.helpers.push(helper);
       }
@@ -2324,7 +2415,7 @@ export function Viewport3D({ preference, onBackend }: {
     // SetTransform command rejects it anyway) — moving it would only desync
     // the Solid view from the renderer, which always draws the DEM centred.
     const editable =
-      single && !single.locked && single.visible && single.kind.type !== "terrain"
+      single && !single.locked && runtime.objects.get(single.id)?.visible && single.kind.type !== "terrain"
         ? runtime.objects.get(single.id)
         : undefined;
     if (tool === "select" || !editable) {
@@ -2334,22 +2425,8 @@ export function Viewport3D({ preference, onBackend }: {
       runtime.gizmo.setSpace(space);
       if (runtime.gizmo.object !== editable) runtime.gizmo.attach(editable);
     }
-    // Everything above mutated the scene; draw once on the next tick.
-    runtime.needsRender = true;
-  }, [
-    assetGenerations,
-    cameraView,
-    flyMode,
-    loadColormapStops,
-    loadTexture,
-    projectGeneration,
-    readMesh,
-    previewVersion,
-    space,
-    state,
-    tool,
-    viewport,
-  ]);
+    runtime.selectionNeedsRender = true;
+  }, [cameraView, project, previewVersion, space, tool]);
 
   // The map overlay: vector lines, their labels and the graticule, draped
   // on the terrain in the same 0..1 lattice the still uses. Rebuilt only
@@ -2383,7 +2460,7 @@ export function Viewport3D({ preference, onBackend }: {
       )
     : "";
   // The overlay uses the same accepted grid and exaggeration as the surface.
-  const overlayTerrainId = state?.project.scene.objects.find(object => object.visible && object.kind.type === "terrain")?.id;
+  const overlayTerrainId = visibleTerrain?.id;
   // The dependency list is the rebuild rule: the visible stack's signature,
   // the terrain key above, or the sampling resolution (the drape must
   // follow the mesh). No extra "same signature" guard: a re-run
@@ -2794,9 +2871,8 @@ export function Viewport3D({ preference, onBackend }: {
   type RenderScale = "1" | "2" | "4" | "project" | "dem";
   const [renderScale, setRenderScale] = useState<RenderScale>("1");
 
-  const terrainObject = state && firstVisibleTerrain(state.project.scene);
-  const demDims = terrainObject?.kind.type === "terrain" ? terrainObject.kind.dimensions : null;
-  const terrainKind = terrainObject?.kind.type === "terrain" ? terrainObject.kind : null;
+  const terrainKind = visibleTerrain?.kind.type === "terrain" ? visibleTerrain.kind : null;
+  const demDims = terrainKind?.dimensions ?? null;
   const terrainSource = terrainKind
     ? (state?.project.assets.find((asset) => asset.id === terrainKind.asset)?.name ?? null)
     : null;
@@ -3043,16 +3119,14 @@ export function Viewport3D({ preference, onBackend }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderScale]);
 
-  const scene = state?.project.scene;
   const camera = scene?.objects.find((object) => object.id === scene.activeCamera);
   // The renderer is a terrain pipeline: say which objects it cannot draw.
-  const visibleTerrain = scene?.objects.find(object => object.visible && object.kind.type === "terrain");
   const renderedFrame = visibleTerrain && render.frame?.source?.sessionId === state?.sessionId &&
     render.frame?.source?.terrainId === visibleTerrain.id ? render.frame : null;
   const unrendered = !visibleTerrain
     ? ["everything"]
     : (scene?.objects ?? [])
-        .filter((object) => object.kind.type === "mesh" && object.visible)
+        .filter((object) => object.kind.type === "mesh" && visibility.get(object.id))
         .map((object) => object.name);
 
   return (

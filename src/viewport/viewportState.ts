@@ -163,6 +163,26 @@ export function firstVisibleTerrain<T extends Pick<SceneObject, "visible" | "kin
   return frame.objects.find(object => object.visible && object.kind.type === "terrain");
 }
 
+export function sceneObjectVisibility(objects: readonly SceneObject[] = []): ReadonlyMap<string, boolean> {
+  const scene = new Map(objects.map(object => [object.id, object]));
+  const inherited = new Map<string, boolean>();
+  const path: string[] = [];
+  for (const object of objects) {
+    let node: SceneObject | undefined = object;
+    while (node && !inherited.has(node.id)) {
+      // An unfinished path that reaches itself is a hidden cycle.
+      inherited.set(node.id, false);
+      path.push(node.id);
+      if (!node.visible) break;
+      node = node.parent ? scene.get(node.parent) : undefined;
+    }
+    const visible = !node || inherited.get(node.id) === true;
+    for (const id of path) inherited.set(id, visible);
+    path.length = 0;
+  }
+  return inherited;
+}
+
 export function nativeRenderView(frame: ViewportFrame, preview?: TerrainPreview) {
   const object = firstVisibleTerrain(frame);
   const terrain = object?.kind;
@@ -210,7 +230,8 @@ export class ViewportModel {
 
   get current(): ViewportFrame { return this.frame; }
 
-  setProject(project: Project | null, projectGeneration: number, cameraView: boolean, assetGenerations?: ReadonlyMap<string, number>) {
+  setProject(project: Project | null, projectGeneration: number, cameraView: boolean, assetGenerations?: ReadonlyMap<string, number>,
+    visibility = sceneObjectVisibility(project?.scene.objects)) {
     const projectId = project?.id ?? null;
     const assets = project?.assets ?? [];
     const byId = new Map(assets.map(asset => [asset.id, asset]));
@@ -218,7 +239,7 @@ export class ViewportModel {
       const { translation, rotationDeg, scale } = object.transform;
       const asset = object.kind.type === "terrain" ? byId.get(object.kind.asset) : undefined;
       return { id: object.id, kind: object.kind,
-        visible: object.visible && !(cameraView && object.id === project.scene.activeCamera),
+        visible: visibility.get(object.id) === true && !(cameraView && object.id === project?.scene.activeCamera),
         translation: [translation.x, translation.y, translation.z],
         rotationDeg: [rotationDeg.x, rotationDeg.y, rotationDeg.z],
         scale: [scale.x, scale.y, scale.z],

@@ -1,7 +1,8 @@
 import * as THREE from "three";
-import type { CameraInput, Forge3DRuntime, LightCollection, MeshLayer, TerrainDataset, TerrainMaterialImage, IblSnapshot, RgbeImage } from "@forge3d/web";
-import { cameraInput, cubeScatterGeometry, imageryMipLevel, imageryOverlays, queryTerrainDataset, terrainInput, terrainTransform,
+import type { Camera, CameraInput, Forge3DRuntime, LightCollection, LightingSnapshot, MaterialCollectionSnapshot, MeshLayer, TerrainDataset, TerrainMaterialImage, IblSnapshot, RgbeImage } from "@forge3d/web";
+import { cameraInput, cubeScatterGeometry, imageryMipLevel, imageryOverlays, queryTerrainDataset, runtimeToStudio, terrainInput, terrainTransform,
   type RendererPreference, type TerrainTransform } from "./forge3dWebMapping";
+import { measurePixelDepth, pickSurfaces, projectCubeFaces, type PickSurfaces, type Pixel, type StudioHit, type PixelDepthHints } from "./viewportPicking";
 import { hillshadePixels } from "./hillshade";
 import { cameraTarget, validateTerrainPreview, viewportTerrainBackend,
   type ViewportDimensions, type ViewportFrame, type ViewportObject, type ViewportTerrain } from "./viewportState";
@@ -42,6 +43,15 @@ interface UploadedTerrain {
 
 interface SubmittedFrame {
   sequence: number;
+  source: ViewportFrame;
+  camera: Camera;
+  placement: typeof emptyTransform;
+  surfaces: PickSurfaces;
+  cubeFaces?: ReturnType<typeof projectCubeFaces>;
+  objectMask?: Uint8Array | Promise<Uint8Array>;
+  coverageMask?: Uint8Array | Promise<Uint8Array>;
+  pixelDepths?: Map<number, Promise<number>>;
+  visibleIds: string[];
   projectId: string | null;
   projectGeneration: number;
   width: number;
@@ -72,12 +82,17 @@ function visibleSource(frame: ViewportFrame, terrain: ViewportTerrain): Viewport
 // The desktop retained-dataset control exercises the same query as the viewport.
 export { queryTerrainDataset };
 
+function depthMarker(module: WebModule, slot: string, materials = new module.MaterialCollection()) {
+  materials.set(slot, { id: slot, baseColor: [0, 0, 0, 1], textures: { emissive: {
+    width: 1, height: 1, format: "rgba8unorm", colorSpace: "linear", data: new Uint8Array([255, 0, 0, 255]),
+  } } });
+  return materials.snapshot();
+}
+
 // Display mutations on the pinned facade are synchronous only outside a capture.
 // All Studio GPU reads go through this handle, including development diagnostics.
 class ViewportReadback {
   #web: Forge3DRuntime;
-  #readers = 0;
-  #signalIdle?: () => void;
   #idle?: Promise<void>;
   get idle() { return this.#idle; }
 
@@ -92,21 +107,95 @@ class ViewportReadback {
   getScatterStats() { return this.#web.getScatterStats(); }
   getMemoryReport() { return this.#web.getMemoryReport(); }
 
-  private async track<T>(operation: Promise<T>): Promise<T> {
-    if (this.#readers++ === 0) this.#idle = new Promise(resolve => { this.#signalIdle = resolve; });
-    try { return await operation; }
-    finally {
-      if (--this.#readers === 0) {
-        this.#idle = undefined;
-        this.#signalIdle!();
-        this.#signalIdle = undefined;
-      }
-    }
+  private track<T>(operation: () => Promise<T>) {
+    const result = (this.#idle ?? Promise.resolve()).then(operation);
+    const idle = result.then(() => {}, () => {});
+    this.#idle = idle;
+    void idle.then(() => { if (this.#idle === idle) this.#idle = undefined; });
+    return result;
   }
 
-  readRgba() { return this.track(this.#web.readRgba()); }
-  readTerrainHeights() { return this.track(this.#web.readTerrainHeights()); }
-  screenshot() { return this.track(this.#web.screenshot()); }
+  readObjectMask(module: WebModule, cubeId: string, materials: MaterialCollectionSnapshot, lights: LightingSnapshot) {
+    return this.track(async () => {
+      // Reuse the display depth attachment in one offscreen RGBA8 draw.
+      // At zero light exposure Studio terrain is black. Cube emission is
+      // added after exposure, so the red channel identifies its fragments.
+      const web = this.#web;
+      const dark = new module.LightCollection();
+      dark.setExposure(0);
+      try {
+        web.setLighting(dark.snapshot());
+        web.setMaterials(depthMarker(module, cubeId));
+        const rgba = await web.readRgba();
+        const mask = new Uint8Array(rgba.length / 4);
+        for (let i = 0; i < mask.length; i++) {
+          const p = i * 4;
+          mask[i] = rgba[p] > rgba[p + 1] ? 2 : rgba[p + 3] ? 1 : 0;
+        }
+        return mask;
+      } finally {
+        if (!web.disposed) {
+          web.setMaterials(materials);
+          web.setLighting(lights);
+        }
+      }
+    });
+  }
+
+  // Compare a constant-depth marker against the original submitted draws.
+  // Preserving their geometry, transforms and order includes the face the
+  // GPU actually rasterized, even if the centre ray hits a different face.
+  readPixelDepth(module: WebModule, submitted: SubmittedFrame, pixel: Pixel, depths: PixelDepthHints,
+    cube: { layer: MeshLayer; materials: MaterialCollectionSnapshot; surface: { id: string } } | undefined, lights: LightingSnapshot) {
+    return this.track(async () => {
+      const web = this.#web, { camera } = submitted;
+      const dark = new module.LightCollection();
+      dark.setExposure(0);
+      const materials = cube?.materials ?? new module.MaterialCollection().snapshot();
+      const unlit = module.MaterialCollection.from(materials);
+      if (cube) unlit.set(cube.surface.id, { id: cube.surface.id, baseColor: [0, 0, 0, 1] });
+      const marker = depthMarker(module, "pick-depth", unlit);
+      const materialIndex = marker.materials.find(m => m.slot === "pick-depth")!.index;
+      const batches = cube ? [cube.layer.toBatch()] : [];
+      const [x, y] = pixel;
+      const offset = 4 * (y * submitted.width + x);
+      try {
+        web.setLighting(dark.snapshot());
+        web.setMaterials(marker);
+        // The marker spans the entire sample. Its plane moves by one 24-bit
+        // depth increment in the last comparison and never reaches the canvas.
+        return await measurePixelDepth(depths, async depth => {
+          const positions = new Float32Array([[x-4,y-4], [x-4,y+12], [x+12,y-4]]
+            .flatMap(([sx,sy]) => camera.screenToWorld(sx, sy, depth, submitted)));
+          const triangle = new module.MeshLayer({ positions,
+            indices: new Uint32Array([0,1,2,0,2,1]), normals: new Float32Array([0,1,0,0,1,0,0,1,0]),
+          }, { name: "pick-depth", materialIndex, color: [1, 1, 1, 1] });
+          try {
+            web.setScatterBatches([...batches, triangle.toBatch()]);
+            const rgba = await web.readRgba();
+            return rgba[offset] > rgba[offset + 1];
+          } finally { triangle.dispose(); }
+        });
+      } finally {
+        if (!web.disposed) {
+          web.setMaterials(materials);
+          web.setScatterBatches(batches);
+          web.setLighting(lights);
+        }
+      }
+    });
+  }
+
+  async readCoverageMask() {
+    const rgba = await this.readRgba();
+    const mask = new Uint8Array(rgba.length / 4);
+    for (let i = 0; i < mask.length; i++) mask[i] = rgba[i * 4 + 3];
+    return mask;
+  }
+
+  readRgba() { return this.track(() => this.#web.readRgba()); }
+  readTerrainHeights() { return this.track(() => this.#web.readTerrainHeights()); }
+  screenshot() { return this.track(() => this.#web.screenshot()); }
 }
 
 function drawInputs({ frame, sampling }: View) {
@@ -131,7 +220,7 @@ export class ForgeTerrainViewport {
   private failure?: { reason: string; inputs?: string };
   private scope?: { id: string | null; generation: number; preference: RendererPreference };
   private uploaded?: UploadedTerrain;
-  private cube?: { key: string; layer: MeshLayer };
+  private cube?: { key: string; layer: MeshLayer; materials: MaterialCollectionSnapshot; surface: NonNullable<PickSurfaces["cube"]> };
   private module?: WebModule;
   private sky?: { snapshot?: IblSnapshot; error?: string };
   private appliedSkyIntensity = 0;
@@ -471,7 +560,9 @@ export class ForgeTerrainViewport {
     web.setMaterials(slots);
     web.setScatterBatches([layer.toBatch()]);
     this.cube?.layer.dispose();
-    this.cube = { key, layer };
+    // Bake the exact packed instance matrix after the mesh upload has copied its vertices.
+    geometry.applyMatrix4(new THREE.Matrix4().fromArray(transforms).transpose());
+    this.cube = { key, layer, materials: slots, surface: { id: object.id, geometry } };
   }
 
   draw(view: View, previewError?: string): TerrainPresentation | undefined {
@@ -597,8 +688,9 @@ export class ForgeTerrainViewport {
         web.setLighting(lights.snapshot());
         this.lightKey = key;
       }
-      this.setCamera(web, cameraInput(camera.eye, target, camera.up, camera.fovYDegrees,
-        camera.near, camera.far, transform.translation, transform.scale));
+      const input = cameraInput(camera.eye, target, camera.up, camera.fovYDegrees,
+        camera.near, camera.far, transform.translation, transform.scale);
+      this.setCamera(web, input);
       this.submitCube(web, cube, transform, view);
       if (!web.render()) {
         this.hide();
@@ -618,8 +710,12 @@ export class ForgeTerrainViewport {
         }
         this.verifyUpload = false;
       }
+      const surfaces = { cube: this.cube?.surface,
+        terrain: presentedTerrain && { id: object.id, grid: presentedTerrain.upload.dataset } };
       this.submitted = { sequence: ++this.submissions, projectId: frame.projectId,
-        projectGeneration: frame.projectGeneration, width, height, terrain: presentedTerrain };
+        projectGeneration: frame.projectGeneration, width, height, source: frame, camera: new this.module!.Camera(input),
+        placement: transform, visibleIds: Object.values(surfaces).flatMap(surface => surface ? [surface.id] : []),
+        surfaces, terrain: presentedTerrain };
       this.canvas.hidden = false;
       this.presentedAppearance = { skyIntensity: this.appliedSkyIntensity,
         drape: image && { width: image.width, height: image.height, level, settled: image === decoded?.image } };
@@ -654,13 +750,71 @@ export class ForgeTerrainViewport {
     return queryTerrainDataset(terrain.upload.dataset, terrain.upload.terrain, terrain.transform, x, z);
   }
 
+  pick(frame: ViewportFrame, pixel: Pixel) {
+    const submitted = this.submitted;
+    if (!submitted || frame !== submitted.source) return;
+    const { camera, placement, surfaces, sequence, visibleIds, terrain } = submitted;
+    const result = (hit: StudioHit | null) => {
+      if (this.submitted !== submitted) return;
+      if (hit?.kind === "terrain" && terrain) {
+        // A ray intersection on the outer edge can round just outside the
+        // inclusive ground-query footprint. The intersected triangle is inside.
+        const [[west, east], [north, south]] = terrain.transform.boundsXz;
+        const [x, , z] = hit.worldPosition;
+        hit.elevation = this.queryTerrain(frame, Math.max(west, Math.min(east, x)), Math.max(north, Math.min(south, z)))?.elevation;
+      }
+      return { hit, visibleIds, revision: sequence };
+    };
+    const faces = submitted.cubeFaces ??= surfaces.cube ? projectCubeFaces(camera, submitted, surfaces.cube.geometry) : [];
+    const surface = pickSurfaces(camera, submitted, pixel, placement, surfaces, sequence, faces);
+    if ("hit" in surface) return result(surface.hit);
+
+    // With only one candidate at this pixel, display alpha gives its
+    // coverage directly. Mark object IDs only when the surfaces can overlap.
+    const both = surface.cube && surface.terrain;
+    const key = both ? "objectMask" : "coverageMask";
+    const resolve = (mask: Uint8Array) => {
+      if (this.submitted !== submitted) return;
+      const index = pixel[1] * submitted.width + pixel[0], sample = mask[index];
+      const hit = both ? (sample === 2 ? surface.cube : sample === 1 ? surface.terrain : null)
+        : sample ? surface.terrain ?? surface.cube : null;
+      const hints = hit?.kind === "cube" ? surface.cubeDepths : surface.terrainDepths;
+      if (!hit || !hints) return result(hit);
+      const depths = submitted.pixelDepths ??= new Map<number, Promise<number>>();
+      let depth = depths.get(index);
+      if (!depth) {
+        depth = this.readback!.readPixelDepth(this.module!, submitted, pixel, hints, this.cube, this.lights!.snapshot());
+        depths.set(index, depth);
+      }
+      return depth.then(z => {
+        const position = camera.screenToWorld(pixel[0] + .5, pixel[1] + .5, z, submitted);
+        const distance = new THREE.Vector3(...position).distanceTo(new THREE.Vector3(...camera.position)) * placement.scale;
+        return result({ ...hit, worldPosition: runtimeToStudio(position, placement), distance });
+      }, error => {
+        depths.delete(index);
+        if (this.submitted === submitted) console.warn("Could not resolve viewport depth", error);
+        return undefined;
+      });
+    };
+    const mask = submitted[key] ??= (both
+      ? this.readback!.readObjectMask(this.module!, surface.cube!.id, this.cube!.materials, this.lights!.snapshot())
+      : this.readback!.readCoverageMask()).then(mask => submitted[key] = mask);
+    if (mask instanceof Uint8Array) return resolve(mask);
+    return mask.then(resolve, error => {
+      submitted[key] = undefined;
+      if (this.submitted === submitted) console.warn("Could not read viewport object coverage", error);
+      return undefined;
+    });
+  }
+
   // Exposed by the development viewport's verification hook.
   get diagnosticRuntime() { return this.readback; }
   get diagnosticAppearance() { return this.canvas.hidden ? undefined : this.presentedAppearance; }
   get diagnosticSubmission() {
     if (!this.submitted) return;
-    const { terrain, ...frame } = this.submitted;
-    return { ...frame, terrain: terrain?.upload.terrain.request ?? null,
+    const { sequence, projectId, projectGeneration, width, height, visibleIds, terrain, camera, placement } = this.submitted;
+    return { sequence, projectId, projectGeneration, width, height, visibleIds, camera: camera.toInput(), placement,
+      terrain: terrain?.upload.terrain.request ?? null,
       requestedTerrainResolution: terrain?.upload.terrain.admission?.requestedResolution };
   }
 }

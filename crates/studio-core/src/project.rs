@@ -241,9 +241,8 @@ impl Project {
     /// The terrain used by the single-terrain render pipeline.
     pub fn visible_terrain_object(&self) -> Option<&SceneObject> {
         self.scene
-            .objects
-            .iter()
-            .find(|object| object.visible && object.is_terrain())
+            .visible_objects()
+            .find(|object| object.is_terrain())
     }
 
     /// Assets referenced by at least one object, in registry order.

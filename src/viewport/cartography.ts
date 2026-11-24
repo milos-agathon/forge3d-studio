@@ -6,7 +6,7 @@
  * Pure math, no three.js — the meshes are assembled by the caller, the tests
  * pin the numbers.
  */
-import { terrainSurfaceRelief } from "./forge3dWebMapping.ts";
+import { flatTextureDomain, terrainSurfaceRelief } from "./forge3dWebMapping.ts";
 import { TERRAIN_VIEW_SIZE } from "./viewMath.ts";
 
 export interface HeightPreview {
@@ -22,8 +22,8 @@ export interface HeightPreview {
  * u runs west→east, v runs north→south — the same lattice the vector
  * preview normalises onto.
  */
-export function sampleHeight(preview: HeightPreview, u: number, v: number): number {
-  if (preview.minElevation === preview.maxElevation) return preview.minElevation;
+export function sampleHeight(preview: HeightPreview, u: number, v: number, heightOrigin = 0): number {
+  if (heightOrigin === 0 && preview.minElevation !== 0 && flatTextureDomain(preview)) return preview.minElevation;
   const res = preview.resolution;
   const gx = Math.min(Math.max(u, 0), 1) * (res - 1);
   const gy = Math.min(Math.max(v, 0), 1) * (res - 1);
@@ -35,11 +35,11 @@ export function sampleHeight(preview: HeightPreview, u: number, v: number): numb
   const ty = gy - y0;
   const at = (col: number, row: number): number => {
     const value = preview.heights[row * res + col];
-    return Math.fround(Number.isFinite(value) ? value : preview.minElevation);
+    return Math.fround((Number.isFinite(value) ? value : preview.minElevation) - heightOrigin);
   };
   const south = at(x0, y0) * (1 - tx) + at(x1, y0) * tx;
   const north = at(x0, y1) * (1 - tx) + at(x1, y1) * tx;
-  return south * (1 - ty) + north * ty;
+  return heightOrigin + (south * (1 - ty) + north * ty);
 }
 
 /**

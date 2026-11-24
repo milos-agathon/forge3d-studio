@@ -49,6 +49,8 @@ pub struct SessionState {
     pub revision: u64,
     /// Advances on changes to the snapshot, including view state and save status.
     pub snapshot_sequence: u64,
+    /// Last selection intent accepted by this editor, including in snapshots of later edits.
+    pub selection_order: u64,
     pub dirty: bool,
     /// Saved file path, when the project has one.
     pub path: Option<String>,
@@ -64,6 +66,7 @@ pub struct Editor {
     project: Project,
     revision: u64,
     snapshot_sequence: u64,
+    selection_order: u64,
     terrain_source_generation: u64,
     dirty: bool,
     path: Option<PathBuf>,
@@ -83,6 +86,7 @@ impl Editor {
             project,
             revision: 0,
             snapshot_sequence: 0,
+            selection_order: 0,
             terrain_source_generation: 0,
             dirty: true,
             path: None,
@@ -164,6 +168,7 @@ impl Editor {
             project: self.project.clone(),
             revision: self.revision,
             snapshot_sequence: self.snapshot_sequence,
+            selection_order: self.selection_order,
             dirty: self.dirty,
             path: self
                 .path
@@ -236,6 +241,18 @@ impl Editor {
     /// Replace the selection. Selection is view state: it is persisted with the
     /// project but is neither undoable nor a reason to mark the project dirty.
     pub fn set_selection(&mut self, ids: Vec<ObjectId>) -> Result<(), StudioError> {
+        self.set_selection_ordered(ids, None)
+    }
+
+    pub(crate) fn set_selection_ordered(
+        &mut self,
+        ids: Vec<ObjectId>,
+        order: Option<u64>,
+    ) -> Result<(), StudioError> {
+        let order = order.unwrap_or_else(|| self.selection_order.saturating_add(1));
+        if order <= self.selection_order {
+            return Ok(());
+        }
         let mut unique = Vec::with_capacity(ids.len());
         for id in ids {
             if self.project.scene.object(id).is_none() {
@@ -247,6 +264,7 @@ impl Editor {
                 unique.push(id);
             }
         }
+        self.selection_order = order;
         self.project.selection = unique;
         self.project.touch();
         self.snapshot_sequence += 1;
@@ -425,6 +443,18 @@ mod tests {
         assert_eq!(editor.project().selection, vec![id]);
         assert!(!editor.is_dirty());
         assert!(!editor.can_undo());
+    }
+
+    #[test]
+    fn older_selection_request_cannot_replace_a_later_commit() {
+        let mut editor = Editor::new(Project::new(UNTITLED));
+        let cube = cube_id(&editor);
+        editor.set_selection_ordered(vec![cube], Some(2)).unwrap();
+        let accepted = editor.state();
+        editor.set_selection_ordered(vec![], Some(1)).unwrap();
+        assert_eq!(editor.project().selection, vec![cube]);
+        assert_eq!(editor.state().selection_order, 2);
+        assert_eq!(editor.state().snapshot_sequence, accepted.snapshot_sequence);
     }
 
     #[test]

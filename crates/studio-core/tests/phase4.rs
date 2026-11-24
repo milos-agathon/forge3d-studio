@@ -207,6 +207,28 @@ fn the_handoff_carries_the_dem_and_an_orbit_camera() {
 }
 
 #[test]
+fn the_render_handoff_skips_terrain_below_a_hidden_ancestor() {
+    let mut project = Project::starter("Bryce", Some(seed()));
+    let terrain = project.terrain_object().unwrap().id;
+    let camera = project.scene.camera().unwrap().id;
+    let light = project
+        .scene
+        .objects
+        .iter()
+        .find(|o| o.is_light())
+        .unwrap()
+        .id;
+    project.scene.object_mut(terrain).unwrap().parent = Some(camera);
+    project.scene.object_mut(camera).unwrap().parent = Some(light);
+    project.scene.object_mut(light).unwrap().visible = false;
+    let hidden = handoff(&project, 1, Workspace::Forge3d);
+    assert!(hidden.terrain.is_none());
+    assert!(hidden.terrain_camera.is_none());
+    project.scene.object_mut(light).unwrap().visible = true;
+    assert!(handoff(&project, 2, Workspace::Forge3d).terrain.is_some());
+}
+
+#[test]
 fn the_orbit_camera_matches_the_engine_north_mode_convention() {
     // The engine's north-mode orbit: eye = target + r·(sinθ·cosφ, sinθ·sinφ,
     // cosθ) in the geographic frame (+X east, +Y north, +Z up). Reconstruct
