@@ -67,6 +67,12 @@ impl Session {
         self.editor.as_ref().map(|_| self.session_id)
     }
 
+    pub fn matches_project_snapshot(&self, sequence: u64) -> bool {
+        self.editor
+            .as_ref()
+            .is_some_and(|editor| editor.matches_project_snapshot(sequence))
+    }
+
     /// Reserve a DEM import or a relink of the currently active DEM asset.
     pub fn reserve_terrain_source_change(
         &mut self,

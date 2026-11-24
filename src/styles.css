@@ -1239,6 +1239,42 @@ kbd {
 }
 
 .viewport-canvas--terrain { pointer-events: none; }
+.world-x-handle {
+  position: absolute;
+  top: -1px;
+  left: 0;
+  height: 2px;
+  background: #e76c61;
+  transform-origin: left center;
+  touch-action: none;
+  cursor: grab;
+}
+.world-x-handle::before {
+  content: "";
+  position: absolute;
+  inset: -6px 0;
+}
+.world-x-grip {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translate(50%, -50%);
+  width: 18px;
+  border: 0;
+  padding: 0;
+  line-height: 18px;
+  border-radius: 50%;
+  text-align: center;
+  font-weight: 700;
+  color: #181818;
+  background: #f58578;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+.world-x-grip:active { cursor: grabbing; }
+.world-x-grip:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: 2px; }
 .viewport-canvas[hidden] { display: none; }
 .menu__heading { display: block; padding: 4px 10px; color: var(--text-secondary); }
 

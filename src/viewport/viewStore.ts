@@ -13,4 +13,6 @@ import type { RenderView, Transform } from "../bridge/types";
 export const viewStore: {
   resolve: (() => Promise<RenderView | undefined>) | null;
   cameraTransform: Transform | null;
-} = { resolve: null, cameraTransform: null };
+  /** End a local gesture before an editor action can change its starting pose. */
+  cancelTransformPreview: (() => void) | null;
+} = { resolve: null, cameraTransform: null, cancelTransformPreview: null };

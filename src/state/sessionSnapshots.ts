@@ -26,6 +26,7 @@ export class SessionSnapshots {
   private sessionId = 0;
   private sequence = 0;
   private snapshot?: SessionState;
+  private historyTail?: Promise<unknown>;
   private selectionOrder = 0;
   private lastSelectionWrite = 0;
   private selectionBase = new Set<string>();
@@ -53,6 +54,7 @@ export class SessionSnapshots {
     this.sessionId = reply.sessionId;
     this.sequence = snapshot?.snapshotSequence ?? 0;
     this.snapshot = snapshot ?? undefined;
+    this.historyTail = undefined;
     this.selectionOrder = snapshot?.selectionOrder ?? 0;
     this.lastSelectionWrite = this.selectionOrder;
     this.pendingSelections = [];
@@ -63,8 +65,28 @@ export class SessionSnapshots {
     return true;
   }
 
+  // Preserve input order even when a WebView IPC request is delayed before
+  // dispatch. A replacement project gets its own queue.
+  orderHistory<T>(sessionId: number | undefined, send: (state: SessionState) => Promise<T>) {
+    if (!this.owns(sessionId) || !this.snapshot) return Promise.resolve(undefined);
+    const previous = this.historyTail;
+    const request = previous
+      ? previous.then(() => this.owns(sessionId) && this.snapshot ? send(this.snapshot) : undefined)
+      : send(this.snapshot);
+    const tail = request.then(() => {}, () => {});
+    this.historyTail = tail;
+    void tail.then(() => { if (this.historyTail === tail) this.historyTail = undefined; });
+    return request;
+  }
+
+  async projectAfterHistory(sessionId: number) {
+    await this.historyTail;
+    return this.owns(sessionId) ? this.snapshot : undefined;
+  }
+
   async select(sessionId: number | undefined, input: SelectionInput, toggle: boolean,
     send: (ids: string[], sessionId: number, order: number, revision: number) => Promise<SessionState>) {
+    if (this.historyTail) await this.historyTail;
     if (!this.owns(sessionId) || !this.snapshot) return;
     const { project, revision } = this.snapshot;
     // Reserve the gesture's place before a viewport hit waits for the GPU.

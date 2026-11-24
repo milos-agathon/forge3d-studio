@@ -7,6 +7,7 @@ import { computeRenderView } from "./viewMath.ts";
 
 export interface ViewportObject {
   id: string;
+  parent?: string | null;
   visible: boolean;
   kind: SceneObject["kind"];
   translation: Triple;
@@ -238,7 +239,7 @@ export class ViewportModel {
     const objects = project?.scene.objects.map((object): ViewportObject => {
       const { translation, rotationDeg, scale } = object.transform;
       const asset = object.kind.type === "terrain" ? byId.get(object.kind.asset) : undefined;
-      return { id: object.id, kind: object.kind,
+      return { id: object.id, parent: object.parent, kind: object.kind,
         visible: visibility.get(object.id) === true && !(cameraView && object.id === project?.scene.activeCamera),
         translation: [translation.x, translation.y, translation.z],
         rotationDeg: [rotationDeg.x, rotationDeg.y, rotationDeg.z],
