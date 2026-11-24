@@ -5,6 +5,8 @@
 //! `kind.primitive`, v2 objects carry `kind.source` (`persist::migrate` rewrites
 //! v1 files on load).
 
+use std::collections::{HashMap, HashSet};
+
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{new_id, AssetId, ObjectId, SceneId};
@@ -42,6 +44,29 @@ impl Scene {
 
     pub fn object_mut(&mut self, id: ObjectId) -> Option<&mut SceneObject> {
         self.objects.iter_mut().find(|object| object.id == id)
+    }
+
+    /// Objects visible through their full parent chain, in outliner order.
+    pub fn visible_objects(&self) -> impl Iterator<Item = &SceneObject> {
+        let mut children: HashMap<ObjectId, Vec<ObjectId>> = HashMap::new();
+        let mut pending = Vec::new();
+        for object in &self.objects {
+            if !object.visible {
+                pending.push(object.id);
+            } else if let Some(parent) = object.parent {
+                children.entry(parent).or_default().push(object.id);
+            }
+        }
+        let mut hidden = HashSet::new();
+        while let Some(id) = pending.pop() {
+            hidden.insert(id);
+            if let Some(descendants) = children.remove(&id) {
+                pending.extend(descendants);
+            }
+        }
+        self.objects
+            .iter()
+            .filter(move |object| !hidden.contains(&object.id))
     }
 
     pub fn index_of(&self, id: ObjectId) -> Option<usize> {

@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 
+import type { SelectionInput } from "./sessionSnapshots";
 import type { RenderJob } from "./renderQueue";
 import type { RecipeId } from "./recipes";
 import type {
@@ -76,7 +77,7 @@ export interface SessionApi {
     apply(command: Command): Promise<Applied | null>;
     undo(): Promise<void>;
     redo(): Promise<void>;
-    select(ids: string[]): Promise<void>;
+    select(ids: SelectionInput, toggle?: boolean): Promise<void>;
     /** Move the playhead and evaluate the timeline (view state: not an edit). */
     setPlayhead(frame: number): Promise<void>;
     /** Place the selected directional light from the engine's solar

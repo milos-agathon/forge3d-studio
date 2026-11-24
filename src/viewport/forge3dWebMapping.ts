@@ -6,7 +6,7 @@ import { TERRAIN_VIEW_SIZE } from "./viewMath.ts";
 
 export type RendererPreference = "auto" | "forge3d-web" | "three";
 export type Triple = [number, number, number];
-interface UniformTransform {
+export interface UniformTransform {
   translation: Triple;
   scale: number;
 }

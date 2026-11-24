@@ -440,9 +440,11 @@ pub fn set_selection(
     state: State<'_, AppState>,
     ids: Vec<ObjectId>,
     session_id: Option<u64>,
+    selection_order: Option<u64>,
+    expected_revision: Option<u64>,
 ) -> Result<SessionState, String> {
     lock_project(&state, session_id)?
-        .set_selection(ids)
+        .set_selection_ordered(ids, selection_order, expected_revision)
         .map_err(|error| error.to_string())
 }
 
@@ -1348,9 +1350,7 @@ fn scene_meshes(project: &studio_core::Project) -> Vec<crate::render::MeshHandof
     };
     project
         .scene
-        .objects
-        .iter()
-        .filter(|object| object.visible && matches!(object.kind, ObjectKind::Mesh(_)))
+        .visible_objects()
         .filter_map(|object| {
             let ObjectKind::Mesh(mesh) = &object.kind else {
                 return None;
@@ -1957,6 +1957,7 @@ mod tests {
             project,
             revision: 0,
             snapshot_sequence: 0,
+            selection_order: 0,
             dirty: false,
             path: None,
             can_undo: false,
@@ -2026,6 +2027,7 @@ mod tests {
             project,
             revision: 0,
             snapshot_sequence: 0,
+            selection_order: 0,
             dirty: false,
             path: None,
             can_undo: false,

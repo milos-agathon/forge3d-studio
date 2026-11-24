@@ -11,7 +11,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { viewStore } from "../viewport/viewStore";
 import { bridge } from "../bridge/env";
 import { SessionContext, type SessionApi } from "./session-context";
-import { SessionSnapshots } from "./sessionSnapshots";
+import { SessionSnapshots, type SelectionInput } from "./sessionSnapshots";
 import { base64ToArrayBuffer, inspectGltf, putAssetBytes } from "../viewport/assets";
 import { findRecipe, type RecipeId } from "./recipes";
 import {
@@ -240,13 +240,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [fail, requestProjectSnapshot],
   );
 
-  const select = useCallback(async (ids: string[]) => {
+  const select = useCallback(async (ids: SelectionInput, toggle = false) => {
     try {
-      await requestProjectSnapshot(id => bridge.setSelection(ids, id));
+      await snapshots.select(sessionId, ids, toggle, bridge.setSelection);
     } catch (cause) {
       fail(cause);
     }
-  }, [fail, requestProjectSnapshot]);
+  }, [fail, snapshots, sessionId]);
 
   const setPlayhead = useCallback(
     async (frame: number) => {

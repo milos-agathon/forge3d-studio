@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { SessionSnapshots } from "./sessionSnapshots.ts";
 
 // The two files deliberately share all persisted IDs, and a reopen resets revision.
-const a = { sessionId: 1, project: { id: "shared" }, path: "a.studio3d", revision: 0, snapshotSequence: 0 };
+const a = { sessionId: 1, selectionOrder: 0, project: { id: "shared", selection: [], scene: {objects: [{id:"cube"},{id:"terrain"}]} }, path: "a.studio3d", revision: 0, snapshotSequence: 0 };
 const b = { ...a, sessionId: 2, path: "b.studio3d" };
 
 function start() {
@@ -12,6 +12,126 @@ function start() {
   snapshots.replace(a);
   return { snapshots, published, request: snapshots.forSession(a.sessionId) };
 }
+
+test("rapid selection toggles include pending clicks and reconcile out-of-order replies", async () => {
+  const {snapshots,published} = start();
+  const calls = [];
+  function send(ids, sessionId, selectionOrder) {
+    const pending = Promise.withResolvers();
+    const snapshot = {...a, sessionId, selectionOrder, snapshotSequence: calls.length + 1, project: {...a.project, selection: ids}};
+    calls.push({ ids, resolve: () => pending.resolve(snapshot) });
+    return pending.promise;
+  }
+  const first = snapshots.select(a.sessionId, ["cube"], true, send);
+  const second = snapshots.select(a.sessionId, ["terrain"], true, send);
+  assert.deepEqual(calls.map(c=>c.ids), [["cube"],["cube","terrain"]]);
+  calls[1].resolve();
+  await second;
+  calls[0].resolve();
+  await first;
+  assert.deepEqual(published.at(-1).project.selection, ["cube","terrain"]);
+  const third = snapshots.select(a.sessionId, ["cube"], true, send);
+  assert.deepEqual(calls[2].ids, ["terrain"]);
+  snapshots.replace(b);
+  const fourth = snapshots.select(b.sessionId, ["cube"], true, send);
+  assert.deepEqual(calls[3].ids, ["cube"]);
+  calls[2].resolve();
+  calls[3].resolve();
+  await Promise.all([third,fourth]);
+  assert.equal(published.at(-1).sessionId,b.sessionId);
+});
+
+test("a slow viewport pick and a later tree gesture compose in input order", async () => {
+  for (const toggle of [false, true]) {
+    const { snapshots, published } = start();
+    const pick = Promise.withResolvers(), calls = [];
+    const send = async (ids, sessionId, selectionOrder) => {
+      calls.push(ids);
+      return {...a, sessionId, selectionOrder, snapshotSequence:calls.length, project:{...a.project,selection:ids}};
+    };
+    const viewport = snapshots.select(a.sessionId, { pick:pick.promise, isCurrent:() => true }, false, send);
+    await snapshots.select(a.sessionId, ["terrain"], toggle, send);
+    assert.deepEqual(published.at(-1).project.selection, ["terrain"]);
+    pick.resolve(["cube"]);
+    await viewport;
+    assert.deepEqual(calls, toggle ? [["terrain"], ["cube","terrain"]] : [["terrain"]]);
+    assert.deepEqual(published.at(-1).project.selection, toggle ? ["cube","terrain"] : ["terrain"]);
+  }
+});
+
+test("a rejected tree replacement leaves a pending viewport gesture eligible", async () => {
+  const { snapshots, published } = start();
+  const pick = Promise.withResolvers(), write = Promise.withResolvers();
+  const viewport = snapshots.select(a.sessionId, { pick:pick.promise, isCurrent:() => true }, false, async (ids, sessionId, selectionOrder) =>
+    ({...a, sessionId, selectionOrder, snapshotSequence:1, project:{...a.project, selection:ids}}));
+  const tree = snapshots.select(a.sessionId, ["missing"], false, () => write.promise);
+  pick.resolve(["cube"]);
+  await Promise.resolve();
+  write.reject(new Error("object removed"));
+  await assert.rejects(tree, /object removed/);
+  await viewport;
+  assert.deepEqual(published.at(-1).project.selection, ["cube"]);
+});
+
+test("a scene change retires a hit waiting for a later replacement to settle", async () => {
+  const { snapshots } = start();
+  const pick = Promise.withResolvers(), replacement = Promise.withResolvers();
+  let current = true, sends = 0;
+  const older = snapshots.select(a.sessionId, {pick:pick.promise,isCurrent:() => current}, false, () => sends++);
+  const newer = snapshots.select(a.sessionId, ["missing"], false, () => replacement.promise);
+  pick.resolve(["cube"]);
+  await Promise.resolve();
+  current = false;
+  replacement.reject(new Error("object removed"));
+  await assert.rejects(newer, /object removed/);
+  await older;
+  assert.equal(sends, 0);
+});
+
+test("selection shares scene inputs but a skipped playhead evaluation keeps its geometry", async () => {
+  const { published, request } = start();
+  const selected = structuredClone(a);
+  selected.selectionOrder = selected.snapshotSequence = 1;
+  selected.project.selection = ["cube"];
+  await request(async () => selected);
+  assert.equal(published.at(-1).project.scene, a.project.scene);
+  assert.deepEqual(published.at(-1).project.selection, ["cube"]);
+
+  const afterSeek = structuredClone(selected);
+  afterSeek.selectionOrder++;
+  afterSeek.snapshotSequence += 2;
+  afterSeek.project.scene.objects[0].transform = { translation: { x: 2, y: 0, z: 0 } };
+  await request(async () => afterSeek);
+  assert.equal(published.at(-1).project.scene, afterSeek.project.scene);
+});
+
+test("undo acknowledges a held selection and removes its deleted object from the next toggle", async () => {
+  const { snapshots, published } = start();
+  const held = Promise.withResolvers();
+  const first = snapshots.select(a.sessionId, ["cube"], false, () => held.promise);
+  const accepted = { ...a, selectionOrder: 1, snapshotSequence: 1, project: { ...a.project, selection: ["cube"] } };
+  const undone = { ...accepted, revision: 1, snapshotSequence: 2, project: { ...a.project, scene: { objects: [{ id: "terrain" }] } } };
+  await snapshots.forSession(a.sessionId)(async () => undone);
+  await snapshots.select(a.sessionId, ["terrain"], true, async (ids, sessionId, selectionOrder) => {
+    assert.deepEqual(ids, ["terrain"]);
+    return { ...undone, sessionId, selectionOrder, snapshotSequence: 3, project: { ...undone.project, selection: ids } };
+  });
+  held.resolve(accepted);
+  await first;
+  assert.deepEqual(published.at(-1).project.selection, ["terrain"]);
+});
+
+test("a failed selection leaves the next toggle based on the accepted selection", async () => {
+  const { snapshots, published } = start();
+  const commit = (ids, sessionId, selectionOrder) => Promise.resolve({
+    ...a, sessionId, selectionOrder, snapshotSequence: published.length, project: { ...a.project, selection: ids },
+  });
+  await snapshots.select(a.sessionId, ["terrain"], false, commit);
+  await assert.rejects(snapshots.select(a.sessionId, ["missing"], true,
+    () => Promise.reject(new Error("object removed"))), /object removed/);
+  await snapshots.select(a.sessionId, ["cube"], true, commit);
+  assert.deepEqual(published.at(-1).project.selection, ["terrain", "cube"]);
+});
 
 test("a late Open or Close cannot replace the most recent native session", async () => {
   const { snapshots, published } = start();

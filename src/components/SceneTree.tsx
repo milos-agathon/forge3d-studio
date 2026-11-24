@@ -50,14 +50,7 @@ export function SceneTree() {
 
   const select = (event: React.MouseEvent, id: string) => {
     const additive = event.metaKey || event.ctrlKey || event.shiftKey;
-    const current = state?.project.selection ?? [];
-    if (!additive) {
-      void actions.select([id]);
-      return;
-    }
-    void actions.select(
-      current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id],
-    );
+    void actions.select([id], additive);
   };
 
   return (
@@ -75,6 +68,7 @@ export function SceneTree() {
             <div
               key={object.id}
               role="treeitem"
+              data-object-id={object.id}
               aria-selected={selected}
               className={`tree-row ${selected ? "is-selected" : ""}`}
               style={{ paddingLeft: 8 + depth * 14 }}

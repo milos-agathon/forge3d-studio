@@ -47,7 +47,7 @@ export interface StudioBridge {
   applyCommand(command: Command, sessionId: number, terrainGeneration?: number): Promise<EditResult | null>;
   undo(sessionId: number): Promise<EditResult>;
   redo(sessionId: number): Promise<EditResult>;
-  setSelection(ids: string[], sessionId: number): Promise<SessionState>;
+  setSelection(ids: string[], sessionId: number, selectionOrder: number, expectedRevision: number): Promise<SessionState>;
   /** Move the playhead and evaluate the timeline into the project (view
    *  state: not undoable, no autosave). Returns the snapshot plus the
    *  clamped frame that was applied. */

@@ -439,6 +439,7 @@ export interface SessionState {
   project: Project;
   revision: number;
   snapshotSequence: number;
+  selectionOrder: number;
   dirty: boolean;
   path: string | null;
   canUndo: boolean;
