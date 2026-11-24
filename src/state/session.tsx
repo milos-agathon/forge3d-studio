@@ -24,7 +24,6 @@ import {
   type RenderJob,
 } from "./renderQueue";
 import type {
-  Applied,
   AssetIntegrity,
   AutosaveStatus,
   CartographyLayer,
@@ -206,20 +205,28 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const guardUnsaved = useCallback(
-    (action: string): boolean => {
-      if (!state?.dirty) return true;
+    async (action: string): Promise<boolean> => {
+      if (sessionId === undefined) return true;
+      const current = await snapshots.projectAfterHistory(sessionId);
+      if (!current) return false;
+      if (!current.dirty) return true;
       return window.confirm(
-        `"${state.project.name}" has unsaved changes. Continue and ${action}?`,
+        `"${current.project.name}" has unsaved changes. Continue and ${action}?`,
       );
     },
-    [state],
+    [sessionId, snapshots],
   );
 
   const applyCommand = useCallback(
-    async (command: Command, terrainGeneration?: number): Promise<Applied | null> => {
+    async (command: Command, terrainGeneration?: number, expectedSequence?: number | Promise<number | null>) => {
+      if (expectedSequence === undefined) viewStore.cancelTransformPreview?.();
       try {
-        const result = await requestProjectSnapshot(
-          id => bridge.applyCommand(command, id, terrainGeneration),
+        const result = await snapshots.orderHistory(sessionId, () => requestProjectSnapshot(
+          async id => {
+            const sequence = expectedSequence instanceof Promise ? await expectedSequence : expectedSequence;
+            if (sequence === null) return null;
+            return bridge.applyCommand(command, id, terrainGeneration, sequence);
+          },
           () => {
             const relinked = relinkedAssets(command);
             if (relinked.size) {
@@ -230,17 +237,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               });
             }
           },
-        );
-        return result?.applied ?? null;
+        ));
+        return result ? { ...result.applied, projectSequence: result.state.projectSequence } : null;
       } catch (cause) {
         fail(cause);
         return null;
       }
     },
-    [fail, requestProjectSnapshot],
+    [fail, requestProjectSnapshot, sessionId, snapshots],
   );
 
   const select = useCallback(async (ids: SelectionInput, toggle = false) => {
+    viewStore.cancelTransformPreview?.();
     try {
       await snapshots.select(sessionId, ids, toggle, bridge.setSelection);
     } catch (cause) {
@@ -1112,8 +1120,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         await actions.createProject(null);
       },
 
-      requestNewProject() {
-        if (!guardUnsaved("start a new project")) return;
+      async requestNewProject() {
+        if (!await guardUnsaved("start a new project")) return;
         if (presets.length === 0) {
           bridge
             .scenePresets()
@@ -1143,7 +1151,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       },
 
       async openProject() {
-        if (!guardUnsaved("open another project")) return;
+        if (!await guardUnsaved("open another project")) return;
         try {
           const picked = await openDialog({
             multiple: false,
@@ -1194,17 +1202,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       async saveProject(saveAs = false) {
         if (!state) return;
         try {
-          let path: string | null = null;
-          if (saveAs || !state.path) {
-            const picked = await saveDialog({
-              defaultPath: `${state.project.name || "untitled"}.studio3d`,
-              filters: [PROJECT_FILTER],
-            });
-            if (!picked) return;
-            path = picked;
-          }
-          setBusy(true);
-          const saved = await requestProjectSnapshot(id => bridge.saveProject(path, id));
+          const saved = await snapshots.orderHistory(sessionId, current => requestProjectSnapshot(async id => {
+            let path: string | null = null;
+            if (saveAs || !current.path) {
+              path = await saveDialog({
+                defaultPath: `${current.project.name || "untitled"}.studio3d`,
+                filters: [PROJECT_FILTER],
+              });
+              if (!path || !snapshots.owns(id)) return null;
+            }
+            setBusy(true);
+            return bridge.saveProject(path, id);
+          }));
           if (!saved) return;
           await refreshRecovery();
           flash(`Saved ${saved.path ?? "project"}`);
@@ -1216,7 +1225,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       },
 
       async closeProject() {
-        if (!guardUnsaved("close the project")) return;
+        if (!await guardUnsaved("close the project")) return;
         setBusy(true);
         try {
           if (!replaceProject({ sessionId: await bridge.closeProject() })) return;
@@ -1228,19 +1237,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         }
       },
 
-      apply: applyCommand,
+      apply: (command, expectedSequence) => applyCommand(command, undefined, expectedSequence),
 
       async undo() {
+        viewStore.cancelTransformPreview?.();
         try {
-          await requestProjectSnapshot(bridge.undo);
+          await snapshots.orderHistory(sessionId, () => requestProjectSnapshot(bridge.undo));
         } catch (cause) {
           fail(cause);
         }
       },
 
       async redo() {
+        viewStore.cancelTransformPreview?.();
         try {
-          await requestProjectSnapshot(bridge.redo);
+          await snapshots.orderHistory(sessionId, () => requestProjectSnapshot(bridge.redo));
         } catch (cause) {
           fail(cause);
         }

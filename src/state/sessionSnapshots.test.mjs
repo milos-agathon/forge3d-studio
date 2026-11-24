@@ -13,6 +13,23 @@ function start() {
   return { snapshots, published, request: snapshots.forSession(a.sessionId) };
 }
 
+test("queued history keeps input order across rejection and project replacement", async () => {
+  const { snapshots } = start();
+  const order = [];
+  const first = Promise.withResolvers(), next = Promise.withResolvers();
+  const edit = snapshots.orderHistory(a.sessionId, () => first.promise);
+  const undo = snapshots.orderHistory(a.sessionId, () => { order.push("undo"); return next.promise; });
+  const redo = snapshots.orderHistory(a.sessionId, async () => { order.push("redo"); });
+  first.reject(new Error("edit failed"));
+  await assert.rejects(edit, /edit failed/);
+  assert.deepEqual(order, ["undo"]);
+  snapshots.replace(b);
+  await snapshots.orderHistory(b.sessionId, async () => { order.push("new project"); });
+  next.resolve();
+  await Promise.all([undo, redo]);
+  assert.deepEqual(order, ["undo", "new project"]);
+});
+
 test("rapid selection toggles include pending clicks and reconcile out-of-order replies", async () => {
   const {snapshots,published} = start();
   const calls = [];

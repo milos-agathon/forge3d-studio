@@ -44,7 +44,7 @@ export interface StudioBridge {
   openProject(path: string): Promise<SessionState>;
   saveProject(path: string | null, sessionId: number): Promise<SessionState>;
   closeProject(): Promise<number>;
-  applyCommand(command: Command, sessionId: number, terrainGeneration?: number): Promise<EditResult | null>;
+  applyCommand(command: Command, sessionId: number, terrainGeneration?: number, expectedSequence?: number): Promise<EditResult | null>;
   undo(sessionId: number): Promise<EditResult>;
   redo(sessionId: number): Promise<EditResult>;
   setSelection(ids: string[], sessionId: number, selectionOrder: number, expectedRevision: number): Promise<SessionState>;

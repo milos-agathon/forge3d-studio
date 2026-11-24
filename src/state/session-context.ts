@@ -74,7 +74,8 @@ export interface SessionApi {
     openProject(): Promise<void>;
     saveProject(saveAs?: boolean): Promise<void>;
     closeProject(): Promise<void>;
-    apply(command: Command): Promise<Applied | null>;
+    /** Repeated viewport nudges can depend on the preceding native acknowledgement. */
+    apply(command: Command, expectedSequence?: number | Promise<number | null>): Promise<(Applied & { projectSequence: number }) | null>;
     undo(): Promise<void>;
     redo(): Promise<void>;
     select(ids: SelectionInput, toggle?: boolean): Promise<void>;

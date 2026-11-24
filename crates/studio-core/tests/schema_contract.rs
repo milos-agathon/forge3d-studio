@@ -237,6 +237,7 @@ fn session_state_shape_matches_the_ui_mirror() {
             "project",
             "revision",
             "snapshotSequence",
+            "projectSequence",
             "selectionOrder",
             "dirty",
             "path",

@@ -48,8 +48,8 @@ export const tauriBridge: StudioBridge = {
 
   closeProject: () => invoke<number>("close_project", { withSessionId: true }),
 
-  applyCommand: (command, sessionId, terrainGeneration) =>
-    invoke<EditResult | null>("apply_command", { command, sessionId, terrainGeneration }),
+  applyCommand: (command, sessionId, terrainGeneration, expectedSequence) =>
+    invoke<EditResult | null>("apply_command", { command, sessionId, terrainGeneration, expectedSequence }),
 
   undo: (sessionId) => invoke<EditResult>("undo", { sessionId }),
 

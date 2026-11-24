@@ -8,7 +8,7 @@ import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 
 import { ForgeTerrainViewport, viewportErrorReason, type TerrainPresentation } from "./forge3dWebViewport";
-import { studioUnitsPerGroundUnit, terrainGroundSpan, terrainVertexRelief, type RendererPreference } from "./forge3dWebMapping";
+import { cubeParentWorld, studioUnitsPerGroundUnit, terrainGroundSpan, terrainVertexRelief, type RendererPreference } from "./forge3dWebMapping";
 import { assetRevision, boundedTerrainResolution, firstVisibleTerrain, nativeRenderView, sceneObjectVisibility, terrainSampleRevision, validateTerrainPreview, viewportDimensions, ViewportModel,
   type TerrainPreviewRequest, type ViewportDimensions, type ViewportFrame, type ViewportTerrain } from "./viewportState";
 import { editorDepthWinner, editorPrimitiveVisible, editorRasterDepths } from "./editorDepthWinner";
@@ -26,6 +26,7 @@ import type {
 import { ViewportToolbar } from "../components/ViewportToolbar";
 import { useSession } from "../state/session-context";
 import { AxisGizmo, type Axis } from "./AxisGizmo";
+import { WorldXMove } from "./worldXMove";
 import { NorthArrow } from "./NorthArrow";
 import { formatDistance, mapFrame } from "./mapGrid";
 import { buildMapGrid, type MapGridHandle } from "./mapGridLayer";
@@ -845,6 +846,12 @@ function requestedTerrainResolution(asset: Asset | undefined, span: [number, num
   return Number.isFinite(maxSpan) && maxSpan > 0 ? remoteRung : TERRAIN_RUNGS[0];
 }
 
+// A placement group carries the ancestor matrix separately from editable
+// local TRS and from the mesh children rebuilt by disposeChildren.
+function removeObjectGroup(scene: THREE.Scene, group: THREE.Group) {
+  scene.remove(group.parent && group.parent !== scene ? group.parent : group);
+}
+
 function applyTransform(group: THREE.Object3D, transform: Transform): void {
   group.position.set(
     transform.translation.x,
@@ -964,6 +971,14 @@ export function Viewport3D({ preference, onBackend }: {
   const remoteRung = hasRemoteTerrain ? ladderRung : TERRAIN_RUNGS[0];
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const xGripRef = useRef<HTMLButtonElement>(null);
+  const worldMoveRef = useRef<WorldXMove | null>(null);
+  const single = project?.selection.length === 1 && scene?.objects.find(object => object.id === project.selection[0]);
+  const moveTarget = tool === "move" && space === "world" && project?.viewport.mode !== "rendered" &&
+    single && visibility.get(single.id) && !single.locked && single.kind.type === "mesh" &&
+    single.kind.source.type === "primitive" && single.kind.source.primitive.type === "cube" ? single : undefined;
+  const moveTargetRef = useRef(moveTarget);
+  moveTargetRef.current = moveTarget;
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const runtimeRef = useRef<Runtime | null>(null);
   const pressRef = useRef<{ id: number; x: number; y: number; generation: number } | null>(null);
@@ -1133,6 +1148,7 @@ export function Viewport3D({ preference, onBackend }: {
   }, [viewport, sceneProject, projectGeneration, cameraView, assetGenerations, visibility]);
 
   useLayoutEffect(() => { hostSyncRef.current?.(); }, [preference, terrainResolution, remoteRung]);
+  useLayoutEffect(() => { worldMoveRef.current?.refresh(true); }, [moveTarget, projectGeneration, state?.snapshotSequence, preference]);
 
   const readTerrain = useCallback(
     (asset: Asset, source: { worldSpanXz: [number, number] | null; worldOriginXz: [number, number] | null },
@@ -1228,7 +1244,8 @@ export function Viewport3D({ preference, onBackend }: {
   useEffect(() => {
     const container = containerRef.current;
     const canvas = canvasRef.current;
-    if (!container || !canvas) return;
+    const grip = xGripRef.current;
+    if (!container || !canvas || !grip) return;
 
     const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 2000);
     const target = new THREE.Vector3(0, 0.8, 0);
@@ -1287,6 +1304,20 @@ export function Viewport3D({ preference, onBackend }: {
     }, (source, resolution, heights, owner) => {
       if (viewport.admitTerrain(source, resolution, heights, owner)) previewsChanged(version => version + 1);
     });
+    const worldMove = new WorldXMove(grip, terrainCanvas, () => {
+      const object = moveTargetRef.current;
+      const snapshot = stateRef.current;
+      if (object && snapshot && !runtimeRef.current && preferenceRef.current !== "three") {
+        return { id: object.id, transform: object.transform, generation: viewport.current.projectGeneration,
+          sequence: snapshot.projectSequence };
+      }
+    }, (id, allowPrevious) => terrainViewport.displayedCube(viewport.current, id, allowPrevious), invalidate,
+    async (id, transform, sequence) => {
+      const result = await actionsRef.current.apply({ type: "setTransform", id, transform }, sequence);
+      return result?.projectSequence ?? null;
+    });
+    worldMoveRef.current = worldMove;
+    viewStore.cancelTransformPreview = () => worldMove.interrupt();
     hostSyncRef.current = () => {
       terrainViewport.sync(view());
       invalidate();
@@ -1295,6 +1326,7 @@ export function Viewport3D({ preference, onBackend }: {
       const runtime = runtimeRef.current;
       const frame = viewport.current;
       return { frame, preference: preferenceRef.current, sampling: previewResolutionRef.current, clay: CLAY,
+        cubePreview: worldMove.preview,
         background: frame.settings.mode === "solid" ? SOLID_BG : MATERIAL_BG,
         editor: runtime ? { objects: runtime.objects, projectionCamera: camera,
           sunShadowsDisabled: runtime.glStep >= GPU_STEP_WITHOUT_SUN_SHADOWS,
@@ -1402,15 +1434,30 @@ export function Viewport3D({ preference, onBackend }: {
     const inputSurface = (event: PointerEvent) =>
       event.target === canvas || event.target === container || event.target === terrainCanvas;
     const pointerDown = (event: PointerEvent) => {
+      if (worldMove.active || worldMove.begin(event)) {
+        pressRef.current = null;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       // A second contact starts a navigation gesture even if the first finger stays still.
       const canPick = event.isPrimary && event.button === 0 && inputSurface(event) && viewportModeRef.current !== "rendered";
       pressRef.current = canPick
         ? { id: event.pointerId, x: event.clientX, y: event.clientY, generation: viewport.current.projectGeneration } : null;
     };
-    const pointerCancel = () => { pressRef.current = null; };
+    const pointerCancel = (event: PointerEvent) => { pressRef.current = null; worldMove.cancel(event); };
+    const captureLost = (event: PointerEvent) => worldMove.cancel(event);
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (worldMove.active && event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        worldMove.cancel();
+      }
+    };
     const exceedsClickRadius = (press: { x: number; y: number }, point: PointerEvent) =>
       Math.hypot(point.clientX - press.x, point.clientY - press.y) > 4;
     const pointerMove = (event: PointerEvent) => {
+      if (worldMove.active) { worldMove.move(event); return; }
       const press = pressRef.current;
       if (press?.id !== event.pointerId) return;
       if (exceedsClickRadius(press, event) || event.getCoalescedEvents?.().some(point => exceedsClickRadius(press, point))) {
@@ -1418,6 +1465,7 @@ export function Viewport3D({ preference, onBackend }: {
       }
     };
     const pointerUp = (event: PointerEvent) => {
+      if (worldMove.active) { worldMove.finish(event); return; }
       const press = pressRef.current;
       if (!press || press.id !== event.pointerId || event.button !== 0) return;
       pressRef.current = null;
@@ -1470,6 +1518,8 @@ export function Viewport3D({ preference, onBackend }: {
     container.ownerDocument.addEventListener("pointermove", pointerMove, true);
     container.addEventListener("pointerup", pointerUp);
     container.addEventListener("pointercancel", pointerCancel);
+    grip.addEventListener("lostpointercapture", captureLost);
+    window.addEventListener("keydown", cancelOnEscape, true);
 
     const drawFrame = (now: number) => {
       // A display scale change can leave the CSS box unchanged.
@@ -1477,7 +1527,7 @@ export function Viewport3D({ preference, onBackend }: {
       if (resizePending || dpr !== observedDpr) resize(dpr);
       const editor = editorRef.current;
       const runtime = runtimeRef.current;
-      const moved = editor?.update(now);
+      const moved = !worldMove.active && editor?.update(now);
       const lost = terrainViewport.lost();
       const redrawSelection = runtime?.selectionNeedsRender;
       if (runtime) runtime.selectionNeedsRender = false;
@@ -1495,6 +1545,7 @@ export function Viewport3D({ preference, onBackend }: {
       const choice = terrainViewport.prepare(view());
       const previewError = preparePreviews(choice);
       const presented = terrainViewport.draw(view(), previewError);
+      worldMove.refresh();
       lastTerrain = presented;
       lastPreviewError = previewError;
       editor?.present(presented, previewError);
@@ -1523,6 +1574,11 @@ export function Viewport3D({ preference, onBackend }: {
     animation = requestAnimationFrame(tick);
     return () => {
       mounted = false;
+      worldMove.cancel();
+      worldMoveRef.current = null;
+      viewStore.cancelTransformPreview = null;
+      grip.removeEventListener("lostpointercapture", captureLost);
+      window.removeEventListener("keydown", cancelOnEscape, true);
       container.removeEventListener("pointerdown", pointerDown, true);
       container.ownerDocument.removeEventListener("pointermove", pointerMove, true);
       container.removeEventListener("pointerup", pointerUp);
@@ -2036,7 +2092,7 @@ export function Viewport3D({ preference, onBackend }: {
         // touch the map grid the next runtime owns.
         group.userData.signature = null;
         disposeChildren(group);
-        scene.remove(group);
+        removeObjectGroup(scene, group);
       }
       runtime.objects.clear();
       for (const helper of runtime.helpers) {
@@ -2073,7 +2129,7 @@ export function Viewport3D({ preference, onBackend }: {
     if (!project) {
       for (const group of runtime.objects.values()) {
         disposeChildren(group);
-        runtime.scene.remove(group);
+        removeObjectGroup(runtime.scene, group);
       }
       runtime.objects.clear();
       runtime.gizmo.detach();
@@ -2095,14 +2151,14 @@ export function Viewport3D({ preference, onBackend }: {
       return;
     }
 
-    const visibleIds = new Set(viewport.current.objects.filter(o => o.visible).map(o => o.id));
+    const frameObjects = new Map(viewport.current.objects.map(object => [object.id, object]));
     const live = new Map(project.scene.objects.map((object) => [object.id, object]));
     for (const [id, group] of runtime.objects) {
       if (live.has(id)) continue;
       // Invalidates any build still in flight for this group.
       group.userData.signature = null;
       disposeChildren(group);
-      runtime.scene.remove(group);
+      removeObjectGroup(runtime.scene, group);
       runtime.objects.delete(id);
     }
 
@@ -2114,7 +2170,24 @@ export function Viewport3D({ preference, onBackend }: {
         runtime.scene.add(group);
         runtime.objects.set(object.id, group);
       }
-      group.visible = visibleIds.has(object.id);
+      const frameObject = frameObjects.get(object.id);
+      group.visible = !!frameObject?.visible;
+      const parentMatrix = frameObject?.visible && frameObject.parent && object.kind.type === "mesh" &&
+        object.kind.source.type === "primitive" && object.kind.source.primitive.type === "cube"
+        ? cubeParentWorld(frameObject.parent, frameObjects).matrix : undefined;
+      if (parentMatrix) {
+        if (group.parent === runtime.scene) {
+          const placement = new THREE.Group();
+          placement.matrixAutoUpdate = false;
+          runtime.scene.add(placement);
+          placement.add(group);
+        }
+        group.parent!.matrix.copy(parentMatrix);
+        group.parent!.matrixWorldNeedsUpdate = true;
+      } else if (group.parent !== runtime.scene) {
+        removeObjectGroup(runtime.scene, group);
+        runtime.scene.add(group);
+      }
       // The cursor readout measures the terrain; once it is hidden the last
       // reading no longer describes anything on screen.
       if (object.kind.type === "terrain" && !group.visible) setCursorElevation(null);
@@ -3132,6 +3205,18 @@ export function Viewport3D({ preference, onBackend }: {
   return (
     <div className="viewport" ref={containerRef}>
       <canvas ref={canvasRef} className="viewport-canvas" />
+      <div className="world-x-handle" hidden>
+        <button className="world-x-grip" type="button" ref={xGripRef} aria-label="Move along world X"
+          aria-keyshortcuts="ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight"
+          title="Move along world X · Left/Right 0.1 units · Shift 1 unit"
+          onClick={event => { if (event.detail === 0) worldMoveRef.current?.nudge(0.1); }}
+          onKeyDown={event => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            event.stopPropagation();
+            worldMoveRef.current?.nudge((event.key === "ArrowRight" ? 1 : -1) * (event.shiftKey ? 1 : 0.1));
+          }}>X</button>
+      </div>
       {renderedMode && (
         <div className={`viewport-rendered ${renderedFrame ? "has-frame" : ""}`}>
           {renderedFrame && (

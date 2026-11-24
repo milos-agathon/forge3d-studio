@@ -387,8 +387,15 @@ pub fn apply_command(
     command: Command,
     session_id: Option<u64>,
     terrain_generation: Option<u64>,
+    expected_sequence: Option<u64>,
 ) -> Result<Option<EditResult>, String> {
-    apply_project_command(&state, command, session_id, terrain_generation)
+    apply_project_command(
+        &state,
+        command,
+        session_id,
+        terrain_generation,
+        expected_sequence,
+    )
 }
 
 fn apply_project_command(
@@ -396,11 +403,17 @@ fn apply_project_command(
     command: Command,
     session_id: Option<u64>,
     terrain_generation: Option<u64>,
+    expected_sequence: Option<u64>,
 ) -> Result<Option<EditResult>, String> {
     if terrain_generation.is_some() && session_id.is_none() {
         return Err("a terrain choice requires its project session ID".to_owned());
     }
     let mut session = lock_project(state, session_id)?;
+    // The same lock covers the comparison and history mutation. Undo, seeks,
+    // selection and project replacement may already have won the IPC race.
+    if expected_sequence.is_some_and(|sequence| !session.matches_project_snapshot(sequence)) {
+        return Ok(None);
+    }
     if terrain_generation
         .is_some_and(|generation| session.terrain_source_generation() != Some(generation))
     {
@@ -1688,14 +1701,14 @@ mod tests {
             .is_none()
         );
         assert!(
-            apply_project_command(&state, relink(older), session_id, old_relink)
+            apply_project_command(&state, relink(older), session_id, old_relink, None)
                 .unwrap()
                 .is_none()
         );
         assert_eq!(lock(&state).unwrap().state().unwrap().revision, 0);
 
         let committed =
-            apply_project_command(&state, relink(newer.clone()), session_id, new_relink)
+            apply_project_command(&state, relink(newer.clone()), session_id, new_relink, None)
                 .unwrap()
                 .expect("the latest reserved relink commits");
         assert_eq!(committed.state.revision, 1);
@@ -1957,6 +1970,7 @@ mod tests {
             project,
             revision: 0,
             snapshot_sequence: 0,
+            project_sequence: 0,
             selection_order: 0,
             dirty: false,
             path: None,
@@ -2027,6 +2041,7 @@ mod tests {
             project,
             revision: 0,
             snapshot_sequence: 0,
+            project_sequence: 0,
             selection_order: 0,
             dirty: false,
             path: None,

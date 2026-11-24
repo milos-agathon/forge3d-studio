@@ -1,5 +1,5 @@
 import type { CameraInput, TerrainDataset, TerrainHeightmapInput, TerrainMaterialImage, TerrainOverlayLayerInput, TerrainOverlaysInput } from "@forge3d/web";
-import { BoxGeometry, Euler, MathUtils, Matrix4, Vector3 } from "three";
+import { BoxGeometry, Euler, MathUtils, Matrix3, Matrix4, Vector3 } from "three";
 import type { ViewportObject, ViewportTerrain } from "./viewportState.ts";
 import type { TerrainPreview, ViewportMode } from "../bridge/types";
 import { TERRAIN_VIEW_SIZE } from "./viewMath.ts";
@@ -105,10 +105,45 @@ export function studioToRuntime([x, y, z]: Triple, { translation: [tx, ty, tz], 
   return [(x - tx) / scale, (y - ty) / scale, (z - tz) / scale];
 }
 
-export function cubeScatterGeometry(size: number, object: ViewportObject, placement: UniformTransform, editorWorld?: Matrix4) {
+function localMatrix(object: ViewportObject) {
   const [x, y, z] = object.rotationDeg.map(MathUtils.degToRad);
-  const world = editorWorld?.clone() ?? new Matrix4().makeRotationFromEuler(new Euler(x, y, z, "ZYX"))
-    .scale(new Vector3(...object.scale)).setPosition(...object.translation);
+  return new Matrix4().makeRotationFromEuler(new Euler(x, y, z, "ZYX")).scale(new Vector3(...object.scale))
+    .setPosition(...object.translation);
+}
+
+// Effective visibility has already excluded cycles. Keep the full affine
+// product: nonuniform scale followed by rotation can introduce shear.
+export function cubeParentWorld(parentId: string, byId: ReadonlyMap<string, ViewportObject>) {
+  const matrix = new Matrix4();
+  let parent = byId.get(parentId);
+  let singular = false;
+  while (parent) {
+    singular ||= parent.scale.includes(0);
+    matrix.premultiply(localMatrix(parent));
+    parent = parent.parent ? byId.get(parent.parent) : undefined;
+  }
+  return { matrix, singular };
+}
+
+// The inverse is used with f32 storage and scatter matrices. A rotated
+// zero-scale ancestor can acquire a nonzero determinant through cancellation.
+function stableLinearPart(matrix: Matrix4, epsilon: number) {
+  const linear = new Matrix3().setFromMatrix4(matrix);
+  const inverse = linear.clone().invert();
+  const condition = Math.hypot(...linear.elements) * Math.hypot(...inverse.elements);
+  return condition > 0 && condition * epsilon < 0.01 ? { linear, inverse } : undefined;
+}
+
+export function worldXAxis(parent: Matrix4) {
+  const basis = stableLinearPart(parent, Number.EPSILON);
+  if (!basis) return;
+  return { linear: basis.linear, local: new Vector3(1, 0, 0).applyMatrix3(basis.inverse).toArray() };
+}
+
+export function cubeScatterGeometry(size: number, object: ViewportObject, placement: UniformTransform, editorWorld?: Matrix4,
+  parent?: ReturnType<typeof cubeParentWorld>) {
+  const world = editorWorld?.clone() ?? localMatrix(object);
+  if (!editorWorld && parent) world.premultiply(parent.matrix);
   // Subtract the Studio origin in double precision before changing units.
   // Three stores columns; the scatter ABI consumes four packed rows.
   for (let axis = 0; axis < 3; axis++) world.elements[12 + axis] -= placement.translation[axis];
@@ -117,9 +152,10 @@ export function cubeScatterGeometry(size: number, object: ViewportObject, placem
   const geometry = new BoxGeometry(size, size, size);
   // Match the pinned scatter ABI's determinant check on the packed matrix.
   // Keep the shape of a flattened box, including its two opposing faces.
+  const stable = stableLinearPart(world, 2 ** -23);
   world.fromArray(new Float32Array(world.elements));
   const determinant = world.determinant();
-  if (Math.abs(determinant) < 1e-12) {
+  if (parent?.singular || !stable || !stableLinearPart(world, 2 ** -23) || Math.abs(determinant) < 1e-12) {
     const origin = new Vector3().setFromMatrixPosition(world);
     world.setPosition(0, 0, 0);
     geometry.attributes.position.applyMatrix4(world);

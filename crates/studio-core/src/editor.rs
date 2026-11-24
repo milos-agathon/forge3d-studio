@@ -49,6 +49,8 @@ pub struct SessionState {
     pub revision: u64,
     /// Advances on changes to the snapshot, including view state and save status.
     pub snapshot_sequence: u64,
+    /// Last snapshot that changed project contents, selection or the playhead.
+    pub project_sequence: u64,
     /// Last selection intent accepted by this editor, including in snapshots of later edits.
     pub selection_order: u64,
     pub dirty: bool,
@@ -66,6 +68,7 @@ pub struct Editor {
     project: Project,
     revision: u64,
     snapshot_sequence: u64,
+    project_sequence: u64,
     selection_order: u64,
     terrain_source_generation: u64,
     dirty: bool,
@@ -86,6 +89,7 @@ impl Editor {
             project,
             revision: 0,
             snapshot_sequence: 0,
+            project_sequence: 0,
             selection_order: 0,
             terrain_source_generation: 0,
             dirty: true,
@@ -162,12 +166,22 @@ impl Editor {
         self.state_for_session(0)
     }
 
+    pub(crate) fn matches_project_snapshot(&self, sequence: u64) -> bool {
+        (self.project_sequence..=self.snapshot_sequence).contains(&sequence)
+    }
+
+    fn project_changed(&mut self) {
+        self.snapshot_sequence += 1;
+        self.project_sequence = self.snapshot_sequence;
+    }
+
     pub(crate) fn state_for_session(&self, session_id: u64) -> SessionState {
         SessionState {
             session_id,
             project: self.project.clone(),
             revision: self.revision,
             snapshot_sequence: self.snapshot_sequence,
+            project_sequence: self.project_sequence,
             selection_order: self.selection_order,
             dirty: self.dirty,
             path: self
@@ -267,7 +281,7 @@ impl Editor {
         self.selection_order = order;
         self.project.selection = unique;
         self.project.touch();
-        self.snapshot_sequence += 1;
+        self.project_changed();
         Ok(())
     }
 
@@ -282,7 +296,7 @@ impl Editor {
     pub fn preview_playhead(&mut self, frame: f32) -> f32 {
         let frame = crate::timeline::evaluate(&mut self.project, frame);
         self.project.touch();
-        self.snapshot_sequence += 1;
+        self.project_changed();
         frame
     }
 
@@ -318,7 +332,7 @@ impl Editor {
         self.project.touch();
         self.project.updated_unix_ms = now_unix_ms();
         self.revision += 1;
-        self.snapshot_sequence += 1;
+        self.project_changed();
         self.dirty = true;
         debug_assert!(
             self.project.validate().is_ok(),
@@ -443,6 +457,23 @@ mod tests {
         assert_eq!(editor.project().selection, vec![id]);
         assert!(!editor.is_dirty());
         assert!(!editor.can_undo());
+    }
+
+    #[test]
+    fn saved_snapshots_remain_valid_until_the_project_changes() {
+        let mut editor = Editor::new(Project::new(UNTITLED));
+        editor.preview_playhead(2.0);
+        let changed = editor.state().snapshot_sequence;
+        editor.set_path(Some("example.studio3d".into()));
+        editor.mark_saved();
+        let saved = editor.state();
+        assert_eq!(saved.project_sequence, changed);
+        assert!(editor.matches_project_snapshot(changed));
+        assert!(editor.matches_project_snapshot(saved.snapshot_sequence));
+        assert!(!editor.matches_project_snapshot(saved.snapshot_sequence + 1));
+        editor.set_selection(vec![cube_id(&editor)]).unwrap();
+        assert!(!editor.matches_project_snapshot(saved.snapshot_sequence));
+        assert!(editor.matches_project_snapshot(editor.state().project_sequence));
     }
 
     #[test]
