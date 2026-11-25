@@ -5,7 +5,7 @@ import { consecutiveEdits } from "./vp07-consecutive-edits.mjs";
 import { CUBE_ID, TERRAIN_ID } from "./vp01/fixture.mjs";
 
 export async function reviewCases({cdp, evaluate, wait, read, mouse, hasCapture, commandCounts, menu, open, ready, named,
-  originalBryce, relief, directory, eye, aim, grip, D, S, raf}) {
+  expectedTravel, originalBryce, relief, directory, eye, aim, grip, D, S, raf}) {
   const report = {};
   const cube = p => p.scene.objects.find(o => o.id === CUBE_ID);
   const translation = async () => cube((await read()).project).transform.translation;
@@ -173,7 +173,7 @@ export async function reviewCases({cdp, evaluate, wait, read, mouse, hasCapture,
   const end = await translation();
   assert.ok(Math.abs(end.x)<1e-6 && end.z===0);
   const worldDelta = -3*(end.y-parentStart.y);
-  assert.ok(Math.abs(worldDelta - .81615)<.001);
+  assert.ok(Math.abs(worldDelta - expectedTravel)<.001);
   assert.ok(heldCenter.every((v,i)=>Math.abs(v-startCenter[i]-(i===0 ? worldDelta : 0))<1e-5));
   assert.deepEqual(await commandCounts(n),{setTransform:1,selection:0});
   assert.equal(await image(),heldImage);
@@ -208,20 +208,23 @@ export async function reviewCases({cdp, evaluate, wait, read, mouse, hasCapture,
   const rect = await evaluate('document.querySelector(".viewport-canvas--terrain").getBoundingClientRect().toJSON()');
   const y = rect.top + rect.height/2;
   const clipCount = await count();
-  await mouse("mousePressed",rect.left+766,y);
+  // At 766 Field now picks the positive Z cone. Start on the visible
+  // negative X shaft and carry the same captured axis through the right edge.
+  await mouse("mousePressed",rect.left+736,y);
+  assert.equal(await evaluate('document.querySelector(".transform-handles").dataset.axis'),"X");
   assert.equal(await hasCapture(),true);
-  for (const x of [775,782,786,790,792,780]) {
+  for (const x of [745,752,766,775,782,786,790,792,750]) {
     await mouse("mouseMoved",rect.left+x,y);
     await evaluate(raf);
     assert.equal(await hasCapture(),true,`capture lost at ${x}`);
     assert.equal((await translation()).x,4.18);
     if (x === 792) assert.equal(await evaluate(grip+'.parentElement.style.visibility'),"hidden");
   }
-  await mouse("mouseReleased",rect.left+780,y);
+  await mouse("mouseReleased",rect.left+750,y);
   await wait(frameCube+".translation[0]>4.18");
   assert.equal(await hasCapture(),false);
   assert.deepEqual(await commandCounts(clipCount),{setTransform:1,selection:0});
-  report.clippedPreview = {capturedAt:[766,775,782,786,790,792,780],after:await translation()};
+  report.clippedPreview = {capturedAt:[736,745,752,766,775,782,786,790,792,750],after:await translation()};
 
   const ground = p => p.scene.objects.find(o=>o.id===TERRAIN_ID);
   const camera = p => p.scene.objects.find(o=>o.kind.type==="camera");
@@ -361,7 +364,7 @@ export async function reviewCases({cdp, evaluate, wait, read, mouse, hasCapture,
   await wait(frameCube+".translation[0]>0");
   assert.equal((await translation()).y,1.85);
   report.releaseFirst={afterUndo:cube(preceding.project).transform.translation,afterRedo:await translation()};
-  report.consecutive = await consecutiveEdits({ setup, open, menu, ready, drag, hold, key, center, image, count,
+  report.consecutive = await consecutiveEdits({ setup, open, menu, ready, drag, expectedTravel, hold, key, center, image, count,
     read, wait, evaluate, hasCapture, commandCounts, named, originalBryce, grip, frameCube, raf });
   return report;
 }

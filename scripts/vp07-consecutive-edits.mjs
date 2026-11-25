@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { CUBE_ID } from "./vp01/fixture.mjs";
 
-export async function consecutiveEdits({setup, open, menu, ready, drag, hold, key, center, image,
+export async function consecutiveEdits({setup, open, menu, ready, drag, expectedTravel, hold, key, center, image,
   count, read, wait, evaluate, hasCapture, commandCounts, named, originalBryce, grip, frameCube, raf}) {
   const report = {};
   const cube = project => project.scene.objects.find(o => o.id === CUBE_ID);
@@ -85,7 +85,7 @@ export async function consecutiveEdits({setup, open, menu, ready, drag, hold, ke
   assert.deepEqual(await observed(closingCount),["apply_command","save_project","close_project"]);
   await open(closing);
   await ready("solid");
-  assert.equal(pose(await read()).translation.x,0.81615096);
+  assert.ok(Math.abs(pose(await read()).translation.x-expectedTravel)<1e-5);
   report.saveThenClose = {reopened:pose(await read())};
 
   for (const timing of ["after release", "during capture", "cancel second", "zero second"]) {
@@ -95,14 +95,15 @@ export async function consecutiveEdits({setup, open, menu, ready, drag, hold, ke
     await (await drag())();
     await paused();
     const first = await read();
-    assert.equal(pose(first).translation.x,0.81615096);
+    const firstX=pose(first).translation.x;
+    assert.ok(Math.abs(firstX-expectedTravel)<1e-5);
     const second = await drag(undefined,timing === "zero second" ? 0 : 44);
     const held = await center();
     assert.deepEqual(pose(await read()),pose(first));
     if (timing !== "zero second") assert.ok(held[0] > pose(first).translation.x+0.5);
     if (timing === "during capture") {
       await resume();
-      await wait(frameCube+".translation[0]===0.81615096");
+      await wait(frameCube+".translation[0]==="+firstX);
       await evaluate(raf);
       assert.ok(await hasCapture());
       assert.deepEqual(await center(),held);
@@ -111,14 +112,14 @@ export async function consecutiveEdits({setup, open, menu, ready, drag, hold, ke
     await second();
     if (timing !== "during capture") await resume();
     const moved = timing === "after release" || timing === "during capture";
-    await wait(frameCube+".translation[0]"+(moved ? ">1" : "===0.81615096"));
+    await wait(frameCube+".translation[0]"+(moved ? ">"+firstX : "==="+firstX));
     const last = await read();
     assert.deepEqual(await commandCounts(start),{setTransform:moved?2:1,selection:0});
     assert.equal(last.historyLen,first.historyLen+Number(moved));
     if (moved) {
       assert.ok(Math.abs(pose(last).translation.x-held[0]) < 1e-6);
       await named("Undo ");
-      await wait(frameCube+".translation[0]===0.81615096");
+      await wait(frameCube+".translation[0]==="+firstX);
       assert.deepEqual(pose(await read()),pose(first));
     } else assert.deepEqual(pose(last),pose(first));
     report[timing]={first:pose(first).translation,held,last:pose(last).translation,history:last.historyLen};
@@ -157,7 +158,7 @@ export async function consecutiveEdits({setup, open, menu, ready, drag, hold, ke
       assert.equal(to.z,from.z);
     }
   }
-  verifyAxis(pose(before).translation,pose(first).translation,.81615);
+  verifyAxis(pose(before).translation,pose(first).translation,expectedTravel);
   await focusGrip();
   await key("ArrowRight","ArrowRight");
   await wait(frameCube+".translation[0]>"+pose(first).translation.x);
