@@ -52,7 +52,7 @@ fn require_session(session: &Session, expected: Option<u64>) -> Result<u64, Stri
     match session.active_id() {
         Some(id) if expected.is_none() || expected == Some(id) => Ok(id),
         None if expected.is_none() => Err("no project is open".to_owned()),
-        _ => Err("the project changed before the edit could be applied".to_owned()),
+        _ => Err("the project changed before the command could be applied".to_owned()),
     }
 }
 
@@ -1440,6 +1440,7 @@ pub fn render_frame(
             source,
         )
     };
+    let python = forge.ready_python()?;
     let request = build_request(
         &handoff,
         &settings,
@@ -1448,7 +1449,6 @@ pub fn render_frame(
         view.as_ref(),
         meshes,
     )?;
-    let python = forge.probe(false).python;
     let quality = quality.unwrap_or_else(|| "final".to_owned());
     let mut frame = render.render(
         &python,
@@ -1469,9 +1469,10 @@ pub fn render_still(
     state: State<'_, AppState>,
     path: Option<String>,
     view: Option<RenderView>,
+    session_id: u64,
 ) -> Result<RenderFrame, String> {
     let (handoff, settings, project_name, project_path, meshes) = {
-        let session = lock(&state)?;
+        let session = lock_project(&state, Some(session_id))?;
         let snapshot = session
             .state()
             .ok_or_else(|| "no project is open".to_owned())?;
@@ -1488,6 +1489,8 @@ pub fn render_still(
             meshes,
         )
     };
+
+    let python = forge.ready_python()?;
 
     // Default output lives with the project, under renders/, and carries a
     // sidecar describing exactly what produced it.
@@ -1527,7 +1530,6 @@ pub fn render_still(
         view.as_ref(),
         meshes,
     )?;
-    let python = forge.probe(false).python;
     let mut payload = request.to_payload("final", Some(&target.to_string_lossy()));
     let mut frame = render.render(
         &python,
@@ -1578,15 +1580,17 @@ pub fn render_animation_frame(
     height: u32,
     quality: Option<String>,
     output: String,
+    session_id: u64,
 ) -> Result<WrittenFrame, String> {
     // Evaluate a clone: the session's own playhead stays where the user left it.
     let (mut project, revision) = {
-        let session = lock(&state)?;
+        let session = lock_project(&state, Some(session_id))?;
         let snapshot = session
             .state()
             .ok_or_else(|| "no project is open".to_owned())?;
         (snapshot.project, snapshot.revision)
     };
+    let python = forge.ready_python()?;
     let frame = studio_core::timeline::evaluate(&mut project, frame);
 
     let handoff = studio_core::workspace::handoff(&project, revision, Workspace::Forge3d);
@@ -1610,7 +1614,6 @@ pub fn render_animation_frame(
             .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
     }
 
-    let python = forge.probe(false).python;
     let quality = quality.unwrap_or_else(|| "final".to_owned());
     let mut written = render.render(
         &python,

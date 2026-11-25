@@ -109,6 +109,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [renderJobs, setRenderJobs] = useState<RenderJob[]>([]);
   /** Authoritative mirror of `renderJobs`: the worker reads it without a render. */
   const jobsRef = useRef<RenderJob[]>([]);
+  const sessionIdRef = useRef<number | undefined>(sessionId);
+  sessionIdRef.current = sessionId;
   /** Render settings captured when the job was queued. */
   const jobSpecs = useRef(new Map<string, { width: number; height: number }>());
   const cancelledJobs = useRef(new Set<string>());
@@ -920,6 +922,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       for (;;) {
         const job = nextQueuedJob(jobsRef.current);
         if (!job) break;
+        if (job.sessionId !== sessionIdRef.current) {
+          updateJob(job.id, { status: "cancelled", error: "Project changed before render" });
+          jobSpecs.current.delete(job.id);
+          continue;
+        }
         updateJob(job.id, { status: "running" });
         try {
           if (job.kind === "still") {
@@ -928,7 +935,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               updateJob(job.id, { status: "cancelled" });
               continue;
             }
-            const frame = await bridge.renderStill(job.output || null, view);
+            const frame = await bridge.renderStill(job.output || null, view, job.sessionId);
             // A still cannot be interrupted mid-frame; a cancel requested
             // while it ran still writes the file, so report the truth.
             const cancelled = cancelledJobs.current.has(job.id);
@@ -945,8 +952,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             let index = 0;
             for (; index < job.total; index += 1) {
               if (cancelledJobs.current.has(job.id)) break;
+              if (job.sessionId !== sessionIdRef.current) break;
               const output = `${job.output}/frame_${String(index).padStart(4, "0")}.png`;
               await bridge.renderAnimationFrame({
+                sessionId: job.sessionId,
                 frame: index,
                 width,
                 height,
@@ -966,11 +975,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         } catch (cause) {
           // A frame that fails because the job was cancelled (or its project
           // closed under it) is a cancellation, not an error to shout about.
-          const cancelled = cancelledJobs.current.has(job.id);
+          const stale = job.sessionId !== sessionIdRef.current;
+          const cancelled = cancelledJobs.current.has(job.id) || stale;
           updateJob(job.id, {
             status: cancelled ? "cancelled" : "failed",
             error: cancelled
-              ? null
+              ? stale ? "Project changed before render" : null
               : cause instanceof Error
                 ? cause.message
                 : String(cause),
@@ -998,9 +1008,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   /** Queue one still; its path is already chosen (null in the preview). */
   const enqueueStill = useCallback(
     (path: string | null) => {
-      const render = state?.project.render;
+      if (!state) return;
+      const render = state.project.render;
       enqueueRenderJob(
         newRenderJob({
+          sessionId: state.sessionId,
           kind: "still",
           label: path ? `Still → ${path.split(/[\\/]/).pop()}` : "Still (preview)",
           total: 1,
@@ -1026,6 +1038,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const name = directory.split(/[\\/]/).filter(Boolean).pop() ?? "sequence";
       enqueueRenderJob(
         newRenderJob({
+          sessionId: snapshot.sessionId,
           kind: "sequence",
           label: `Sequence · ${total} frames → ${name}`,
           total,

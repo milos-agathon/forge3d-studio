@@ -183,16 +183,17 @@ npm run tauri:build -- --bundles deb
 sudo dpkg -i target/release/bundle/deb/*.deb
 GIT_LFS_SKIP_SMUDGE=1 python3 -m pip install --user \
   'forge3d @ git+https://github.com/milos-agathon/forge3d.git@9804091086364a1824ea8bb0e7f9f2a172fddf45' \
-  rasterio
+  rasterio pillow
 ```
 
-Opening local GeoTIFFs or remote COGs requires Rasterio in the Python environment
-Studio uses for Forge3D.
+Studio's renderer needs Rasterio for local GeoTIFFs and remote COGs, and Pillow
+for image output and cartography. `--engine-check` validates both before it
+reports the interpreter ready.
 
 The `deb` is the bundle CI audits (`deb-audit` job: builds the deb, installs
 it with `dpkg -i`, validates the desktop entry, then runs `--engine-check` in
-both interpreter scenarios — the gate is the probe, not a GPU render, because
-the runner has no terrain-safe GPU).
+interpreter and dependency scenarios — the gate is the probe, not a GPU
+render, because the runner has no terrain-safe GPU).
 
 **What the three bundles declare (audited 2026-11-16 on this machine):**
 
@@ -240,8 +241,9 @@ Troubleshooting:
 
 | `--engine-check` says | Fix |
 |---|---|
-| `fail: import forge3d failed: No module named 'forge3d'` | `pip install --user forge3d` |
-| `fail: import forge3d failed: No module named 'numpy'` | `pip install --user forge3d` (PyPI wheel brings numpy) |
+| `fail: import forge3d failed: No module named 'forge3d'` | `pip install --user forge3d rasterio pillow` |
+| `fail: import forge3d failed: No module named 'numpy'` | `pip install --user forge3d` (the wheel brings NumPy) |
+| `fail: Studio requires rasterio and Pillow` | Install the named missing package in the same interpreter. |
 | `fail: could not run python3: No such file or directory` | `apt-get install python3` |
 | `fail: <path> did not answer the engine probe within 20s` | interpreter hangs on import — try a plain venv; the probe times out by design |
 
@@ -252,8 +254,8 @@ what it sees; the remedy is one `pip install` away.
 ### Tests
 
 ```bash
-cargo test -p studio-core      # 76 tests: model, commands, migration, workspace
-cargo test -p forge3d-studio-shell --lib   # 23 shell tests: engine probe, candidates
+cargo test -p studio-core      # model, commands, migration, workspace
+cargo test -p forge3d-studio-shell --lib   # engine probe, candidates, render payload
 npx tsc --noEmit               # UI types
 ```
 
@@ -443,19 +445,12 @@ Rendered frame is framed like the viewport instead of a canned shot. Pressing
 one), the fallback frames the terrain at `radius = 1.5·max(span)` aimed at the
 mesh centre.
 
-Two things were needed to make the viewer agree with Studio, both of which look
-like "nothing happened" if you get them wrong:
-
-1. **The viewer needs the interpreter's `libpython`.** uv/pyenv interpreters keep
-   it outside the virtualenv, so the bridge adds `sysconfig` `LIBDIR` to
-   `LD_LIBRARY_PATH` before spawning the viewer. Without it the viewer exits
-   immediately with "cannot open shared object file".
-2. **Georeferenced DEMs live in metres, far from the origin.** The viewer's world
-   is `origin = (mapX, -mapY)` with `span = (|a|·w, |e|·h)` and it frames terrain
-   at `radius = 1.5·max(span)` around `(span.x/2, relief/2, span.z/2)`. Bryce
-   Canyon is 4000 × 3800 m at ≈ 4 165 774 m north, so a pixel-space guess aims at
-   empty space and the render is blank. `TerrainObject::viewer_framing` reproduces
-   that formula exactly and is pinned by a test.
+The embedded renderer uses the same interpreter environment as the probe,
+including a repo checkout's `python/` path when present. Georeferenced DEMs live
+in metres, far from the origin: Bryce Canyon is 4000 × 3800 m at ≈ 4 165 774 m
+north, so a pixel-space guess aims at empty space and the render is blank.
+`TerrainObject::viewer_framing` reproduces the terrain framing formula and is
+pinned by a test.
 
 ## Sun from date and place
 
@@ -471,9 +466,10 @@ horizon is applied and reported (`daytime: false`), never clamped.
 
 ## Engine discovery
 
-Studio probes a Python interpreter for `import forge3d` (repo `.venv` first, then
-`python3`, `FORGE3D_STUDIO_PYTHON` to override) and reports the result in the
-status bar — `forge3d 1.47.1 · Vulkan · RTX 5060 Laptop GPU …` when the
+Studio probes `FORGE3D_STUDIO_PYTHON` first, then an ancestor repo's `.venv`,
+then `python3` and `python` on `PATH`. A candidate is ready only when it imports
+Forge3D, Rasterio and Pillow. The result
+appears in the status bar — `forge3d 1.47.1 · Vulkan · RTX 5060 Laptop GPU …` when the
 renderer can run (the GPU is named in the bar), `engine unavailable` with the
 reason when it cannot. The tooltip carries the full backend and adapter, which
 is the GPU actually rendering. The engine selects its adapter by ranking
@@ -639,7 +635,11 @@ by one worker, so the engine never has two offline jobs fighting over it:
   viewport preview with it) — it finishes and reports what happened.
 - **Capture at enqueue**: a job records the render width/height when it is
   queued, so later settings edits cannot retarget work already started.
-- **Closing the project** cancels queued jobs and stops the running sequence.
+- **Project identity is bound at enqueue.** Opening another project cancels
+  queued jobs and stops the running sequence between frames; the Tauri render
+  commands recheck the session ID so a late IPC call cannot render the new
+  project into the old job's output. A still already inside the renderer keeps
+  the project snapshot it started with.
 - The state machine lives in `src/state/renderQueue.ts` and is unit-tested
   (`npm test`); `session.tsx` only does the IPC. Viewport previews are a
   different scheduler: newest-wins, never queued.

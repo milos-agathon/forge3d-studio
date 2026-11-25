@@ -186,6 +186,16 @@ def main():
             version = _package_version("forge3d")
         except Exception:
             version = "unknown"
+    try:
+        import rasterio
+        from PIL import Image
+    except Exception as exc:
+        print(json.dumps({
+            "ok": False,
+            "version": version,
+            "detail": "Studio requires rasterio and Pillow: %s" % (exc,),
+        }))
+        return
     backend = adapter = None
     software = False
     try:
@@ -298,6 +308,16 @@ impl Forge3dState {
         Self {
             engine: std::sync::Mutex::new(None),
             terrain_cache: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Return the interpreter only when the cached probe says rendering can use it.
+    pub fn ready_python(&self) -> Result<String, String> {
+        let status = self.probe(false);
+        if status.available {
+            Ok(status.python)
+        } else {
+            Err(status.detail)
         }
     }
 
@@ -576,9 +596,7 @@ fn run_script(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(extra) = python_path_entries() {
-        command.env("PYTHONPATH", extra);
-    }
+    configure_python_command(&mut command);
 
     let mut child = command
         .spawn()
@@ -1482,16 +1500,52 @@ fn python_path_entries() -> Option<String> {
     None
 }
 
-fn probe_interpreter(python: &str) -> Result<EngineStatus, String> {
-    let mut command = Command::new(python);
-    command.arg("-c").arg(PROBE_SCRIPT);
-    if let Some(path) = python_path_entries() {
-        // Inside a repo checkout the probe tests the checkout's engine; the
-        // caller's own PYTHONPATH entries keep the tail so a plain interpreter
-        // with forge3d only on the user's path still probes correctly.
-        let merged = merge_python_path(path, std::env::var("PYTHONPATH").ok());
-        command.env("PYTHONPATH", merged);
+fn configured_python_path() -> Option<String> {
+    python_path_entries().map(|path| merge_python_path(path, std::env::var("PYTHONPATH").ok()))
+}
+
+pub(crate) fn configure_python_command(command: &mut Command) {
+    if let Some(path) = configured_python_path() {
+        // Probe and renderer must see the same checkout package and user path.
+        command.env("PYTHONPATH", path);
     }
+}
+
+struct ProbeScript(PathBuf);
+
+impl ProbeScript {
+    fn path(&self) -> PathBuf {
+        self.0.join("engine_probe.py")
+    }
+}
+
+impl Drop for ProbeScript {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn probe_script() -> Result<ProbeScript, String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let directory = std::env::temp_dir().join(format!(
+        "forge3d-studio-probe-{}-{sequence}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&directory)
+        .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
+    let script = ProbeScript(directory);
+    let path = script.path();
+    std::fs::write(&path, PROBE_SCRIPT)
+        .map_err(|error| format!("could not write {}: {error}", path.display()))?;
+    Ok(script)
+}
+
+fn probe_interpreter(python: &str) -> Result<EngineStatus, String> {
+    let script = probe_script()?;
+    let mut command = Command::new(python);
+    command.arg(script.path());
+    configure_python_command(&mut command);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1506,6 +1560,7 @@ fn probe_interpreter(python: &str) -> Result<EngineStatus, String> {
             Ok(None) => {
                 if Instant::now() > deadline {
                     let _ = child.kill();
+                    let _ = child.wait();
                     return Err(format!(
                         "{python} did not answer the engine probe within {}s",
                         PROBE_TIMEOUT.as_secs()
@@ -1513,7 +1568,11 @@ fn probe_interpreter(python: &str) -> Result<EngineStatus, String> {
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(error) => return Err(format!("could not wait for {python}: {error}")),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("could not wait for {python}: {error}"));
+            }
         }
     }
 
@@ -1592,7 +1651,7 @@ pub fn engine_check() -> i32 {
 
 fn print_engine_check_remedies() {
     println!("remedies:");
-    println!("  pip install --user forge3d");
+    println!("  pip install --user forge3d rasterio pillow");
     println!("  or point the shell at a working interpreter:");
     println!("  FORGE3D_STUDIO_PYTHON=/path/to/python forge3d-studio-shell --engine-check");
 }
@@ -1670,6 +1729,15 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn probe_script_directory_is_removed_on_drop() {
+        let script = super::probe_script().expect("probe script");
+        let directory = script.0.clone();
+        assert!(directory.is_dir());
+        drop(script);
+        assert!(!directory.exists());
+    }
+
+    #[test]
     fn merge_python_path_keeps_the_repo_first_and_the_user_tail() {
         let tail = std::env::join_paths(["/user/libs", "/other/libs"])
             .expect("valid Python paths")
@@ -1716,6 +1784,20 @@ mod tests {
         assert_eq!(
             merge_python_path("/repo/python".to_owned(), None),
             "/repo/python"
+        );
+    }
+
+    #[test]
+    fn ready_python_rejects_an_interpreter_the_probe_refused() {
+        let state = super::Forge3dState::new();
+        let status = super::engine_status_from_probe(
+            "python3",
+            &serde_json::json!({"ok": false, "detail": "missing rasterio"}),
+        );
+        *state.engine.lock().expect("engine mutex") = Some(status);
+        assert_eq!(
+            state.ready_python().expect_err("must be rejected"),
+            "missing rasterio"
         );
     }
 

@@ -69,6 +69,7 @@ struct Session {
     dem: String,
     z_scale: f64,
     half_relief: Option<f64>,
+    python: String,
 }
 
 type ReadyReply = (u64, Result<Option<[f64; 2]>, String>);
@@ -270,7 +271,7 @@ impl RenderState {
         {
             let guard = self.session.lock().map_err(lock_error)?;
             if let Some(session) = guard.as_ref() {
-                if session.dem == dem && session.z_scale == z_scale {
+                if session.dem == dem && session.z_scale == z_scale && session.python == python {
                     return Ok(());
                 }
             }
@@ -293,12 +294,15 @@ impl RenderState {
             .map_err(|error| format!("could not write {}: {error}", cog_script.display()))?;
 
         push_log(&self.shared, format!("starting renderer for {dem}"));
-        let mut child = Command::new(python)
+        let mut command = Command::new(python);
+        command
             .arg("-u")
             .arg(&script)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        crate::forge3d::configure_python_command(&mut command);
+        let mut child = command
             .spawn()
             .map_err(|error| format!("could not start {python}: {error}"))?;
 
@@ -327,6 +331,7 @@ impl RenderState {
                 half_relief: None,
                 dem: dem.to_owned(),
                 z_scale,
+                python: python.to_owned(),
             });
         }
 

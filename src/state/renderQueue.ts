@@ -17,6 +17,8 @@ export type RenderJobStatus = "queued" | "running" | "done" | "failed" | "cancel
 
 export interface RenderJob {
   id: string;
+  /** Project session this job was queued against; never retarget it. */
+  sessionId: number;
   kind: RenderJobKind;
   label: string;
   /** Frames to render; 1 for a still. */
@@ -30,6 +32,7 @@ export interface RenderJob {
 }
 
 export interface RenderJobInput {
+  sessionId: number;
   kind: RenderJobKind;
   label: string;
   total: number;
@@ -42,6 +45,7 @@ export function newRenderJob(input: RenderJobInput): RenderJob {
     Number.isFinite(input.total) && input.total > 0 ? Math.floor(input.total) : 1;
   return {
     id: crypto.randomUUID(),
+    sessionId: input.sessionId,
     kind: input.kind,
     label: input.label,
     total,
