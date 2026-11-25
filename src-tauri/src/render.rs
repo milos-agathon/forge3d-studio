@@ -68,7 +68,10 @@ struct Session {
     stdin: ChildStdin,
     dem: String,
     z_scale: f64,
+    half_relief: Option<f64>,
 }
+
+type ReadyReply = (u64, Result<Option<[f64; 2]>, String>);
 
 /// State the reader thread and the waiting command share.
 ///
@@ -79,7 +82,7 @@ struct Shared {
     replies: Mutex<HashMap<u64, serde_json::Value>>,
     /// Readiness for the current session, tagged with its generation so a
     /// reader from a previous session cannot satisfy (or fail) a new one.
-    ready: Mutex<Option<(u64, Result<(), String>)>>,
+    ready: Mutex<Option<ReadyReply>>,
     log: Mutex<VecDeque<String>>,
     changed: Condvar,
 }
@@ -152,7 +155,7 @@ impl RenderState {
         &self,
         python: &str,
         dem: &str,
-        request: serde_json::Value,
+        payload: &mut serde_json::Value,
         timeout: Duration,
     ) -> Result<RenderFrame, String> {
         // Serialise first, then start the clock: a viewport frame queued behind
@@ -160,7 +163,7 @@ impl RenderState {
         let _request = self.request.lock().map_err(lock_error)?;
         // The service configures itself from its header line; the render key is
         // (dem, zScale) and both can change without a session restart.
-        let z_scale = request
+        let z_scale = payload
             .get("zScale")
             .and_then(|value| value.as_f64())
             .unwrap_or(1.0)
@@ -169,7 +172,6 @@ impl RenderState {
         let generation = self.generation.load(Ordering::SeqCst);
 
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let mut payload = request;
         if let Some(object) = payload.as_object_mut() {
             object.insert("id".into(), json!(id));
         }
@@ -179,6 +181,20 @@ impl RenderState {
             let session = guard
                 .as_mut()
                 .ok_or_else(|| "the renderer is not running".to_owned())?;
+            if payload
+                .as_object_mut()
+                .and_then(|p| p.remove("measureRelief"))
+                .and_then(|v| v.as_bool())
+                == Some(true)
+            {
+                let height = payload["camera"]["target"][2]
+                    .as_f64()
+                    .ok_or("missing camera target")?;
+                let offset = session
+                    .half_relief
+                    .ok_or("renderer did not report the DEM elevation range")?;
+                payload["camera"]["target"][2] = json!(height - offset);
+            }
             writeln!(session.stdin, "{payload}")
                 .and_then(|_| session.stdin.flush())
                 .map_err(|error| format!("lost the renderer: {error}"))?;
@@ -308,6 +324,7 @@ impl RenderState {
             *guard = Some(Session {
                 child,
                 stdin,
+                half_relief: None,
                 dem: dem.to_owned(),
                 z_scale,
             });
@@ -323,7 +340,14 @@ impl RenderState {
         loop {
             if let Some((tag, result)) = ready.take() {
                 if tag == generation {
-                    return result;
+                    let range = result?;
+                    drop(ready);
+                    let mut guard = self.session.lock().map_err(lock_error)?;
+                    let session = guard
+                        .as_mut()
+                        .ok_or_else(|| "the renderer was stopped".to_owned())?;
+                    session.half_relief = range.map(|[low, high]| (high - low) * z_scale * 0.5);
+                    return Ok(());
                 }
                 // A stale reader finished after its session was replaced.
             }
@@ -410,7 +434,10 @@ fn spawn_reader(stdout: impl std::io::Read + Send + 'static, shared: Arc<Shared>
                 Some("ready") => {
                     push_log(&shared, "renderer ready".to_owned());
                     if let Ok(mut state) = shared.ready.lock() {
-                        *state = Some((generation, Ok(())));
+                        let range = value
+                            .get("range")
+                            .and_then(|v| serde_json::from_value(v.clone()).ok());
+                        *state = Some((generation, Ok(range)));
                     }
                     shared.changed.notify_all();
                 }
@@ -491,6 +518,8 @@ pub struct MeshHandoff {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderRequest {
+    pub roll_deg: f64,
+    pub measure_relief: bool,
     pub width: u32,
     pub height: u32,
     pub dem: String,
@@ -634,9 +663,11 @@ impl RenderRequest {
             "width": self.width,
             "height": self.height,
             "zScale": self.z_scale,
+            "measureRelief": self.measure_relief,
             "meshes": self.meshes,
             "camera": {
                 "phiDeg": self.phi_deg,
+                "rollDeg": self.roll_deg,
                 "thetaDeg": self.theta_deg,
                 "radius": self.radius,
                 "target": self.target,
@@ -778,6 +809,8 @@ impl RenderRequest {
             width,
             height,
             dem: terrain.path.clone(),
+            roll_deg: live_pose.map_or(0.0, |view| view.roll_deg),
+            measure_relief: live_pose.is_some_and(|view| view.measure_relief),
             phi_deg: live_pose
                 .map(|view| view.phi_deg)
                 .or_else(|| camera.map(|camera| f64::from(camera.phi_deg)))
@@ -873,6 +906,8 @@ mod tests {
             width: 960,
             height: 600,
             dem: "/data/dem.tif".to_owned(),
+            roll_deg: 0.0,
+            measure_relief: false,
             phi_deg: 310.0,
             theta_deg: 68.0,
             radius: Some(6100.0),
@@ -1233,7 +1268,7 @@ mod tests {
         }
 
         let state = RenderState::new();
-        let payload = json!({
+        let mut payload = json!({
             "width": 96,
             "height": 64,
             "camera": {"phiDeg": 310.0, "thetaDeg": 40.0, "radius": 6000.0, "target": [0, 0, 0], "fovDeg": 45.0},
@@ -1247,7 +1282,7 @@ mod tests {
             .render(
                 python.to_str().expect("utf-8 python path"),
                 dem.to_str().expect("utf-8 dem path"),
-                payload,
+                &mut payload,
                 FRAME_TIMEOUT,
             )
             .expect("one frame from the service");
@@ -1277,7 +1312,7 @@ mod tests {
 
         let state = RenderState::new();
         let frame = |quality: serde_json::Value, cartography: serde_json::Value| {
-            let payload = json!({
+            let mut payload = json!({
                 "width": 160,
                 "height": 120,
                 "camera": {"phiDeg": 310.0, "thetaDeg": 60.0, "radius": 6000.0, "target": [0, 0, 0], "fovDeg": 45.0},
@@ -1292,7 +1327,7 @@ mod tests {
                 .render(
                     python.to_str().expect("utf-8 python path"),
                     dem.to_str().expect("utf-8 dem path"),
-                    payload,
+                    &mut payload,
                     FRAME_TIMEOUT,
                 )
                 .expect("one frame from the service")
@@ -1360,7 +1395,7 @@ mod tests {
 
         let state = RenderState::new();
         let frame = |vector: serde_json::Value| {
-            let payload = json!({
+            let mut payload = json!({
                 "width": 320,
                 "height": 240,
                 "camera": {"phiDeg": 90.0, "thetaDeg": 45.0, "radius": 60000.0, "target": [0, 0, 0], "fovDeg": 40.0},
@@ -1375,7 +1410,7 @@ mod tests {
                 .render(
                     python.to_str().expect("utf-8 python path"),
                     dem.to_str().expect("utf-8 dem path"),
-                    payload,
+                    &mut payload,
                     FRAME_TIMEOUT,
                 )
                 .expect("one frame from the service")
@@ -1415,7 +1450,7 @@ mod tests {
 
         let state = RenderState::new();
         let frame = |vector: serde_json::Value| {
-            let payload = json!({
+            let mut payload = json!({
                 "width": 320,
                 "height": 240,
                 "camera": {"phiDeg": 90.0, "thetaDeg": 45.0, "radius": 30000.0, "target": [0, 0, 0], "fovDeg": 40.0},
@@ -1430,7 +1465,7 @@ mod tests {
                 .render(
                     python.to_str().expect("utf-8 python path"),
                     dem.to_str().expect("utf-8 dem path"),
-                    payload,
+                    &mut payload,
                     FRAME_TIMEOUT,
                 )
                 .expect("one frame from the service")
@@ -1490,7 +1525,7 @@ mod tests {
 
         let state = RenderState::new();
         let frame = |clouds: serde_json::Value| {
-            let payload = json!({
+            let mut payload = json!({
                 "width": 320,
                 "height": 240,
                 "camera": {"phiDeg": 75.0, "thetaDeg": 45.0, "radius": 14000.0, "target": [0, 0, 0], "fovDeg": 40.0},
@@ -1504,7 +1539,7 @@ mod tests {
                 .render(
                     python.to_str().expect("utf-8 python path"),
                     dem.to_str().expect("utf-8 dem path"),
-                    payload,
+                    &mut payload,
                     FRAME_TIMEOUT,
                 )
                 .expect("one frame from the service")
@@ -1747,6 +1782,8 @@ mod tests {
         let project = rig_project(&serde_json::Value::Null);
         let handoff = studio_core::workspace::handoff(&project, 1, studio_core::Workspace::Forge3d);
         let view = RenderView {
+            roll_deg: 0.0,
+            measure_relief: false,
             phi_deg: 200.0,
             theta_deg: 55.0,
             radius: 900.0,
@@ -1778,6 +1815,8 @@ mod tests {
 
         handoff.terrain_camera = None;
         let view = RenderView {
+            roll_deg: 0.0,
+            measure_relief: false,
             phi_deg: 200.0,
             theta_deg: 55.0,
             radius: 5000.0,

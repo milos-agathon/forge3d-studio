@@ -1,3 +1,4 @@
+import { isEditable } from "../state/shortcuts";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -66,7 +67,7 @@ import { publishGroundScale, useGroundScale } from "../state/groundScaleStore";
 const DEG = Math.PI / 180;
 const GPU_STEP_WITHOUT_SUN_SHADOWS = 3;
 /** Fly-camera keys: WASD in the view plane, Q/E down and up, Shift to sprint. */
-const FLY_KEYS = new Set(["w", "a", "s", "d", "q", "e", "shift"]);
+const FLY_KEYS = new Set(["w", "a", "s", "d", "q", "e"]);
 const ACCENT = 0xefa026;
 /**
  * Solid is a Blender-style clay view: no albedo, no textures, no material
@@ -148,7 +149,7 @@ interface Runtime {
 
 interface EditorViewport {
   resize(dimensions: ViewportDimensions): void;
-  update(now: number): boolean;
+  update(): boolean;
   present(frame: TerrainPresentation | undefined, previewError?: string, camera?: THREE.PerspectiveCamera): void;
 }
 
@@ -953,6 +954,7 @@ export function Viewport3D({ preference, onBackend }: {
     render,
     terrainResolution,
     flyMode,
+    recordingCameraId,
     setCameraView,
   } = useSession();
   const project = state?.project;
@@ -975,11 +977,16 @@ export function Viewport3D({ preference, onBackend }: {
   const xGripRef = useRef<HTMLButtonElement>(null);
   const worldMoveRef = useRef<WorldXMove | null>(null);
   const single = project?.selection.length === 1 && scene?.objects.find(object => object.id === project.selection[0]);
-  const moveTarget = tool === "move" && space === "world" && project?.viewport.mode !== "rendered" &&
+  const moveTarget = !flyMode && !cameraView && tool === "move" && space === "world" && project?.viewport.mode !== "rendered" &&
     single && visibility.get(single.id) && !single.locked && single.kind.type === "mesh" &&
     single.kind.source.type === "primitive" && single.kind.source.primitive.type === "cube" ? single : undefined;
   const moveTargetRef = useRef(moveTarget);
   moveTargetRef.current = moveTarget;
+  const [orbitTarget] = useState(() => new THREE.Vector3());
+  const navigationRef = useRef<{
+    syncMode(recordCameraId: string | null): void;
+    snap(axis: Axis | "north"): void;
+  } | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const runtimeRef = useRef<Runtime | null>(null);
   const pressRef = useRef<{ id: number; x: number; y: number; generation: number } | null>(null);
@@ -1008,20 +1015,9 @@ export function Viewport3D({ preference, onBackend }: {
   const [editorAvailable, setEditorAvailable] = useState(false);
   /** Shown when the GPU probe had to downgrade a feature (see Runtime.glStep). */
   const [gpuNote, setGpuNote] = useState<string | null>(null);
-  const savedView = useRef<{
-    position: THREE.Vector3;
-    quaternion: THREE.Quaternion;
-    target: THREE.Vector3;
-    fov: number;
-  } | null>(null);
-  const inCameraView = useRef(false);
   const cameraViewRef = useRef(cameraView);
   cameraViewRef.current = cameraView;
-  /** Fly-camera state: held keys, an in-progress look drag, and the current
-   *  yaw/pitch (OrbitControls owns the orientation until fly mode starts). */
-  const flyKeys = useRef(new Set<string>());
-  const flyLook = useRef<{ x: number; y: number } | null>(null);
-  const flyAngles = useRef({ yaw: 0, pitch: 0 });
+  const orbitAwaitingGesture = useRef(false);
   const flyModeRef = useRef(flyMode);
   flyModeRef.current = flyMode;
 
@@ -1266,7 +1262,7 @@ export function Viewport3D({ preference, onBackend }: {
     if (!container || !canvas || !grip) return;
 
     const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 2000);
-    const target = new THREE.Vector3(0, 0.8, 0);
+    const target = orbitTarget.set(0, 0.8, 0);
     camera.position.set(9.5, 7, 11);
     camera.lookAt(target);
     camera.getWorldDirection(target).multiplyScalar(FREE_VIEW_FOCUS_DISTANCE).add(camera.position);
@@ -1281,12 +1277,12 @@ export function Viewport3D({ preference, onBackend }: {
     let dirty = true;
     let mounted = true;
     const invalidate = () => { dirty = true; };
+    let owner: "orbit" | "fly" | "camera" = "orbit";
     const cameraAxis = new THREE.Vector3();
     const readCamera = () => {
-      const runtime = runtimeRef.current;
-      const aim = runtime && (inCameraView.current || flyModeRef.current)
+      const aim = owner !== "orbit"
         ? { forward: cameraAxis.set(0, 0, -1).applyQuaternion(camera.quaternion).toArray() }
-        : { orbitTarget: (runtime?.orbit.target ?? target).toArray() };
+        : { orbitTarget: target.toArray() };
       return { eye: camera.position.toArray(), aim,
         up: cameraAxis.set(0, 1, 0).applyQuaternion(camera.quaternion).toArray(),
         fovYDegrees: camera.fov, near: camera.near, far: camera.far };
@@ -1445,15 +1441,18 @@ export function Viewport3D({ preference, onBackend }: {
     // Orbit damping can move the live camera below its redraw threshold.
     // Both pickers must use the pose that produced the displayed pixels.
     const displayedCamera = new THREE.PerspectiveCamera();
-    let displayed: { frame: ViewportFrame; gpu: boolean; revision: number } | undefined;
+    let displayed: { frame: ViewportFrame; orientation: THREE.QuaternionTuple; gpu: boolean; revision: number } | undefined;
     let lastPick: { pixel: [number, number]; hit: StudioHit | null; projectGeneration: number } | undefined;
     let revision = 0;
     let lastTerrain: TerrainPresentation | undefined;
     let lastPreviewError: string | undefined;
     const freeCamera = new FreeCamera(camera, target);
     // Hybrid and fallback both have an editor. Its canvas already owns input.
-    const hostNavigates = () => !runtimeRef.current && !cameraViewRef.current && !flyModeRef.current && !worldMove.active;
-    let drag: { id: number; kind: CameraDrag; x: number; y: number } | undefined;
+    const hostNavigates = () => !runtimeRef.current && owner === "orbit" && !worldMove.active;
+    const flyKeys = new Set<string>();
+    const flyAngles = new THREE.Euler(0, 0, 0, "YXZ");
+    let lookPending = false;
+    let drag: { id: number; kind: CameraDrag | "look"; x: number; y: number } | undefined;
     const endDrag = () => {
       if (!drag) return;
       const { id } = drag;
@@ -1464,11 +1463,32 @@ export function Viewport3D({ preference, onBackend }: {
     const inputSurface = (event: Event) =>
       event.target === canvas || event.target === container || event.target === terrainCanvas;
     let controlHeld = false;
-    const controlKey = (event: KeyboardEvent) => {
+    let shiftHeld = false;
+    const navigationKey = (event: KeyboardEvent) => {
       if (event.key === "Control") controlHeld = event.type === "keydown";
+      if (event.key === "Shift") shiftHeld = event.type === "keydown";
+      else if (event.shiftKey) shiftHeld = true;
+      const key = event.key.toLowerCase();
+      if (event.type === "keyup") {
+        if (flyKeys.delete(key)) finishCameraMove();
+      } else if (flyModeRef.current && !isEditable(event.target) && FLY_KEYS.has(key)) {
+        flyKeys.add(key);
+        event.preventDefault();
+      }
+    };
+    const focusChanged = (event: FocusEvent) => {
+      if (isEditable(event.target) && flyKeys.size) {
+        flyKeys.clear();
+        finishCameraMove();
+      }
     };
     const blur = () => {
+      shiftHeld = false;
       controlHeld = false;
+      if (owner === "fly" && (drag || flyKeys.size)) finishCameraMove();
+      lookPending = false;
+      flyAngles.setFromQuaternion(camera.quaternion, "YXZ");
+      flyKeys.clear();
       endDrag();
       pressRef.current = null;
     };
@@ -1485,14 +1505,27 @@ export function Viewport3D({ preference, onBackend }: {
     const contextMenu = (event: MouseEvent) => {
       if (hostNavigates() && inputSurface(event)) event.preventDefault();
     };
+    const orbitPointers = new Set<number>();
     const pointerDown = (event: PointerEvent) => {
       if (worldMove.active || worldMove.begin(event)) {
         endDrag();
         // The drag plane belongs to this submission. Discard any wheel or
         // damping motion that has reached the live camera since it was drawn.
         const pose = displayed?.frame.camera;
-        if (pose && "orbitTarget" in pose.aim) freeCamera.setPose(pose.eye, pose.aim.orbitTarget);
+        if (displayed && pose && "orbitTarget" in pose.aim) {
+          freeCamera.setPose(pose.eye, pose.aim.orbitTarget, displayed.orientation);
+        }
         navigationChanged = false;
+        pressRef.current = null;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (flyModeRef.current && inputSurface(event)) {
+        if (!drag && event.isPrimary && event.button === 0) {
+          drag = { id: event.pointerId, kind: "look", x: event.clientX, y: event.clientY };
+          container.setPointerCapture(event.pointerId);
+        }
         pressRef.current = null;
         event.preventDefault();
         event.stopPropagation();
@@ -1505,12 +1538,14 @@ export function Viewport3D({ preference, onBackend }: {
         drag = { id: event.pointerId, kind, x: event.clientX, y: event.clientY };
         container.setPointerCapture(event.pointerId);
       }
+      if (runtimeRef.current?.orbit.enabled && event.target === canvas) orbitPointers.add(event.pointerId);
       // A second contact starts a navigation gesture even if the first finger stays still.
       const canPick = event.isPrimary && event.button === 0 && inputSurface(event) && viewportModeRef.current !== "rendered";
       pressRef.current = canPick
         ? { id: event.pointerId, x: event.clientX, y: event.clientY, generation: viewport.current.projectGeneration } : null;
     };
     const pointerCancel = (event: PointerEvent) => {
+      orbitPointers.delete(event.pointerId);
       if (drag?.id === event.pointerId) endDrag();
       pressRef.current = null;
       worldMove.cancel(event);
@@ -1535,16 +1570,25 @@ export function Viewport3D({ preference, onBackend }: {
           (exceedsClickRadius(press, event) || event.getCoalescedEvents?.().some(point => exceedsClickRadius(press, point)))) {
         pressRef.current = null;
       }
-      if (drag?.id === event.pointerId && hostNavigates()) {
-        if (freeCamera.drag(drag.kind, event.clientX - drag.x, event.clientY - drag.y, container.clientHeight)) navigationChanged = true;
+      if (drag?.id === event.pointerId) {
+        const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+        if (drag.kind === "look" && flyModeRef.current) {
+          flyAngles.y -= dx * 0.0032;
+          flyAngles.x = THREE.MathUtils.clamp(flyAngles.x - dy * 0.0032, -1.55, 1.55);
+          lookPending = true;
+        } else if (drag.kind !== "look" && hostNavigates() && freeCamera.drag(drag.kind, dx, dy, container.clientHeight)) {
+          navigationChanged = true;
+        }
         drag.x = event.clientX;
         drag.y = event.clientY;
       }
     };
     const pointerUp = (event: PointerEvent) => {
+      orbitPointers.delete(event.pointerId);
       if (drag?.id === event.pointerId) {
+        const looking = drag.kind === "look";
         endDrag();
-        if (hostNavigates()) finishCameraMove();
+        if (hostNavigates() || (looking && !lookPending)) finishCameraMove();
       }
       if (worldMove.active) { worldMove.finish(event); return; }
       const press = pressRef.current;
@@ -1556,7 +1600,7 @@ export function Viewport3D({ preference, onBackend }: {
 
       // OrbitControls can dirty the release pose between animation frames,
       // even for a one-pixel gesture. Submit it before binding the pick.
-      if (dirty || navigationChanged || runtimeRef.current?.needsRender) drawFrame(performance.now());
+      if (dirty || navigationChanged || runtimeRef.current?.needsRender) drawFrame();
       const presentation = displayed;
       const frame = presentation?.frame, dimensions = frame?.dimensions;
       if (!presentation || !frame || !dimensions) return;
@@ -1599,8 +1643,9 @@ export function Viewport3D({ preference, onBackend }: {
     container.addEventListener("lostpointercapture", navigationCaptureLost);
     container.addEventListener("contextmenu", contextMenu);
     container.addEventListener("wheel", wheel, { passive: false });
-    window.addEventListener("keydown", controlKey, true);
-    window.addEventListener("keyup", controlKey, true);
+    window.addEventListener("keydown", navigationKey, true);
+    window.addEventListener("keyup", navigationKey, true);
+    window.addEventListener("focusin", focusChanged);
     window.addEventListener("blur", blur);
     container.ownerDocument.addEventListener("pointermove", pointerMove, true);
     container.addEventListener("pointerup", pointerUp);
@@ -1608,13 +1653,13 @@ export function Viewport3D({ preference, onBackend }: {
     grip.addEventListener("lostpointercapture", captureLost);
     window.addEventListener("keydown", cancelOnEscape, true);
 
-    const drawFrame = (now: number) => {
+    const drawFrame = () => {
       // A display scale change can leave the CSS box unchanged.
       const dpr = window.devicePixelRatio;
       if (resizePending || dpr !== observedDpr) resize(dpr);
       const editor = editorRef.current;
       const runtime = runtimeRef.current;
-      const moved = !worldMove.active && editor?.update(now);
+      const moved = !worldMove.active && editor?.update();
       const lost = terrainViewport.lost();
       const redrawSelection = runtime?.selectionNeedsRender;
       if (runtime) runtime.selectionNeedsRender = false;
@@ -1627,7 +1672,7 @@ export function Viewport3D({ preference, onBackend }: {
       viewport.setCamera(readCamera());
       if (navigationChanged) {
         navigationChanged = false;
-        cameraMoved(camera.position.distanceTo(target));
+        cameraMoved(flyModeRef.current ? FREE_VIEW_FOCUS_DISTANCE : camera.position.distanceTo(target));
       }
       // Rendered frames, still export and timeline recording share this camera.
       viewStore.cameraTransform = cameraTransform(camera);
@@ -1645,17 +1690,144 @@ export function Viewport3D({ preference, onBackend }: {
       editor?.present(presented, previewError);
       if (editor) displayedCamera.copy(camera, false);
       displayed = presented?.submitted || editor
-        ? { frame: viewport.current, gpu: !!presented?.submitted, revision: ++revision } : undefined;
+        ? { frame: viewport.current, orientation: quaternion, gpu: !!presented?.submitted, revision: ++revision } : undefined;
     };
+    // OrbitControls integrates its remaining damping on update, even while
+    // disabled. Consume it before handing the current pose to another owner.
+    const stopOrbit = () => {
+      endDrag();
+      freeCamera.clear();
+      pressRef.current = null;
+      const orbit = runtimeRef.current?.orbit;
+      if (!orbit?.enabled) return;
+      const eye = camera.position.clone(), pivot = target.clone(), rotation = camera.quaternion.clone();
+      // Release OrbitControls' document listeners and pointer anchors as well
+      // as its damping. Re-enabling input requires a new pointerdown.
+      for (const id of orbitPointers) {
+        if (canvas.hasPointerCapture(id)) canvas.releasePointerCapture(id);
+      }
+      orbitPointers.clear();
+      orbit.disconnect();
+      orbit.connect(canvas);
+      orbit.enabled = false;
+      orbit.enableDamping = false;
+      orbit.update();
+      orbit.enableDamping = true;
+      camera.position.copy(eye);
+      target.copy(pivot);
+      camera.quaternion.copy(rotation);
+    };
+    let freeProjection: Pick<THREE.PerspectiveCamera, "fov" | "near" | "far"> | undefined;
+    let saved: { eye: THREE.Vector3; orientation: THREE.Quaternion; target: THREE.Vector3 } | undefined;
+    let takeLens: CameraObject | undefined;
+    const applyLens = (lens: CameraObject) => {
+      const distance = camera.position.length();
+      const near = Math.max(0.01, Math.min(lens.near, distance * 0.1));
+      const far = Math.max(lens.far, distance * 8);
+      if (camera.fov === lens.fovDeg && camera.near === near && camera.far === far) return;
+      camera.fov = lens.fovDeg;
+      camera.near = near;
+      camera.far = far;
+      camera.updateProjectionMatrix();
+      invalidate();
+    };
+    navigationRef.current = {
+      syncMode(recordCameraId) {
+        const next = flyModeRef.current ? "fly" : cameraViewRef.current ? "camera" : "orbit";
+        if (next !== owner) {
+          stopOrbit();
+          lookPending = false;
+          flyKeys.clear();
+          if (owner === "orbit") freeProjection = { fov: camera.fov, near: camera.near, far: camera.far };
+          if (owner === "fly") camera.getWorldDirection(target).multiplyScalar(FREE_VIEW_FOCUS_DISTANCE).add(camera.position);
+          if (next === "orbit") {
+            if (saved) {
+              camera.position.copy(saved.eye);
+              camera.quaternion.copy(saved.orientation);
+              target.copy(saved.target);
+            }
+            if (freeProjection) {
+              Object.assign(camera, freeProjection);
+              camera.updateProjectionMatrix();
+              freeProjection = undefined;
+            }
+            // OrbitControls.lookAt would level a rolled fly pose on an idle RAF.
+            // Its next input event updates the camera and resumes normal damping.
+            orbitAwaitingGesture.current = true;
+          }
+          saved = next === "camera"
+            ? { eye: camera.position.clone(), orientation: camera.quaternion.clone(), target: target.clone() }
+            : undefined;
+          setProblem(current => current?.startsWith("Camera view") ? null : current);
+          if (next === "fly") {
+            flyAngles.setFromQuaternion(camera.quaternion, "YXZ");
+          }
+          const runtime = runtimeRef.current;
+          if (runtime) runtime.orbit.enabled = next === "orbit" && !runtime.gizmo.dragging;
+          owner = next;
+          invalidate();
+        }
+        const scene = stateRef.current?.project.scene;
+        const recordingTarget = recordCameraId && scene?.objects.find(o => o.id === recordCameraId);
+        takeLens = owner === "fly" && recordingTarget && recordingTarget.kind.type === "camera" ? recordingTarget.kind : undefined;
+        if (takeLens) applyLens(takeLens);
+        if (owner !== "camera") return;
+        const active = scene?.objects.find(o => o.id === scene.activeCamera && o.kind.type === "camera")
+          ?? scene?.objects.find(o => o.kind.type === "camera");
+        if (active?.kind.type !== "camera") {
+          setProblem("Camera view needs a camera object in the scene.");
+          return;
+        }
+        const { translation, rotationDeg } = active.transform;
+        camera.position.set(translation.x, translation.y, translation.z);
+        camera.rotation.set(rotationDeg.x * DEG, rotationDeg.y * DEG, rotationDeg.z * DEG, "ZYX");
+        applyLens(active.kind);
+        setProblem(current => current?.startsWith("Camera view") ? null : current);
+        invalidate();
+      },
+      snap(axis) {
+        if (owner !== "orbit" || worldMove.active || runtimeRef.current?.gizmo.dragging) return;
+        stopOrbit();
+        const offset = camera.position.clone().sub(target);
+        const radius = offset.length();
+        if (axis === "north") offset.set(0, offset.y, Math.hypot(offset.x, offset.z));
+        else offset.set(axis === "x" ? radius : 0, axis === "y" ? radius : 0, axis === "z" ? radius : 0);
+        camera.position.copy(target).add(offset);
+        // At the pole choose map north as screen up, then resume Y-up orbit.
+        camera.up.set(0, axis === "y" ? 0 : 1, axis === "y" ? -1 : 0);
+        camera.lookAt(target);
+        camera.up.set(0, 1, 0);
+        if (runtimeRef.current) runtimeRef.current.orbit.enabled = true;
+        navigationChanged = true;
+        finishCameraMove();
+      },
+    };
+    let lastTick = performance.now();
     const tick = (now: number) => {
       animation = requestAnimationFrame(tick);
-      if (hostNavigates()) {
-        if (freeCamera.update()) navigationChanged = true;
-      } else {
-        endDrag();
-        freeCamera.clear();
+      const dt = THREE.MathUtils.clamp((now - lastTick) / 1000, 0, 0.1);
+      lastTick = now;
+      if (hostNavigates() && freeCamera.update()) navigationChanged = true;
+      const finishLook = lookPending && !drag;
+      if (lookPending) {
+        camera.quaternion.setFromEuler(flyAngles);
+        navigationChanged = true;
+        lookPending = false;
       }
-      drawFrame(now);
+      if (owner === "fly" && flyKeys.size && !runtimeRef.current?.gizmo.dragging) {
+        const speed = dt * (shiftHeld ? 14 : 5);
+        const x = Number(flyKeys.has("d")) - Number(flyKeys.has("a"));
+        const y = Number(flyKeys.has("e")) - Number(flyKeys.has("q"));
+        const z = Number(flyKeys.has("s")) - Number(flyKeys.has("w"));
+        if (x || y || z) {
+          camera.position.addScaledVector(cameraAxis.set(x, 0, z).applyQuaternion(camera.quaternion), speed);
+          camera.position.y += y * speed;
+          navigationChanged = true;
+        }
+      }
+      if (takeLens && navigationChanged) applyLens(takeLens);
+      drawFrame();
+      if (finishLook) finishCameraMove();
     };
     if (import.meta.env.DEV) {
       Object.assign(window, { forge3dViewportDiagnostics: () => ({ terrainViewport, runtime: runtimeRef.current,
@@ -1685,14 +1857,16 @@ export function Viewport3D({ preference, onBackend }: {
       container.removeEventListener("lostpointercapture", navigationCaptureLost);
       container.removeEventListener("contextmenu", contextMenu);
       container.removeEventListener("wheel", wheel);
-      window.removeEventListener("keydown", controlKey, true);
-      window.removeEventListener("keyup", controlKey, true);
+      window.removeEventListener("keydown", navigationKey, true);
+      window.removeEventListener("keyup", navigationKey, true);
+      window.removeEventListener("focusin", focusChanged);
       window.removeEventListener("blur", blur);
       container.ownerDocument.removeEventListener("pointermove", pointerMove, true);
       container.removeEventListener("pointerup", pointerUp);
       container.removeEventListener("pointercancel", pointerCancel);
       cancelAnimationFrame(animation);
       observer.disconnect();
+      navigationRef.current = null;
       hostSyncRef.current = null;
       cameraRef.current = null;
       viewStore.resolve = null;
@@ -1741,7 +1915,7 @@ export function Viewport3D({ preference, onBackend }: {
     scene.background = new THREE.Color(SOLID_BACKGROUND);
 
     const orbit = new OrbitControls(camera, canvas);
-    orbit.target.set(0, 0.8, 0);
+    orbit.target = orbitTarget;
     orbit.enableDamping = true;
     orbit.dampingFactor = 0.09;
     orbit.screenSpacePanning = false;
@@ -1858,7 +2032,7 @@ export function Viewport3D({ preference, onBackend }: {
       // Fly mode owns the camera: re-enabling OrbitControls here would let its
       // own pointer handlers rotate the camera behind the fly-look handler.
       if (event.value) pressRef.current = null;
-      orbit.enabled = !event.value && !flyModeRef.current && !inCameraView.current;
+      orbit.enabled = !event.value && !flyModeRef.current && !cameraViewRef.current;
     });
     gizmo.addEventListener("objectChange", () => {
       for (const helper of runtime.helpers) helper.update();
@@ -1871,6 +2045,8 @@ export function Viewport3D({ preference, onBackend }: {
     // final stills), and the session keeps only the newest pending request, so
     // a drag does not queue frames it cannot finish.
     orbit.addEventListener("change", () => {
+      if (!orbit.enabled) return;
+      orbitAwaitingGesture.current = false;
       runtime.needsRender = true;
       cameraMoved(orbit.getDistance());
     });
@@ -1889,12 +2065,6 @@ export function Viewport3D({ preference, onBackend }: {
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
-
-    const onPointerDown = (event: PointerEvent) => {
-      if (flyModeRef.current && event.button === 0) {
-        flyLook.current = { x: event.clientX, y: event.clientY };
-      }
-    };
 
     // Cursor readout: elevation of the terrain under the pointer, sampled at
     // most every 60 ms and never while a drag is running. A move that lands
@@ -1924,85 +2094,24 @@ export function Viewport3D({ preference, onBackend }: {
       setCursorElevation(min + hit.object.worldToLocal(hit.point.clone()).y / scale);
     };
     const onPointerMove = (event: PointerEvent) => {
-      const look = flyLook.current;
-      if (!look) {
-        if (event.buttons) return;
-        window.clearTimeout(hoverTimer);
-        const wait = 60 - (performance.now() - hoverAt);
-        if (wait <= 0) {
-          sampleHover(event.clientX, event.clientY);
-        } else {
-          const { clientX, clientY } = event;
-          hoverTimer = window.setTimeout(() => sampleHover(clientX, clientY), wait);
-        }
-        return;
+      if (event.buttons) return;
+      window.clearTimeout(hoverTimer);
+      const wait = 60 - (performance.now() - hoverAt);
+      if (wait <= 0) sampleHover(event.clientX, event.clientY);
+      else {
+        const { clientX, clientY } = event;
+        hoverTimer = window.setTimeout(() => sampleHover(clientX, clientY), wait);
       }
-      flyAngles.current.yaw -= (event.clientX - look.x) * 0.0032;
-      flyAngles.current.pitch = Math.max(
-        -1.55,
-        Math.min(1.55, flyAngles.current.pitch - (event.clientY - look.y) * 0.0032),
-      );
-      flyLook.current = { x: event.clientX, y: event.clientY };
-      camera.quaternion.setFromEuler(
-        new THREE.Euler(flyAngles.current.pitch, flyAngles.current.yaw, 0, "YXZ"),
-      );
-      runtime.needsRender = true;
     };
-
-    const onPointerUp = () => { flyLook.current = null; };
-
-    canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointermove", onPointerMove);
-    canvas.addEventListener("pointerup", onPointerUp);
     const onPointerLeave = () => {
       window.clearTimeout(hoverTimer);
       setCursorElevation(null);
     };
     canvas.addEventListener("pointerleave", onPointerLeave);
 
-    // Fly camera: WASD in the view plane, Q/E down and up, Shift to go faster.
-    const onFlyKeyDown = (event: KeyboardEvent) => {
-      if (!flyModeRef.current) return;
-      const key = event.key.toLowerCase();
-      if (!FLY_KEYS.has(key)) return;
-      flyKeys.current.add(key);
-      runtime.needsRender = true;
-      event.preventDefault();
-    };
-    const onFlyKeyUp = (event: KeyboardEvent) => {
-      flyKeys.current.delete(event.key.toLowerCase());
-    };
-    const onWindowBlur = () => {
-      flyKeys.current.clear();
-      flyLook.current = null;
-    };
-    window.addEventListener("keydown", onFlyKeyDown);
-    window.addEventListener("keyup", onFlyKeyUp);
-    window.addEventListener("blur", onWindowBlur);
-
-    let lastTick = performance.now();
-    const update = (now: number) => {
-      const dt = Math.min(0.1, (now - lastTick) / 1000);
-      lastTick = now;
-      // OrbitControls.update() ends with `camera.lookAt(target)`, which would
-      // overwrite the camera-view quaternion every frame. While looking through
-      // the project camera (or flying), the model owns the view. Its return
-      // value also tells us whether the camera actually moved (damping keeps it
-      // true until the motion settles) — an idle viewport then costs no draw.
-      const flying = flyModeRef.current;
-      const moved = inCameraView.current || flying || gizmo.dragging ? false : orbit.update();
-      if (flying && flyKeys.current.size > 0) {
-        const speed = (flyKeys.current.has("shift") ? 14 : 5) * dt;
-        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
-        if (flyKeys.current.has("w")) camera.position.addScaledVector(forward, speed);
-        if (flyKeys.current.has("s")) camera.position.addScaledVector(forward, -speed);
-        if (flyKeys.current.has("a")) camera.position.addScaledVector(right, -speed);
-        if (flyKeys.current.has("d")) camera.position.addScaledVector(right, speed);
-        if (flyKeys.current.has("e")) camera.position.y += speed;
-        if (flyKeys.current.has("q")) camera.position.y -= speed;
-        runtime.needsRender = true;
-      }
+    const update = () => {
+      const moved = orbit.enabled && !orbitAwaitingGesture.current && !gizmo.dragging && orbit.update();
       // Cartography labels ride the projection: cheap per frame, and the
       // occlusion pass (a ray per anchor against the terrain) only runs
       // when the camera actually moved.
@@ -2162,14 +2271,9 @@ export function Viewport3D({ preference, onBackend }: {
 
     return () => {
       editorRef.current = null;
-      canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("pointerleave", onPointerLeave);
       window.clearTimeout(hoverTimer);
-      window.removeEventListener("keydown", onFlyKeyDown);
-      window.removeEventListener("keyup", onFlyKeyUp);
-      window.removeEventListener("blur", onWindowBlur);
       gizmo.detach();
       gizmo.dispose();
       orbit.dispose();
@@ -2445,49 +2549,6 @@ export function Viewport3D({ preference, onBackend }: {
       applyShading(runtime, object, viewportModeRef.current, hillshade);
     }
 
-    // Camera view: the render camera *is* the project's active camera, so an
-    // inspector edit moves the view immediately.
-    const activeCamera =
-      project.scene.objects.find(
-        (object) => object.id === project.scene.activeCamera && object.kind.type === "camera",
-      ) ?? project.scene.objects.find((object) => object.kind.type === "camera");
-
-    // Fly mode owns the camera while it is on: applying the camera object's
-    // transform here would snap the view back on every project edit.
-    if (cameraView && !flyMode) {
-      if (activeCamera && activeCamera.kind.type === "camera") {
-        const transform = activeCamera.transform;
-        runtime.camera.up.set(0, 1, 0);
-        runtime.camera.position.set(
-          transform.translation.x,
-          transform.translation.y,
-          transform.translation.z,
-        );
-        runtime.camera.quaternion.setFromEuler(
-          new THREE.Euler(
-            transform.rotationDeg.x * DEG,
-            transform.rotationDeg.y * DEG,
-            transform.rotationDeg.z * DEG,
-            "ZYX",
-          ),
-        );
-        runtime.camera.fov = activeCamera.kind.fovDeg;
-        // Keep the projection usable even if the stored values are odd: a huge
-        // near plane or a far plane behind the camera renders a black frame.
-        const distance = runtime.camera.position.length();
-        runtime.camera.near = Math.max(0.01, Math.min(activeCamera.kind.near, distance * 0.1));
-        runtime.camera.far = Math.max(activeCamera.kind.far, distance * 8);
-        runtime.camera.updateProjectionMatrix();
-        runtime.orbit.enabled = false;
-        // Clear a previous camera warning without wiping an asset error.
-        setProblem((current) =>
-          current && current.startsWith("Camera view") ? null : current,
-        );
-      } else {
-        setProblem("Camera view needs a camera object in the scene.");
-      }
-    }
-
     // The scene's directional light drives the actual lighting.
     const solidView = viewportModeRef.current === "solid";
     // One derived rig for the preview and (via the same project) the engine.
@@ -2531,7 +2592,7 @@ export function Viewport3D({ preference, onBackend }: {
       !project.scene.objects.some((object) => object.kind.type === "terrain");
 
     runtime.needsRender = true;
-  }, [assetGenerations, cameraView, flyMode, loadColormapStops, loadTexture, projectGeneration,
+  }, [assetGenerations, loadColormapStops, loadTexture, projectGeneration,
     readMesh, previewVersion, sceneProject, viewport]);
 
   useEffect(() => {
@@ -2579,7 +2640,7 @@ export function Viewport3D({ preference, onBackend }: {
       single && !single.locked && runtime.objects.get(single.id)?.visible && single.kind.type !== "terrain"
         ? runtime.objects.get(single.id)
         : undefined;
-    if (tool === "select" || !editable) {
+    if (tool === "select" || flyMode || !editable) {
       runtime.gizmo.detach();
     } else {
       runtime.gizmo.setMode(tool === "move" ? "translate" : tool === "rotate" ? "rotate" : "scale");
@@ -2587,7 +2648,7 @@ export function Viewport3D({ preference, onBackend }: {
       if (runtime.gizmo.object !== editable) runtime.gizmo.attach(editable);
     }
     runtime.selectionNeedsRender = true;
-  }, [cameraView, project, previewVersion, space, tool]);
+  }, [cameraView, flyMode, project, previewVersion, space, tool]);
 
   // The map overlay: vector lines, their labels and the graticule, draped
   // on the terrain in the same 0..1 lattice the still uses. Rebuilt only
@@ -2935,97 +2996,10 @@ export function Viewport3D({ preference, onBackend }: {
     [],
   );
 
-  useEffect(() => {
-    const runtime = runtimeRef.current;
-    if (!runtime) return;
-
-    if (cameraView && !inCameraView.current) {
-      savedView.current = {
-        position: runtime.camera.position.clone(),
-        quaternion: runtime.camera.quaternion.clone(),
-        target: runtime.orbit.target.clone(),
-        fov: runtime.camera.fov,
-      };
-      inCameraView.current = true;
-      runtime.orbit.enabled = false;
-    } else if (!cameraView && inCameraView.current) {
-      const saved = savedView.current;
-      if (saved) {
-        runtime.camera.position.copy(saved.position);
-        runtime.camera.quaternion.copy(saved.quaternion);
-        runtime.camera.fov = saved.fov;
-        runtime.camera.updateProjectionMatrix();
-        runtime.orbit.target.copy(saved.target);
-      }
-      inCameraView.current = false;
-      runtime.orbit.enabled = true;
-      runtime.orbit.update();
-      setProblem((current) =>
-        current && current.startsWith("Camera view") ? null : current,
-      );
-    }
-  }, [cameraView]);
-
-  // Fly mode: free look, no orbit target. Leaving it hands the camera back to
-  // OrbitControls, aimed ahead so orbiting continues from where you stopped.
-  useEffect(() => {
-    const runtime = runtimeRef.current;
-    if (!runtime) return;
-    if (!flyMode) {
-      // OrbitControls.update() uses lookAt and would discard the authored roll.
-      if (cameraView) return;
-      runtime.orbit.enabled = true;
-      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(runtime.camera.quaternion);
-      runtime.orbit.target.copy(runtime.camera.position).addScaledVector(forward, FREE_VIEW_FOCUS_DISTANCE);
-      runtime.orbit.update();
-      runtime.needsRender = true;
-      return;
-    }
-    // Camera view and fly mode cannot both own the camera.
-    if (cameraView) setCameraView(false);
-    runtime.orbit.enabled = false;
-    flyKeys.current.clear();
-    const euler = new THREE.Euler().setFromQuaternion(runtime.camera.quaternion, "YXZ");
-    flyAngles.current = { yaw: euler.y, pitch: euler.x };
-    runtime.needsRender = true;
-  }, [flyMode, cameraView, setCameraView]);
-
-  const viewAlong = useCallback((axis: Axis) => {
-    if (cameraView || flyModeRef.current) return;
-    const runtime = runtimeRef.current;
-    if (!runtime) return;
-    const direction =
-      axis === "x"
-        ? new THREE.Vector3(1, 0, 0)
-        : axis === "y"
-          ? new THREE.Vector3(0, 1, 0)
-          : new THREE.Vector3(0, 0, 1);
-    const distance = runtime.camera.position.distanceTo(runtime.orbit.target);
-    runtime.camera.position.copy(runtime.orbit.target).add(direction.multiplyScalar(distance));
-    // Looking straight down needs a different up vector or the view is degenerate.
-    runtime.camera.up.set(0, axis === "y" ? 0 : 1, axis === "y" ? -1 : 0);
-    runtime.camera.lookAt(runtime.orbit.target);
-    runtime.orbit.update();
-    runtime.needsRender = true;
-  }, []);
-
-  /** Turn the free view to face map north (-Z), keeping tilt and distance. */
-  const viewNorth = useCallback(() => {
-    if (cameraView || flyModeRef.current) return;
-    const runtime = runtimeRef.current;
-    if (!runtime) return;
-    const offset = runtime.camera.position.clone().sub(runtime.orbit.target);
-    const horizontal = Math.hypot(offset.x, offset.z);
-    runtime.camera.position.set(
-      runtime.orbit.target.x,
-      runtime.orbit.target.y + offset.y,
-      runtime.orbit.target.z + Math.max(horizontal, 1e-3),
-    );
-    runtime.camera.up.set(0, 1, 0);
-    runtime.camera.lookAt(runtime.orbit.target);
-    runtime.orbit.update();
-    runtime.needsRender = true;
-  }, [cameraView]);
+  // Update the host in the same commit as the evaluated scene. On the first
+  // mount the host and optional editor are constructed by passive effects.
+  useLayoutEffect(() => { navigationRef.current?.syncMode(recordingCameraId); }, [cameraView, flyMode, recordingCameraId, scene]);
+  useEffect(() => { navigationRef.current?.syncMode(recordingCameraId); }, []);
 
   /** Viewport render resolution for Rendered mode. Options: 1×/2×/4× the
    *  viewport, the DEM's own pixel size, or the project's output size. */
@@ -3158,14 +3132,6 @@ export function Viewport3D({ preference, onBackend }: {
   sizeRef.current = size;
   const stateRef = useRef(state);
   stateRef.current = state;
-  const setCameraViewRef = useRef(setCameraView);
-  setCameraViewRef.current = setCameraView;
-
-  /** The solid camera as a scene transform, aimed at the terrain centre. */
-  const cameraTransformFromView = useCallback((): Transform | null => {
-    const runtime = runtimeRef.current;
-    return runtime ? cameraTransform(runtime.camera) : null;
-  }, []);
 
   /**
    * Store the current viewport view as the scene's active camera, so the
@@ -3173,16 +3139,15 @@ export function Viewport3D({ preference, onBackend }: {
    * Ctrl+Alt+Numpad0; this is bound to End / Numpad 1 as requested.
    */
   const captureCamera = useCallback(async () => {
-    const runtime = runtimeRef.current;
+    const camera = cameraRef.current;
     const project = stateRef.current?.project;
-    if (!runtime || !project) return;
-    const transform = cameraTransformFromView();
-    if (!transform) return;
+    if (!camera || !project) return;
+    const transform = cameraTransform(camera);
 
     const active = project.scene.objects.find(
       (object) => object.id === project.scene.activeCamera,
     );
-    if (!active) {
+    if (active?.kind.type !== "camera") {
       setProblem("There is no camera object to receive this view — add one from Add.");
       return;
     }
@@ -3194,14 +3159,14 @@ export function Viewport3D({ preference, onBackend }: {
     await actionsRef.current.apply({ type: "setActiveCamera", id: active.id });
     // Numpad 1 should also put the viewport into camera mode — unless fly mode
     // owns the camera.
-    if (!flyModeRef.current) setCameraViewRef.current(true);
+    if (!flyModeRef.current) setCameraView(true);
     setProblem(null);
     actionsRef.current.notify(`Camera "${active.name}" set from this view`);
-  }, [cameraTransformFromView]);
+  }, [setCameraView]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "End" || event.code === "Numpad1") {
+      if (!event.repeat && !isEditable(event.target) && (event.key === "End" || event.code === "Numpad1")) {
         event.preventDefault();
         void captureCamera();
       }
@@ -3226,11 +3191,14 @@ export function Viewport3D({ preference, onBackend }: {
   // at the old size covering the new viewport. Orbiting re-renders through the
   // orbit handler, which the session coalesces ("newest wins").
   const renderedOnce = useRef(false);
-  const renderedSize = useRef<{ width: number; height: number; projectGeneration: number } | null>(null);
+  const cameraFrame = cameraView ? state?.project.timeline.currentFrame ?? 0 : null;
+  const lastPreview = useRef<{
+    width: number; height: number; projectGeneration: number; cameraFrame: number | null; flyMode: boolean;
+  } | null>(null);
   useEffect(() => {
     if (!renderedMode) {
       renderedOnce.current = false;
-      renderedSize.current = null;
+      lastPreview.current = null;
       return;
     }
     if (render.error) {
@@ -3239,16 +3207,17 @@ export function Viewport3D({ preference, onBackend }: {
       return;
     }
     const target = requestSizeRef.current();
-    const resized =
-      renderedSize.current === null ||
-      renderedSize.current.projectGeneration !== projectGeneration ||
-      renderedSize.current.width !== target.width ||
-      renderedSize.current.height !== target.height;
-    if (render.busy || (renderedOnce.current && !resized)) return;
+    const needsPreview =
+      lastPreview.current === null ||
+      lastPreview.current.projectGeneration !== projectGeneration ||
+      lastPreview.current.cameraFrame !== cameraFrame || lastPreview.current.flyMode !== flyMode ||
+      lastPreview.current.width !== target.width ||
+      lastPreview.current.height !== target.height;
+    if (render.busy || (renderedOnce.current && !needsPreview)) return;
     renderedOnce.current = true;
-    renderedSize.current = { ...target, projectGeneration };
+    lastPreview.current = { ...target, projectGeneration, cameraFrame, flyMode };
     void actions.renderViewport(target.width, target.height, "preview");
-  }, [actions, projectGeneration, render.busy, renderedMode, render.error, size.height, size.width]);
+  }, [actions, cameraFrame, flyMode, projectGeneration, render.busy, renderedMode, render.error, size.height, size.width]);
 
   // Scene edits (sun, exposure, overlay, z-scale, transforms…) re-render the
   // frame after a short pause, so the Rendered view reflects the project
@@ -3400,8 +3369,8 @@ export function Viewport3D({ preference, onBackend }: {
         <div className="viewport-instruments">
           <NorthArrow
             quaternion={quaternion}
-            onNorth={viewNorth}
-            disabled={!editorAvailable || cameraView || flyMode}
+            onNorth={() => navigationRef.current?.snap("north")}
+            disabled={cameraView || flyMode}
           />
           <dl className="viewport-readout">
             {elevationReadout && (
@@ -3457,7 +3426,7 @@ export function Viewport3D({ preference, onBackend }: {
           )}
         </div>
       ) : (
-        editorAvailable && <AxisGizmo quaternion={quaternion} onPick={viewAlong} />
+        <AxisGizmo quaternion={quaternion} onPick={axis => navigationRef.current?.snap(axis)} />
       )}
       {/* Credits the engine only for a frame it actually produced: no stamp
           over "No frame rendered yet" or a failed render. */}

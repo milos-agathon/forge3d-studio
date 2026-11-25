@@ -1,3 +1,4 @@
+import { isEditable } from "./state/shortcuts";
 import { useEffect, useState } from "react";
 
 import { EmptyState } from "./components/EmptyState";
@@ -121,18 +122,6 @@ function useKeyboardShortcuts({
   } = useSession();
 
   useEffect(() => {
-    const isEditable = (target: EventTarget | null) => {
-      const element = target as HTMLElement | null;
-      if (!element) return false;
-      const tag = element.tagName;
-      return (
-        tag === "INPUT" ||
-        tag === "TEXTAREA" ||
-        tag === "SELECT" ||
-        element.isContentEditable
-      );
-    };
-
     const onKeyDown = (event: KeyboardEvent) => {
       if (isEditable(event.target)) return;
 
@@ -146,14 +135,13 @@ function useKeyboardShortcuts({
           else void actions.select([]);
           return;
         }
-        // WASD and QE belong to the fly camera; the tool and action shortcuts
-        // would otherwise steal them mid-flight.
-        if (flyMode) return;
         if (event.key === "0") {
           // Blender's camera-view toggle; numpad 0 reports the same key.
           setCameraView(!cameraView);
           return;
         }
+        // Movement keys belong to the fly camera while it owns the viewport.
+        if (flyMode) return;
         if (key === "n") {
           // Blender's properties sidebar toggle.
           setSidebarOpen(!sidebarOpen);

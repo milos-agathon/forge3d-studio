@@ -70,6 +70,11 @@ pub struct TerrainCamera {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderView {
+    #[serde(default)]
+    pub roll_deg: f64,
+    /// Resolve the missing vertical datum from the renderer’s loaded DEM.
+    #[serde(default)]
+    pub measure_relief: bool,
     /// Azimuth east → north in the renderer's geographic frame (degrees).
     pub phi_deg: f64,
     /// Polar angle down from vertical (0 = straight above, 90 = horizon).
@@ -140,6 +145,8 @@ pub fn compute_render_view(input: &TerrainView) -> Option<RenderView> {
     }
     let theta_deg = (d_up / radius).clamp(-1.0, 1.0).acos().to_degrees();
     Some(RenderView {
+        roll_deg: 0.0,
+        measure_relief: input.elevation_range.is_none(),
         phi_deg,
         theta_deg,
         radius,
@@ -272,7 +279,7 @@ pub fn camera_render_view(project: &Project) -> Option<RenderView> {
     let forward = camera.transform.forward();
     let (translation, scale) = terrain_placement(&node.transform);
     let local = |point: [f64; 3]| std::array::from_fn(|i| (point[i] - translation[i]) / scale);
-    compute_render_view(&TerrainView {
+    let mut view = compute_render_view(&TerrainView {
         camera: local([f64::from(eye.x), f64::from(eye.y), f64::from(eye.z)]),
         aim: local([
             f64::from(eye.x + forward.x * 10.0),
@@ -284,7 +291,28 @@ pub fn camera_render_view(project: &Project) -> Option<RenderView> {
         dimensions: terrain.dimensions,
         elevation_range: terrain.elevation_range,
         z_scale: terrain.z_scale,
-    })
+    })?;
+    let up = (camera.transform.rotation() * glam::Vec3::Y).as_dvec3();
+    let back = -glam::DVec3::new(
+        f64::from(forward.x),
+        f64::from(forward.y),
+        f64::from(forward.z),
+    )
+    .normalize();
+    // MapScene uses geographic north as reference up for a vertical sensor.
+    let reference = if back.x.hypot(back.z) < 1e-4 {
+        glam::DVec3::NEG_Z
+    } else {
+        glam::DVec3::Y
+    };
+    let right = reference.cross(back);
+    let roll = (-up.dot(right))
+        .atan2(up.dot(back.cross(right)))
+        .to_degrees();
+    if roll.abs() > 0.00001 {
+        view.roll_deg = roll;
+    }
+    Some(view)
 }
 
 /// Translation and positive uniform scale supported by the live terrain viewport.

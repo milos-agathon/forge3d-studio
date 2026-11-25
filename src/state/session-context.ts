@@ -45,7 +45,9 @@ export interface SessionApi {
   setCameraView(enabled: boolean): void;
   /** Fly camera: WASD moves the viewport camera, drag looks around. */
   flyMode: boolean;
-  setFlyMode(enabled: boolean): void;
+  /** During a take the fly camera uses this object's evaluated lens. */
+  recordingCameraId: string | null;
+  setFlyMode(enabled: boolean, recordingCameraId?: string): void;
   /** Forge3D engine discovery (renderer + probe). */
   engine: EngineStatus | null;
   /** Heightfield resolution used by the Solid terrain preview. */

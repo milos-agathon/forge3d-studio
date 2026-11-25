@@ -1,4 +1,4 @@
-import { MathUtils, Quaternion, Spherical, Vector3, type PerspectiveCamera, type Vector3Tuple } from "three";
+import { MathUtils, Quaternion, Spherical, Vector3, type PerspectiveCamera, type QuaternionTuple, type Vector3Tuple } from "three";
 
 export type CameraDrag = "orbit" | "pan" | "dolly";
 
@@ -31,11 +31,16 @@ export class FreeCamera {
     this.lastTarget.copy(this.target);
   }
 
-  setPose(eye: Vector3Tuple, aim: Vector3Tuple) {
+  setPose(eye: Vector3Tuple, aim: Vector3Tuple, orientation?: QuaternionTuple) {
     this.clear();
     this.camera.position.fromArray(eye);
     this.target.fromArray(aim);
-    this.camera.lookAt(this.target);
+    if (orientation) {
+      this.camera.quaternion.fromArray(orientation);
+      this.camera.updateMatrixWorld();
+    } else {
+      this.camera.lookAt(this.target);
+    }
     this.rememberChange();
   }
 

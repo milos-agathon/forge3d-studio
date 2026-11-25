@@ -664,12 +664,14 @@ pub struct MeshFilePayload {
 /// app or a GPU.
 fn still_sidecar(
     request: &RenderRequest,
+    mut description: serde_json::Value,
     handoff: &studio_core::Handoff,
     frame_ms: f64,
 ) -> serde_json::Value {
-    let mut description = request.to_payload("final", None);
     if let Some(map) = description.as_object_mut() {
         map.remove("output");
+        map.remove("id");
+        map.remove("measureRelief");
         map.insert(
             "renderer".into(),
             serde_json::json!("forge3d.mapscene.render"),
@@ -1451,7 +1453,7 @@ pub fn render_frame(
     let mut frame = render.render(
         &python,
         &request.dem,
-        request.to_payload(&quality, None),
+        &mut request.to_payload(&quality, None),
         crate::render::PREVIEW_TIMEOUT,
     )?;
     frame.source = source;
@@ -1526,16 +1528,17 @@ pub fn render_still(
         meshes,
     )?;
     let python = forge.probe(false).python;
+    let mut payload = request.to_payload("final", Some(&target.to_string_lossy()));
     let mut frame = render.render(
         &python,
         &request.dem,
-        request.to_payload("final", Some(&target.to_string_lossy())),
+        &mut payload,
         crate::render::FRAME_TIMEOUT,
     )?;
     frame.path = Some(target.display().to_string());
 
     let sidecar = target.with_extension("json");
-    let description = still_sidecar(&request, &handoff, frame.ms);
+    let description = still_sidecar(&request, payload, &handoff, frame.ms);
     if let Err(error) = std::fs::write(
         &sidecar,
         serde_json::to_vec_pretty(&description).unwrap_or_default(),
@@ -1612,7 +1615,7 @@ pub fn render_animation_frame(
     let mut written = render.render(
         &python,
         &request.dem,
-        request.to_payload(&quality, Some(&target.to_string_lossy())),
+        &mut request.to_payload(&quality, Some(&target.to_string_lossy())),
         crate::render::FRAME_TIMEOUT,
     )?;
     written.path = Some(target.display().to_string());
@@ -1925,7 +1928,7 @@ mod tests {
         let request = RenderRequest::from_handoff(&handoff, 640, 400, None)
             .expect("the starter scene has terrain")
             .with_settings(&project.render);
-        let sidecar = still_sidecar(&request, &handoff, 12.5);
+        let sidecar = still_sidecar(&request, request.to_payload("final", None), &handoff, 12.5);
 
         // One payload producer: these must be the renderer's own keys.
         assert_eq!(sidecar["width"], 640);

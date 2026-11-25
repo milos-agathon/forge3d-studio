@@ -16,6 +16,8 @@ export interface TerrainViewInput {
    *  camera view (any point on the axis frames the same picture — the mapping
    *  is a similarity transform). */
   aim: [number, number, number];
+  /** Displayed camera local +Y, in Studio axes. */
+  up?: readonly number[];
   /** Vertical field of view, degrees. */
   fovDeg: number;
   /** DEM footprint in metres, or null when the DEM is not georeferenced. */
@@ -59,7 +61,21 @@ export function computeRenderView(input: TerrainViewInput): RenderView | null {
 
   const phiDeg = (Math.atan2(dN, dE) * (180 / Math.PI) + 360) % 360;
   const thetaDeg = (Math.acos(Math.min(1, Math.max(-1, dU / radius))) * 180) / Math.PI;
+  // MapScene switches its reference up from vertical to map north within
+  // 1e-4 of either pole. Use the same basis to measure camera-local roll.
+  const bx = dE / radius, by = dU / radius, bz = -dN / radius;
+  const polar = Math.hypot(bx, bz) < 1e-4;
+  const rx = polar ? by : bz, ry = polar ? -bx : 0, rz = polar ? 0 : -bx;
+  let rollDeg = 0;
+  if (input.up) {
+    const [x, y, z] = input.up;
+    // Both dot products share the length of the right vector.
+    rollDeg = Math.atan2(-(x * rx + y * ry + z * rz),
+      x * (by * rz - bz * ry) + y * (bz * rx - bx * rz) + z * (bx * ry - by * rx)) * 180 / Math.PI;
+  }
   return {
+    ...(Math.abs(rollDeg) > 0.00001 && { rollDeg }),
+    ...(!elevationRange && { measureRelief: true }),
     phiDeg,
     thetaDeg,
     radius,

@@ -201,9 +201,12 @@ export function nativeRenderView(frame: ViewportFrame, preview?: TerrainPreview)
   return computeRenderView({
     camera: placement ? studioToRuntime(camera.eye, placement) : camera.eye,
     aim: placement ? studioToRuntime(aim, placement) : aim,
-    fovDeg: camera.fovYDegrees, spanXz: measured ? terrainGroundSpan(measured) : span && [span[0] * unit, span[1] * unit],
+    up: camera.up, fovDeg: camera.fovYDegrees, spanXz: measured ? terrainGroundSpan(measured) : span && [span[0] * unit, span[1] * unit],
     dimensions: terrain.dimensions,
-    elevationRange: measured ? [measured.minElevation, measured.maxElevation] : terrain.elevationRange, zScale: terrain.zScale });
+    // Native camera keys use the project's full relief. A preview grid can
+    // miss either extremum as its sampling resolution changes.
+    elevationRange: terrain.elevationRange ?? null,
+    zScale: terrain.zScale });
 }
 
 export function assetRevision(asset: Asset, generation = 0): string {

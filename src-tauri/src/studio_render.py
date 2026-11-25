@@ -9,7 +9,7 @@ Protocol (newline-delimited JSON):
   stdin  line 1   {"dem": "/path/dem.tif", "zScale": 1.0}
   stdin  line n   {"id": 1, "width": 960, "height": 600,
                    "camera": {"phiDeg": .., "thetaDeg": .., "radius": ..,
-                              "target": [x, y, z], "fovDeg": ..},
+                              "target": [x, y, z], "fovDeg": .., "rollDeg": ..},
                    "sun": {"azimuthDeg": .., "elevationDeg": ..,
                            "intensity": .., "color": [r, g, b]},
                    "output": "/optional/path.png"}
@@ -143,6 +143,30 @@ def load_dem(path: str):
         tuple(source["bounds"]),
         source["crs"],
     )
+
+
+class RolledFrame:
+    """A roll about the optical axis, using MapScene's level orbit projection.
+
+    Render the whole rotated sensor at the original focal length. Sampling
+    this larger image avoids clipped corners and keeps the output lens fixed.
+    """
+    def __init__(self, width, height, degrees, fov):
+        self.output = (width, height)
+        angle = math.radians(degrees)
+        c, s = math.cos(angle), math.sin(angle)
+        w = math.ceil(abs(c) * width + abs(s) * height - 1e-9)
+        h = math.ceil(abs(s) * width + abs(c) * height - 1e-9)
+        self.size = (w, h)
+        self.fov = math.degrees(2 * math.atan(math.tan(math.radians(fov) / 2) * h / height))
+        self.inverse = (c, s, (w - c * width - s * height) / 2,
+                        -s, c, (h + s * width - c * height) / 2)
+
+    def sample(self, image, *, nearest=False):
+        from PIL import Image
+
+        return image.transform(self.output, Image.Transform.AFFINE, self.inverse,
+                               Image.Resampling.NEAREST if nearest else Image.Resampling.BILINEAR)
 
 
 class StudioRenderer:
@@ -581,7 +605,8 @@ class StudioRenderer:
         orbit = {
             "eye": eye,
             "target": tuple(float(value) for value in target),
-            "up": (0.0, 0.0, 1.0),
+            "up": (0.0, 1.0, 0.0) if abs(math.cos(elevation)) < 1e-4 else (0.0, 0.0, 1.0),
+            "fov_deg": float(camera.get("fovDeg") or 45.0),
             # The instanced renderer's default far plane is 100 units; the
             # still is in metres. Share the terrain's own clip range.
             "near": float(clip[0]),
@@ -781,6 +806,12 @@ class StudioRenderer:
         span_y = self.span_y * self.scale
 
         camera = request.get("camera") or {}
+        roll = float(camera.get("rollDeg", 0.0))
+        rolled = RolledFrame(width, height, roll, float(camera.get("fovDeg") or 45.0)) if roll else None
+        draw_camera = camera
+        if rolled:
+            width, height = rolled.size
+            draw_camera = {**camera, "fovDeg": rolled.fov}
         sun = request.get("sun") or {}
         quality = request.get("quality") or {}
         # Final-quality extras: AOV export and OIDN denoise of the beauty.
@@ -965,7 +996,7 @@ class StudioRenderer:
                 frame, aov_frame, params = self._mapscene_still(
                     width,
                     height,
-                    camera,
+                    draw_camera,
                     sun,
                     environment,
                     mapscene_path,
@@ -1015,7 +1046,7 @@ class StudioRenderer:
         mesh_report: Dict[str, Any] = {"meshesRendered": 0, "meshesSkipped": []}
         if request.get("meshes"):
             rgb, mesh_report = self._composite_meshes(
-                rgb, camera, target, radius, request["meshes"], width, height, params.clip
+                rgb, draw_camera, target, radius, request["meshes"], width, height, params.clip
             )
         # Neither AOVs nor the recipe carries the studio's numpy cartography:
         # the overlays are composited over the frame here. The recipe moved
@@ -1045,6 +1076,10 @@ class StudioRenderer:
                     "(install it with `pip install oidn` / `pip install pyoidn` next to the engine)" % (exc,)
                 ) from exc
 
+        if rolled:
+            from PIL import Image
+            rgb = np.asarray(rolled.sample(Image.fromarray(rgb)))
+            width, height = rolled.output
         rgb = apply_post_effects(rgb, quality)
         legend_name = str(ramp_layer.get("colormap", "") or "").strip() if ramp_layer else ""
         if ramp_layer is not None and bool(ramp_layer.get("legend", False)) and legend_name:
@@ -1076,6 +1111,9 @@ class StudioRenderer:
             and getattr(aov_frame, "has_depth", False)
         ):
             depth = np.asarray(aov_frame.depth())
+            if rolled:
+                depth = depth[..., 0] if depth.ndim == 3 else depth
+                depth = np.asarray(rolled.sample(Image.fromarray(depth), nearest=True))
             title = str(plate_layer.get("title", "") or "").strip()
             if not title:
                 title = Path(self.dem_path).stem.replace("_", " ").title()
@@ -1124,7 +1162,7 @@ class StudioRenderer:
             # north (the arrow's rotation is 0 there). The engine's arrow
             # rotation is clockwise from north on the page — the same
             # convention.
-            north_rotation = (phi + 90.0) % 360.0
+            north_rotation = (phi + 90.0 + roll) % 360.0
             plate_rgb = compose_plate(
                 rgb,
                 depth,
@@ -1147,12 +1185,14 @@ class StudioRenderer:
                 # the beauty: a failed AOV save must not leave a still on disk
                 # that looks complete while the command reports failure.
                 stem = Path(output).with_suffix("")
-                if aov_flags["albedo"]:
-                    aov_frame.save_albedo(str(stem) + "_albedo.png")
-                if aov_flags["normal"]:
-                    aov_frame.save_normal(str(stem) + "_normal.png")
-                if aov_flags["depth"]:
-                    aov_frame.save_depth(str(stem) + "_depth.png")
+                for channel, enabled in aov_flags.items():
+                    if enabled:
+                        path = str(stem) + "_" + channel + ".png"
+                        getattr(aov_frame, "save_" + channel)(path)
+                        if rolled:
+                            with Image.open(path) as source:
+                                result = rolled.sample(source, nearest=channel != "albedo")
+                            result.save(path)
             if plate_rgb is not None:
                 stem = Path(output).with_suffix("")
                 Path(str(stem) + "_plate.png").write_bytes(encode_png(plate_rgb))
