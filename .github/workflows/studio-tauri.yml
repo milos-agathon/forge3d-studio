@@ -82,10 +82,13 @@ jobs:
           "$HOME/studio-venv/bin/python" -m pytest tests/ -q
 
   studio-python-gpu:
-    name: Trusted GPU — mesh compositing (NVIDIA Vulkan)
-    # Hosted runners skip the terrain-safe tests. This lane must run them and
-    # must fail when the adapter is missing, so an empty mesh handoff cannot
-    # merge behind a green hosted job.
+    name: Trusted GPU — Python render suites (NVIDIA Vulkan)
+    # Hosted runners skip the terrain-safe tests. This lane runs the complete
+    # Python suite and fails when the adapter is missing, so render-path
+    # regressions cannot merge behind a green hosted job.
+    # Never execute fork PR code on a persistent runner. Same-repo PRs and
+    # main pushes are trusted; fork authors can still use the hosted checks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Windows, X64, forge3d-gpu, gpu-nvidia]
     steps:
       - uses: actions/checkout@v4
@@ -119,7 +122,7 @@ jobs:
           WGPU_BACKENDS: vulkan
         run: |
           $venv = Join-Path $env:RUNNER_TEMP "studio-gpu-venv"
-          & "$venv\Scripts\python.exe" -m pytest tests/test_studio_mesh_composite.py -v --tb=short
+          & "$venv\Scripts\python.exe" -m pytest tests/ -v --tb=short
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   deb-audit:

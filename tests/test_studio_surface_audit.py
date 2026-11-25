@@ -19,6 +19,7 @@ engine's own contracts, which a text scan cannot see.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -114,13 +115,38 @@ def test_every_render_setting_reaches_the_payload() -> None:
     )
 
 
+def _service_get_keys() -> set[str]:
+    """String keys actually passed to `.get()` — not unrelated literals."""
+    tree = ast.parse(SERVICE.read_text())
+    keys: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            keys.add(node.args[0].value)
+        elif isinstance(node, (ast.For, ast.comprehension)) and isinstance(
+            node.iter, (ast.Tuple, ast.List, ast.Set)
+        ):
+            # AOV channels are iterated as literals, then read by subscript.
+            keys.update(
+                item.value
+                for item in node.iter.elts
+                if isinstance(item, ast.Constant) and isinstance(item.value, str)
+            )
+    return keys
+
+
 def test_the_payload_and_the_service_agree_in_both_directions() -> None:
     payload, blocks, nested = _quality_payload_keys()
     reads = _service_quality_reads()
     # A misspelled nested lookup must be caught: check every leaf key against
-    # every `.get("key")` in the service, not just the top-level quality reads.
-    any_reads = set(re.findall(r'["\']([A-Za-z0-9_]+)["\']', SERVICE.read_text()))
-    missing = sorted((payload | blocks | nested) - any_reads)
+    # real `.get("key")` calls, not every quoted string in the service.
+    missing = sorted((payload | blocks | nested) - _service_get_keys())
     assert not missing, (
         "the payload sends these keys and the service never reads them, so they "
         f"are controls that do nothing: {missing}"

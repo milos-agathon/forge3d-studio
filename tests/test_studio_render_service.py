@@ -1689,7 +1689,7 @@ def test_the_remote_dem_preview_reads_the_overview_through_the_range_reader(tmp_
     # The same terrain the local file would show: the remote preview's
     # heights match a local read of the same DEM, within the averaging the
     # overview does.
-    local = _run_remote_preview(f"file://{cog_path}", 64)
+    local = _run_remote_preview(cog_path.as_uri(), 64)
     remote_heights = np.asarray(preview["heights"], dtype=np.float64)
     local_heights = np.asarray(local["heights"], dtype=np.float64)
     span = max(1e-6, float(preview["maxElevation"]) - float(preview["minElevation"]))

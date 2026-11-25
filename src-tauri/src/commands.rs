@@ -2120,14 +2120,6 @@ mod tests {
         let handoff = studio_core::workspace::handoff(&project, 1, Workspace::Forge3d);
         let request = build_request(&handoff, &project.render, 256, 256, None, meshes).unwrap();
         let payload = request.to_payload("final", None);
-        if std::env::var_os("WRITE_MESH_HANDOFF_FIXTURE").is_some() {
-            let fixture = root.join("tests/fixtures/mesh-handoff.json");
-            std::fs::write(
-                fixture,
-                serde_json::to_string_pretty(&payload["meshes"]).unwrap(),
-            )
-            .unwrap();
-        }
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../../tests/fixtures/mesh-handoff.json")).unwrap();
         assert_eq!(

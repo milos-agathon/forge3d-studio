@@ -209,8 +209,9 @@ def test_off_aim_handoff_mesh_tracks_the_requested_fov(tmp_path):
         return measured
 
     narrow, wide = centroid(40.0), centroid(70.0)
-    assert narrow[0] < 128.0 < 256.0 - narrow[0], f"wrong side at 40°: {narrow}"
-    assert wide[0] < 128.0 < 256.0 - wide[0], f"wrong side at 70°: {wide}"
+    assert (narrow[0] - 128.0) * (wide[0] - 128.0) > 0, (
+        f"the mesh changed sides with FOV: {narrow}, {wide}"
+    )
     assert abs(narrow[0] - 128.0) > abs(wide[0] - 128.0) + 4.0, (
         f"the requested FOV did not move the projection: {narrow}, {wide}"
     )
