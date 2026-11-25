@@ -318,6 +318,9 @@ test("camera aim distances and half-relief preserve the native handoff", () => {
   near(native.phiDeg, 270);
   near(native.thetaDeg, 90);
   assert.equal(native.fovDeg, orbitCamera.fovYDegrees);
+  const sampled = { ...brycePreview(), minElevation: 2150, maxElevation: 2500 };
+  assert.deepEqual(nativeRenderView(model.current, sampled), native,
+    "changing preview relief must preserve the authored native camera target");
 });
 
 test("native orbit and forward cameras use the translated and uniformly scaled terrain frame", () => {
@@ -343,6 +346,17 @@ test("native orbit and forward cameras use the translated and uniformly scaled t
   }
 });
 
+test("native roll uses map north at the pole and camera local up at the horizon", () => {
+  const model = new ViewportModel(bryce, 1);
+  for (const [forward, up, roll] of [
+    [[0,-1,0], [0,0,-1], 0], [[0,-1,0], [-1,0,0], 90],
+    [[0,0,-1], [0.5,Math.sqrt(0.75),0], -30],
+  ]) {
+    model.setCamera({ ...orbitCamera, aim: { forward }, up });
+    near(nativeRenderView(model.current).rollDeg ?? 0, roll);
+  }
+});
+
 test("legacy remote camera framing waits for the current measured footprint", () => {
   const legacyTerrain = { ...terrainObject, kind: { ...terrainObject.kind,
     worldSpanXz: null, worldOriginXz: null, elevationRange: null } };
@@ -355,7 +369,12 @@ test("legacy remote camera framing waits for the current measured footprint", ()
   model.acceptTerrain(model.beginTerrain(legacyTerrain.id, 2), brycePreview());
   const known = new ViewportModel(bryce, 1);
   known.setCamera(orbitCamera);
-  assert.deepEqual(nativeRenderView(model.current), nativeRenderView(known.current));
+  const pending = nativeRenderView(model.current);
+  assert.equal(pending.measureRelief, true);
+  const { measureRelief, ...resolved } = pending;
+  const [lo, hi] = terrainObject.kind.elevationRange;
+  resolved.target[2] -= (hi - lo) * terrainObject.kind.zScale / 2;
+  assert.deepEqual(resolved, nativeRenderView(known.current));
   model.setProject(legacy, 2, false);
   assert.equal(nativeRenderView(model.current), null);
 });

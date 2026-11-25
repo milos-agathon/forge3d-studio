@@ -80,7 +80,7 @@ const RECORD_KEY_INTERVAL = 4;
 /**
  * Write one sampled pose into a take's key lists.
  *
- * A path is six channels — the camera's position and its orientation. The
+ * A take samples the six transform channels using the target camera's lens. The
  * orientation is the camera's own quaternion (the studio transform's forward is
  * -Z, the axis a three.js camera looks down), so a replayed frame faces where
  * the take faced.
@@ -142,21 +142,24 @@ export function Timeline() {
   stateRef.current = state;
   const settingsRef = useRef({ frameRate, length });
   settingsRef.current = { frameRate, length };
-  /** Sampled keys for the take in progress, keyed by channel. */
-  const recordedRef = useRef(new Map<Channel, ChannelKeys["keys"]>());
-  const recordCameraRef = useRef<string | null>(null);
+  const takeRef = useRef<{
+    sessionId: number;
+    cameraId: string;
+    keys: Map<Channel, Keyframe[]>;
+  } | null>(null);
   /** A scrub during playback restarts the loop's counter from the new value. */
   const resync = useRef<number | null>(null);
 
   const stopRecording = useCallback(() => {
     setRecording(false);
+    const take = takeRef.current;
+    takeRef.current = null;
+    if (!take) return;
     setFlyMode(false);
-    const cameraId = recordCameraRef.current;
-    const recorded = recordedRef.current;
-    recordCameraRef.current = null;
-    if (!cameraId || recorded.size === 0) return;
-    const current = stateRef.current?.project;
-    if (!current) return;
+    const snapshot = stateRef.current;
+    if (snapshot?.sessionId !== take.sessionId || !take.keys.size) return;
+    const { cameraId, keys: recorded } = take;
+    const current = snapshot.project;
     const existing =
       current.timeline.tracks.find((track) => track.objectId === cameraId)?.channels ?? [];
     const channels: ChannelKeys[] = [...recorded.entries()].map(([channel, keys]) => ({
@@ -172,28 +175,16 @@ export function Timeline() {
 
   const startRecording = useCallback(
     (camera: SceneObject | null) => {
-    const current = stateRef.current?.project;
-    if (!current || !camera || camera.kind.type !== "camera") {
-      return;
-    }
-    recordedRef.current = new Map();
-    recordCameraRef.current = camera.id;
-    setPlaying(false);
-    setFlyMode(true);
-    setRecording(true);
-    // Select the camera: the timeline draws the keys of the selected object,
-    // so a take that nobody can see is a take nobody can fix.
-    void actionsRef.current.select([camera.id]);
-    // The pose the take starts from is a key too.
-    const transform = viewStore.cameraTransform;
-    if (transform) {
-      putPose(
-        recordedRef.current,
-        Math.round(current.timeline.currentFrame),
-        transform,
-        interpolation,
-      );
-    }
+      const snapshot = stateRef.current;
+      if (!snapshot || camera?.kind.type !== "camera") return;
+      const keys = new Map<Channel, Keyframe[]>();
+      takeRef.current = { cameraId: camera.id, sessionId: snapshot.sessionId, keys };
+      setPlaying(false);
+      setFlyMode(true, camera.id);
+      setRecording(true);
+      void actionsRef.current.select([camera.id]);
+      const transform = viewStore.cameraTransform;
+      if (transform) putPose(keys, Math.round(snapshot.project.timeline.currentFrame), transform, interpolation);
     },
     [setFlyMode, interpolation],
   );
@@ -212,6 +203,7 @@ export function Timeline() {
     let last = performance.now();
     let rest = 0;
     let inFlight = false;
+    const take = takeRef.current;
     let next = resync.current ?? Math.round(playheadRef.current);
     resync.current = null;
     const tick = (now: number) => {
@@ -230,13 +222,12 @@ export function Timeline() {
       inFlight = true;
       void actionsRef.current.setPlayhead(next).finally(() => {
         inFlight = false;
-        if (!recording) return;
+        if (!recording || !take || takeRef.current !== take) return;
         // Sample the viewport's live camera, not the evaluated object: flying
         // is what the take is made of.
         const transform = viewStore.cameraTransform;
-        const cameraId = recordCameraRef.current;
-        if (transform && cameraId && next % RECORD_KEY_INTERVAL === 0) {
-          putPose(recordedRef.current, next, transform, interpolation);
+        if (transform && next % RECORD_KEY_INTERVAL === 0) {
+          putPose(take.keys, next, transform, interpolation);
         }
         // The take fills the timeline: stop instead of wrapping and re-recording.
         if (next >= settingsRef.current.length) stopRecording();
@@ -248,6 +239,14 @@ export function Timeline() {
       resync.current = null;
     };
   }, [playing, recording, stopRecording]);
+
+  useEffect(() => () => {
+    if (takeRef.current) stopRecording();
+  }, [stopRecording]);
+
+  useEffect(() => {
+    if (recording && (!flyMode || state?.sessionId !== takeRef.current?.sessionId)) stopRecording();
+  }, [recording, flyMode, state?.sessionId, stopRecording]);
 
   // Stop playback and recording when the project closes.
   useEffect(() => {

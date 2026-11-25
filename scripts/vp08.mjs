@@ -10,6 +10,7 @@ import { createFixture, CUBE_ID, TERRAIN_ID, FIELD_REVISION, verifyProvenance } 
 import { observeContexts } from "./vp01/startup.mjs";
 import { desktop, fieldCheckout, until } from "./viewport-desktop.mjs";
 import { observeUpload, sampleStudio } from "./vp04/page.mjs";
+import { openFixture, reload } from "./vp08-fixture.mjs";
 import { installReplay } from "./vp08-page.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -37,27 +38,10 @@ const report = { base: execFileSync("git", ["rev-parse","HEAD"], {cwd:root,encod
 const D = "forge3dViewportDiagnostics()", S = D + ".terrainViewport.diagnosticSubmission";
 const close = (a,b,label,tolerance=1e-7) => assert.ok(Math.abs(a-b) < tolerance, label + ": " + a + " vs " + b);
 
-async function openFixture(cdp) {
-  const ev = expr => cdp.evaluate(expr);
-  await until(cdp, '!!document.querySelector(".menu__button")');
-  await ev('localStorage.setItem("studio.viewport.mapGrid","0")');
-  await ev('__TAURI_INTERNALS__.invoke("open_project", {path:'+JSON.stringify(path)+'})');
-  await reload(cdp);
-}
-
-async function reload(cdp) {
-  const ev = expr => cdp.evaluate(expr);
-  await ev("window.oldDocument=true");
-  await cdp.send("Page.reload", {ignoreCache:true});
-  await until(cdp, "!window.oldDocument && !!document.querySelector('.viewport')");
-  await ev(`document.querySelector('.recovery button[aria-label="Dismiss"]')?.click();
-    Object.assign(document.querySelector(".viewport").style,{boxSizing:"content-box",flex:"none",width:"794px",height:"727px"})`);
-}
-
 async function run(cdp, role) {
   const isField = role === "field";
   const ev = expr => cdp.evaluate(expr);
-  await openFixture(cdp);
+  await openFixture(cdp, path);
   await until(cdp, isField
     ? `window.__vp01FieldDiagnostics?.().runtime.renderer.domElement.height===727 &&
       !!__vp01FieldDiagnostics().runtime.objects.get("${TERRAIN_ID}")?.children.find(c=>c.userData.elevation)`
@@ -311,7 +295,7 @@ async function run(cdp, role) {
 // With an editor present, one notch must still be consumed exactly once.
 // Switch through the same persisted renderer preference used by the View menu.
 async function editorOwnership(cdp) {
-  await openFixture(cdp);
+  await openFixture(cdp, path);
   const ev = expr => cdp.evaluate(expr);
   const badge = 'document.querySelector("[data-viewport-backend]")?.textContent';
   report.editorOwnership = [];

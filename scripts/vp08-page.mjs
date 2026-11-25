@@ -1,6 +1,6 @@
 // Runs inside the two desktop WebViews. Drive the existing RAF callbacks in
 // lockstep so compositor timing cannot add damping updates between mouse events.
-export async function installReplay(field) {
+export async function installReplay(field, timed = false) {
   const ref = field ? __vp01FieldDiagnostics().runtime : undefined;
   const diagnostics = () => forge3dViewportDiagnostics();
   const canvas = ref?.renderer.domElement ?? document.querySelector(".viewport-canvas--terrain");
@@ -48,18 +48,27 @@ export async function installReplay(field) {
   }
 
   const nativeFrame = window.requestAnimationFrame.bind(window);
-  let queue = [];
-  window.requestAnimationFrame = callback => queue.push(callback);
+  const callbacks = new Map();
+  let id = 0;
+  window.requestAnimationFrame = callback => {
+    callbacks.set(++id, callback);
+    return id;
+  };
+  window.cancelAnimationFrame = handle => callbacks.delete(handle);
   await new Promise(nativeFrame);
   let time = performance.now();
-  function step(count) {
+  if (timed) Object.defineProperty(performance, "now", { value: () => time, configurable: true });
+  function step(count, milliseconds = 1000 / 60) {
     for (let i = 0; i < count; i++) {
       updates++;
-      time += 1000 / 60;
-      const pending = queue;
-      queue = [];
+      time += milliseconds;
+      const pending = [...callbacks.keys()];
       if (!pending.length) throw Error("No viewport animation callback scheduled");
-      for (const run of pending) run(time);
+      for (const handle of pending) {
+        const callback = callbacks.get(handle);
+        callbacks.delete(handle);
+        callback?.(time);
+      }
     }
   }
   step(2);
@@ -105,7 +114,10 @@ export async function installReplay(field) {
     const i = indices[Math.floor(indices.length/2)];
     return { x: i % canvas.width, y: Math.floor(i/canvas.width), rgba: [...rgba.slice(i*4,i*4+4)] };
   }
-  window.replay = { step, trace, calls, sample, livePose, setPose, fieldLandmarks, cubePixel };
+  window.replay = { step, get updates() { return updates; },
+    fieldCamera: () => ({ eye: renderedCamera.position.toArray(), rotation: renderedCamera.quaternion.toArray(),
+      fov: renderedCamera.fov, near: renderedCamera.near, far: renderedCamera.far }),
+    trace, calls, sample, livePose, setPose, fieldLandmarks, cubePixel };
   return { x: rect.left, y: rect.top, css: [rect.width,rect.height], physical: [canvas.width,canvas.height], dpr: devicePixelRatio,
     backend: field ? ref.renderer.getContext().constructor.name : document.querySelector("[data-viewport-backend]").textContent };
 }

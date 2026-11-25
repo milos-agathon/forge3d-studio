@@ -82,9 +82,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const [tool, setTool] = useState<Tool>("select");
   const [space, setSpace] = useState<ToolSpace>("world");
-  const [cameraView, setCameraView] = useState(false);
-  /** Fly camera. UI state, not project state. */
-  const [flyMode, setFlyMode] = useState(false);
+  const [cameraMode, setCameraMode] = useState<"orbit" | "camera" | { recordingCameraId: string | null }>("orbit");
+  const cameraView = cameraMode === "camera";
+  const flyMode = typeof cameraMode === "object";
+  const recordingCameraId = flyMode ? cameraMode.recordingCameraId : null;
+  const setCameraView = useCallback((enabled: boolean) => {
+    setCameraMode(mode => enabled ? "camera" : mode === "camera" ? "orbit" : mode);
+  }, []);
+  const setFlyMode = useCallback((enabled: boolean, recordingCameraId: string | null = null) => {
+    setCameraMode(mode => enabled ? { recordingCameraId } : typeof mode === "object" ? "orbit" : mode);
+  }, []);
   const [engine, setEngine] = useState<EngineStatus | null>(null);
   // The layer the cartography panel is editing. UI state, like the tool: the
   // map's stack is the model, this is which row the author is looking at.
@@ -883,7 +890,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     } finally {
       setBusy(false);
     }
-  }, [applyCommand, fail, flash, state]);
+  }, [applyCommand, fail, flash, setCameraView, state]);
 
   /**
    * Offline render queue.
@@ -1397,6 +1404,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     cameraView,
     setCameraView,
     flyMode,
+    recordingCameraId,
     setFlyMode,
     engine,
     render,

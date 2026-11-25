@@ -6,7 +6,7 @@ import type { RenderView, Transform } from "../bridge/types";
  * `resolve` captures the live camera for a native render and measures the
  * terrain if the viewport has yet to receive its footprint.
  *
- * `cameraTransform` is the viewport camera as a scene transform. The timeline's
+ * `cameraTransform` holds the displayed camera's scene transform. The timeline's
  * path recorder samples it while a take is running, so a recorded key is the
  * pose on screen rather than a reconstruction.
  */
