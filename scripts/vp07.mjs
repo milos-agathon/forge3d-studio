@@ -3,13 +3,14 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Group, PerspectiveCamera, Scene, Vector3 } from "three";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import "./prepare-viewport-runtime.mjs";
 import { createFixture, CUBE_ID, TERRAIN_ID, FIELD_REVISION, verifyProvenance } from "./vp01/fixture.mjs";
 import { observeContexts } from "./vp01/startup.mjs";
 import { desktop, fieldCheckout, until } from "./viewport-desktop.mjs";
+import { instrument, pixels } from "./vp07-page.mjs";
 import { reviewCases } from "./vp07-review.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -50,63 +51,17 @@ function fieldDrag(trace, transform) {
   control.setSize(.85);
   control.setSpace("world");
   control.attach(object);
+  control.axis = "XYZ"; // A newly opened fixture presents the screen plane.
   scene.updateMatrixWorld(true);
   const pointer = (e,button) => ({x:2*e.x/794-1,y:1-2*e.y/727,button});
   const down = pointer(trace.find(e=>e.type==="pointerdown"),0);
   control.pointerHover(down);
   assert.equal(control.axis,"X","the measured grip must also hit Field's X axis");
-  scene.updateMatrixWorld(true);
   control.pointerDown(down);
+  scene.updateMatrixWorld(true);
   for (const e of trace.filter(e=>e.type==="pointermove")) control.pointerMove(pointer(e,-1));
   control.pointerUp(pointer(trace.find(e=>e.type==="pointerup"),0));
   return object.position.x;
-}
-
-function instrument() {
-  window.probe = { calls: [], trace: [] };
-  const fetch = window.fetch;
-  window.fetch = function(resource, init) {
-    const url = new URL(resource instanceof Request ? resource.url : resource, location.href);
-    if (url.hostname === "ipc.localhost") {
-      const cmd = decodeURIComponent(url.pathname.slice(1));
-      if (cmd === "plugin:dialog|save" || cmd === "plugin:dialog|open") {
-        return Promise.resolve(new Response(JSON.stringify(probe.path), {
-          headers: { "Content-Type": "application/json", "Tauri-Response": "ok" },
-        }));
-      }
-      if (["apply_command", "undo", "redo", "set_selection", "save_project", "open_project", "close_project"].includes(cmd)) {
-        probe.calls.push({ cmd, args: JSON.parse(init.body) });
-      }
-    }
-    return fetch.apply(this, arguments);
-  };
-  for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "gotpointercapture", "lostpointercapture"]) {
-    window.addEventListener(type, e => {
-      if (type === "pointerdown") probe.pointer = e.pointerId;
-      const r = document.querySelector(".viewport-canvas--terrain")?.getBoundingClientRect();
-      if (r) probe.trace.push({ type, id: e.pointerId, device: e.pointerType, buttons: e.buttons,
-        captured: document.querySelector(".world-x-grip")?.hasPointerCapture(e.pointerId),
-        x: e.clientX - r.left, y: e.clientY - r.top, grip: e.target.matches?.(".world-x-grip") });
-    }, true);
-  }
-  window.confirm = () => true;
-}
-
-// The cube mask is the difference from a real terrain-only draw at this pose.
-// Its centroid and hash exclude the DOM grip, toolbars and Scene Tree.
-async function pixels(terrainOnly) {
-  const runtime = forge3dViewportDiagnostics().terrainViewport.diagnosticRuntime;
-  const rgba = await runtime.readRgba();
-  const values = new Uint32Array(rgba.buffer, rgba.byteOffset, rgba.length / 4);
-  if (terrainOnly) { probe.ground = values.slice(); return; }
-  let n = 0, sumX = 0;
-  for (let i = 0; i < values.length; ++i) {
-    if (values[i] === probe.ground[i]) continue;
-    n++;
-    sumX += i % runtime.width;
-  }
-  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", rgba));
-  return { cubePixels: n, meanX: sumX / n, sha256: Array.from(hash, v => v.toString(16).padStart(2, "0")).join("") };
 }
 
 async function run(cdp, hybrid = false) {
@@ -327,23 +282,28 @@ async function run(cdp, hybrid = false) {
     console.log(mode, lane.backend, lane.before.translation, lane.after.translation, lane.reopened.translation);
   }
   report.regressions = await reviewCases({cdp, evaluate, wait, read, mouse, hasCapture, commandCounts, menu, open, ready, named,
-    originalBryce, relief:fixture, directory:dirname(path), eye, aim, grip, D, S, raf});
+    expectedTravel:report.modes["relief-solid"].fieldX, originalBryce, relief:fixture, directory:dirname(path), eye, aim, grip, D, S, raf});
   report.contexts = await evaluate('__vp01Contexts.filter(c=>c.requested.includes("webgl"))');
   assert.ok(report.contexts.length && report.contexts.every(c => c.result === null));
 }
 
-try {
-  const field = fieldCheckout(root);
-  const threePin = async dir => JSON.parse(await readFile(join(dir,"package-lock.json"))).packages["node_modules/three"].integrity;
-  assert.equal(await threePin(root),await threePin(field));
-  await desktop({root, field, out, values:{}, report, role:"candidate", metrics:{width:1440,height:833},
-    observeCandidate: async cdp => {
-      const source = `(${observeContexts})(false,"document")`;
-      await cdp.send("Page.addScriptToEvaluateOnNewDocument",{source});
-      await cdp.evaluate(source);
-    }}, run);
-  await desktop({root,field,out,values:{},report,role:"editor",metrics:{width:1440,height:833}},cdp=>run(cdp,true));
-  report.passed = true;
-} finally {
-  await writeFile(join(out,"results.json"),JSON.stringify(report,null,2) + "\n");
+export async function runVp07() {
+  try {
+    const field = fieldCheckout(root);
+    const threePin = async dir => JSON.parse(await readFile(join(dir,"package-lock.json"))).packages["node_modules/three"].integrity;
+    assert.equal(await threePin(root),await threePin(field));
+    await desktop({root, field, out, values:{}, report, role:"candidate", metrics:{width:1440,height:833},
+      observeCandidate: async cdp => {
+        const source = `(${observeContexts})(false,"document")`;
+        await cdp.send("Page.addScriptToEvaluateOnNewDocument",{source});
+        await cdp.evaluate(source);
+      }}, run);
+    await desktop({root,field,out,values:{},report,role:"editor",metrics:{width:1440,height:833}},cdp=>run(cdp,true));
+    report.passed = true;
+  } finally {
+    await writeFile(join(out,"results.json"),JSON.stringify(report,null,2) + "\n");
+  }
+  return { directory: out, report };
 }
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) await runVp07();

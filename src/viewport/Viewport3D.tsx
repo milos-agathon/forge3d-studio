@@ -28,7 +28,7 @@ import type {
 import { ViewportToolbar } from "../components/ViewportToolbar";
 import { useSession } from "../state/session-context";
 import { AxisGizmo, type Axis } from "./AxisGizmo";
-import { WorldXMove } from "./worldXMove";
+import { ViewportTransform } from "./viewportTransform";
 import { NorthArrow } from "./NorthArrow";
 import { formatDistance, mapFrame } from "./mapGrid";
 import { buildMapGrid, type MapGridHandle } from "./mapGridLayer";
@@ -975,13 +975,13 @@ export function Viewport3D({ preference, onBackend }: {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const xGripRef = useRef<HTMLButtonElement>(null);
-  const worldMoveRef = useRef<WorldXMove | null>(null);
+  const transformHandlesRef = useRef<ViewportTransform | null>(null);
   const single = project?.selection.length === 1 && scene?.objects.find(object => object.id === project.selection[0]);
-  const moveTarget = !flyMode && !cameraView && tool === "move" && space === "world" && project?.viewport.mode !== "rendered" &&
-    single && visibility.get(single.id) && !single.locked && single.kind.type === "mesh" &&
-    single.kind.source.type === "primitive" && single.kind.source.primitive.type === "cube" ? single : undefined;
-  const moveTargetRef = useRef(moveTarget);
-  moveTargetRef.current = moveTarget;
+  const transformTarget = useMemo(() => !flyMode && !cameraView && tool !== "select" && project?.viewport.mode !== "rendered" &&
+    single && visibility.get(single.id) && !single.locked && single.kind.type !== "terrain" ? { object: single, tool, space } as const : undefined,
+    [flyMode, cameraView, tool, space, project?.viewport.mode, single, visibility]);
+  const transformTargetRef = useRef(transformTarget);
+  transformTargetRef.current = transformTarget;
   const [orbitTarget] = useState(() => new THREE.Vector3());
   const navigationRef = useRef<{
     syncMode(recordCameraId: string | null): void;
@@ -1147,7 +1147,7 @@ export function Viewport3D({ preference, onBackend }: {
   }, [viewport, sceneProject, projectGeneration, cameraView, assetGenerations, visibility]);
 
   useLayoutEffect(() => { hostSyncRef.current?.(); }, [preference, terrainResolution, remoteRung]);
-  useLayoutEffect(() => { worldMoveRef.current?.refresh(true); }, [moveTarget, projectGeneration, state?.snapshotSequence, preference]);
+  useLayoutEffect(() => { transformHandlesRef.current?.refresh(true); }, [transformTarget, projectGeneration, state?.snapshotSequence, preference]);
 
   const readTerrain = useCallback(
     (asset: Asset, source: { worldSpanXz: [number, number] | null; worldOriginXz: [number, number] | null },
@@ -1319,11 +1319,11 @@ export function Viewport3D({ preference, onBackend }: {
     }, (source, resolution, heights, owner) => {
       if (viewport.admitTerrain(source, resolution, heights, owner)) previewsChanged(version => version + 1);
     });
-    const worldMove = new WorldXMove(grip, terrainCanvas, () => {
-      const object = moveTargetRef.current;
+    const transformHandles = new ViewportTransform(grip, terrainCanvas, () => {
+      const selected = transformTargetRef.current;
       const snapshot = stateRef.current;
-      if (object && snapshot && !runtimeRef.current && preferenceRef.current !== "three") {
-        return { id: object.id, transform: object.transform, generation: viewport.current.projectGeneration,
+      if (selected && snapshot && !runtimeRef.current && preferenceRef.current !== "three") {
+        return { id: selected.object.id, transform: selected.object.transform, tool: selected.tool, space: selected.space, generation: viewport.current.projectGeneration,
           sequence: snapshot.projectSequence };
       }
     }, (id, allowPrevious) => terrainViewport.displayedCube(viewport.current, id, allowPrevious), invalidate,
@@ -1331,8 +1331,8 @@ export function Viewport3D({ preference, onBackend }: {
       const result = await actionsRef.current.apply({ type: "setTransform", id, transform }, sequence);
       return result?.projectSequence ?? null;
     });
-    worldMoveRef.current = worldMove;
-    viewStore.cancelTransformPreview = () => worldMove.interrupt();
+    transformHandlesRef.current = transformHandles;
+    viewStore.cancelTransformPreview = () => transformHandles.interrupt();
     hostSyncRef.current = () => {
       terrainViewport.sync(view());
       invalidate();
@@ -1341,7 +1341,7 @@ export function Viewport3D({ preference, onBackend }: {
       const runtime = runtimeRef.current;
       const frame = viewport.current;
       return { frame, preference: preferenceRef.current, sampling: previewResolutionRef.current, clay: CLAY,
-        cubePreview: worldMove.preview,
+        objectPreview: transformHandles.preview,
         background: frame.settings.mode === "solid" ? SOLID_BG : MATERIAL_BG,
         editor: runtime ? { objects: runtime.objects, projectionCamera: camera,
           sunShadowsDisabled: runtime.glStep >= GPU_STEP_WITHOUT_SUN_SHADOWS,
@@ -1448,7 +1448,7 @@ export function Viewport3D({ preference, onBackend }: {
     let lastPreviewError: string | undefined;
     const freeCamera = new FreeCamera(camera, target);
     // Hybrid and fallback both have an editor. Its canvas already owns input.
-    const hostNavigates = () => !runtimeRef.current && owner === "orbit" && !worldMove.active;
+    const hostNavigates = () => !runtimeRef.current && owner === "orbit" && !transformHandles.active;
     const flyKeys = new Set<string>();
     const flyAngles = new THREE.Euler(0, 0, 0, "YXZ");
     let lookPending = false;
@@ -1461,7 +1461,8 @@ export function Viewport3D({ preference, onBackend }: {
     };
     let navigationChanged = false;
     const inputSurface = (event: Event) =>
-      event.target === canvas || event.target === container || event.target === terrainCanvas;
+      event.target === canvas || event.target === container || event.target === terrainCanvas ||
+      grip.parentElement!.contains(event.target as Node);
     let controlHeld = false;
     let shiftHeld = false;
     const navigationKey = (event: KeyboardEvent) => {
@@ -1507,7 +1508,7 @@ export function Viewport3D({ preference, onBackend }: {
     };
     const orbitPointers = new Set<number>();
     const pointerDown = (event: PointerEvent) => {
-      if (worldMove.active || worldMove.begin(event)) {
+      if (transformHandles.active || (inputSurface(event) && transformHandles.begin(event))) {
         endDrag();
         // The drag plane belongs to this submission. Discard any wheel or
         // damping motion that has reached the live camera since it was drawn.
@@ -1548,23 +1549,24 @@ export function Viewport3D({ preference, onBackend }: {
       orbitPointers.delete(event.pointerId);
       if (drag?.id === event.pointerId) endDrag();
       pressRef.current = null;
-      worldMove.cancel(event);
+      transformHandles.cancel(event);
     };
     const navigationCaptureLost = (event: PointerEvent) => {
       if (event.target === container && drag?.id === event.pointerId) pointerCancel(event);
     };
-    const captureLost = (event: PointerEvent) => worldMove.cancel(event);
+    const captureLost = (event: PointerEvent) => transformHandles.cancel(event);
     const cancelOnEscape = (event: KeyboardEvent) => {
-      if (worldMove.active && event.key === "Escape") {
+      if (transformHandles.active && event.key === "Escape") {
         event.preventDefault();
         event.stopImmediatePropagation();
-        worldMove.cancel();
+        transformHandles.cancel();
       }
     };
     const exceedsClickRadius = (press: { x: number; y: number }, point: PointerEvent) =>
       Math.hypot(point.clientX - press.x, point.clientY - press.y) > 4;
     const pointerMove = (event: PointerEvent) => {
-      if (worldMove.active) { worldMove.move(event); return; }
+      if (transformHandles.active) { transformHandles.move(event); return; }
+      if (!drag && !event.buttons) transformHandles.hover(inputSurface(event) ? event : undefined);
       const press = pressRef.current;
       if (press?.id === event.pointerId &&
           (exceedsClickRadius(press, event) || event.getCoalescedEvents?.().some(point => exceedsClickRadius(press, point)))) {
@@ -1590,7 +1592,7 @@ export function Viewport3D({ preference, onBackend }: {
         endDrag();
         if (hostNavigates() || (looking && !lookPending)) finishCameraMove();
       }
-      if (worldMove.active) { worldMove.finish(event); return; }
+      if (transformHandles.active) { transformHandles.finish(event); return; }
       const press = pressRef.current;
       if (!press || press.id !== event.pointerId || event.button !== 0) return;
       pressRef.current = null;
@@ -1659,7 +1661,7 @@ export function Viewport3D({ preference, onBackend }: {
       if (resizePending || dpr !== observedDpr) resize(dpr);
       const editor = editorRef.current;
       const runtime = runtimeRef.current;
-      const moved = !worldMove.active && editor?.update();
+      const moved = !transformHandles.active && editor?.update();
       const lost = terrainViewport.lost();
       const redrawSelection = runtime?.selectionNeedsRender;
       if (runtime) runtime.selectionNeedsRender = false;
@@ -1684,7 +1686,7 @@ export function Viewport3D({ preference, onBackend }: {
       // The standalone renderer consumes pose arrays. Refresh the pan basis
       // on submission, as three.js does when it renders the Field camera.
       if (!editor && presented?.submitted) camera.updateMatrix();
-      worldMove.refresh();
+      transformHandles.refresh();
       lastTerrain = presented;
       lastPreviewError = previewError;
       editor?.present(presented, previewError);
@@ -1786,7 +1788,7 @@ export function Viewport3D({ preference, onBackend }: {
         invalidate();
       },
       snap(axis) {
-        if (owner !== "orbit" || worldMove.active || runtimeRef.current?.gizmo.dragging) return;
+        if (owner !== "orbit" || transformHandles.active || runtimeRef.current?.gizmo.dragging) return;
         stopOrbit();
         const offset = camera.position.clone().sub(target);
         const radius = offset.length();
@@ -1830,7 +1832,7 @@ export function Viewport3D({ preference, onBackend }: {
       if (finishLook) finishCameraMove();
     };
     if (import.meta.env.DEV) {
-      Object.assign(window, { forge3dViewportDiagnostics: () => ({ terrainViewport, runtime: runtimeRef.current,
+      Object.assign(window, { forge3dViewportDiagnostics: () => ({ terrainViewport, transformRig: transformHandles.diagnosticRig, runtime: runtimeRef.current,
         frame: viewport.current, nativeView: nativeRenderView(viewport.current), readCamera,
         lastPick: lastPick?.projectGeneration === viewport.current.projectGeneration ? lastPick : undefined,
         setOrbitPose: (eye: [number, number, number], aim: [number, number, number]) => {
@@ -1848,8 +1850,8 @@ export function Viewport3D({ preference, onBackend }: {
     return () => {
       mounted = false;
       endDrag();
-      worldMove.cancel();
-      worldMoveRef.current = null;
+      transformHandles.dispose();
+      transformHandlesRef.current = null;
       viewStore.cancelTransformPreview = null;
       grip.removeEventListener("lostpointercapture", captureLost);
       window.removeEventListener("keydown", cancelOnEscape, true);
@@ -3266,12 +3268,12 @@ export function Viewport3D({ preference, onBackend }: {
         <button className="world-x-grip" type="button" ref={xGripRef} aria-label="Move along world X"
           aria-keyshortcuts="ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight"
           title="Move along world X · Left/Right 0.1 units · Shift 1 unit"
-          onClick={event => { if (event.detail === 0) worldMoveRef.current?.nudge(0.1); }}
+          onClick={event => { if (event.detail === 0) transformHandlesRef.current?.nudge(0.1); }}
           onKeyDown={event => {
             if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
             event.preventDefault();
             event.stopPropagation();
-            worldMoveRef.current?.nudge((event.key === "ArrowRight" ? 1 : -1) * (event.shiftKey ? 1 : 0.1));
+            transformHandlesRef.current?.nudge((event.key === "ArrowRight" ? 1 : -1) * (event.shiftKey ? 1 : 0.1));
           }}>X</button>
       </div>
       {renderedMode && (

@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { Camera, CameraInput, Forge3DRuntime, LightCollection, LightingSnapshot, MaterialCollectionSnapshot, MeshLayer, TerrainDataset, TerrainMaterialImage, IblSnapshot, RgbeImage } from "@forge3d/web";
 import { cameraInput, worldXAxis, cubeParentWorld, cubeScatterGeometry, imageryMipLevel, imageryOverlays, queryTerrainDataset, runtimeToStudio, terrainInput, terrainTransform,
-  type RendererPreference, type TerrainTransform, type Triple } from "./forge3dWebMapping";
+  type RendererPreference, type TerrainTransform } from "./forge3dWebMapping";
 import { measurePixelDepth, pickSurfaces, projectCubeFaces, type PickSurfaces, type Pixel, type StudioHit, type PixelDepthHints } from "./viewportPicking";
 import { hillshadePixels } from "./hillshade";
 import { cameraTarget, validateTerrainPreview, viewportTerrainBackend,
@@ -22,7 +22,7 @@ interface View {
   background: THREE.Color;
   clay: THREE.Color;
   frame: ViewportFrame;
-  cubePreview?: { id: string; translation: Triple };
+  objectPreview?: Pick<ViewportObject, "id" | "translation" | "rotationDeg" | "scale">;
   sampling: { terrainResolution: number; remoteRung: number };
   editor?: {
     objects: Map<string, THREE.Group>;
@@ -48,6 +48,7 @@ interface SubmittedFrame {
   camera: Camera;
   placement: typeof emptyTransform;
   surfaces: PickSurfaces;
+  pose?: { parent: THREE.Matrix4; object: ViewportObject; axis: ReturnType<typeof worldXAxis> };
   cubeFaces?: ReturnType<typeof projectCubeFaces>;
   objectMask?: Uint8Array | Promise<Uint8Array>;
   coverageMask?: Uint8Array | Promise<Uint8Array>;
@@ -222,7 +223,7 @@ export class ForgeTerrainViewport {
   private scope?: { id: string | null; generation: number; preference: RendererPreference };
   private uploaded?: UploadedTerrain;
   private cube?: { key: string; layer: MeshLayer; materials: MaterialCollectionSnapshot;
-    axis: ReturnType<typeof worldXAxis>; surface: NonNullable<PickSurfaces["cube"]> };
+    pose: NonNullable<SubmittedFrame["pose"]>; surface: NonNullable<PickSurfaces["cube"]> };
   private module?: WebModule;
   private sky?: { snapshot?: IblSnapshot; error?: string };
   private appliedSkyIntensity = 0;
@@ -540,8 +541,8 @@ export class ForgeTerrainViewport {
     }
     const { material, size } = cube;
     let object = cube.object;
-    if (!view.editor && view.cubePreview?.id === object.id) {
-      object = { ...object, translation: view.cubePreview.translation };
+    if (!view.editor && view.objectPreview?.id === object.id) {
+      object = { ...object, ...view.objectPreview };
     }
     const group = view.editor?.objects.get(object.id);
     group?.updateWorldMatrix(true, false);
@@ -572,7 +573,7 @@ export class ForgeTerrainViewport {
     // Bake the exact packed instance matrix after the mesh upload has copied its vertices.
     geometry.applyMatrix4(new THREE.Matrix4().fromArray(transforms).transpose());
     const axis = parent?.singular ? undefined : worldXAxis(parent?.matrix ?? new THREE.Matrix4());
-    this.cube = { key, layer, materials: slots, axis, surface: { id: object.id, geometry } };
+    this.cube = { key, layer, materials: slots, pose: { axis, object, parent: parent?.matrix ?? new THREE.Matrix4() }, surface: { id: object.id, geometry } };
   }
 
   draw(view: View, previewError?: string): TerrainPresentation | undefined {
@@ -724,7 +725,7 @@ export class ForgeTerrainViewport {
         terrain: presentedTerrain && { id: object.id, grid: presentedTerrain.upload.dataset } };
       this.submitted = { sequence: ++this.submissions, projectId: frame.projectId,
         projectGeneration: frame.projectGeneration, width, height, source: frame, camera: new this.module!.Camera(input),
-        placement: transform, visibleIds: Object.values(surfaces).flatMap(surface => surface ? [surface.id] : []),
+        placement: transform, pose: this.cube?.pose, visibleIds: Object.values(surfaces).flatMap(surface => surface ? [surface.id] : []),
         surfaces, terrain: presentedTerrain };
       this.canvas.hidden = false;
       this.presentedAppearance = { skyIntensity: this.appliedSkyIntensity,
@@ -746,13 +747,14 @@ export class ForgeTerrainViewport {
   displayedCube(frame: ViewportFrame, id: string, allowPreviousFrame = false) {
     const submitted = this.submitted;
     const cube = submitted?.surfaces.cube;
-    const axis = this.cube?.axis;
+    const pose = submitted?.pose;
     if (!submitted || (!allowPreviousFrame && submitted.source !== frame) ||
         submitted.projectGeneration !== frame.projectGeneration || submitted.projectId !== frame.projectId ||
-        cube?.id !== id || this.canvas.hidden) return;
+        !cube || cube.id !== id || !pose || this.canvas.hidden) return;
     const geometry = cube.geometry;
     if (!geometry.boundingSphere) geometry.computeBoundingSphere();
-    return { camera: submitted.camera, center: geometry.boundingSphere!.center.toArray(), axis, localAxis: axis?.local,
+    if (!geometry.boundingBox) geometry.computeBoundingBox();
+    return { ...pose, camera: submitted.camera, center: geometry.boundingSphere!.center.toArray(), bounds: geometry.boundingBox!, localAxis: pose.axis?.local,
       width: submitted.width, height: submitted.height, scale: submitted.placement.scale };
   }
 
