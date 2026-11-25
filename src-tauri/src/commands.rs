@@ -3,6 +3,7 @@
 //! Project edits return a full [`SessionState`] snapshot with the session ID
 //! and sequence at which it was captured.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
@@ -638,8 +639,9 @@ pub fn discard_recovery(state: State<'_, AppState>, id: String) -> Result<(), St
 }
 
 /// Imports are read whole into memory. Phase 5 streams large assets; until
-/// then the cap is what keeps a 2 GB GLB from freezing the window.
-const MAX_MESH_BYTES: u64 = 32 * 1024 * 1024;
+/// then the cap bounds the base64 IPC copy (~170 MB at this limit) while
+/// letting city-scale GLBs through. A 2 GB file still fails fast.
+const MAX_MESH_BYTES: u64 = 128 * 1024 * 1024;
 /// Cap on an HDRI pulled across IPC for the Material preview (base64 adds a
 /// third, so this is a real memory bound).
 const MAX_HDR_BYTES: u64 = 64 * 1024 * 1024;
@@ -702,9 +704,31 @@ fn still_sidecar(
 /// a Radiance .hdr" are different sentences — but the metadata checks, the cap
 /// and the base64 encode are identical for all of them.
 fn read_file_capped(path: &str, limit: u64, note: &str) -> Result<Vec<u8>, String> {
+    read_file_capped_with(path, limit, note, |file, limit| {
+        let mut bytes = Vec::new();
+        file.take(limit + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > limit {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "file exceeded the size cap while reading",
+            ));
+        }
+        Ok(bytes)
+    })
+}
+
+/// Same contract, with the read injected so a test can prove an oversized
+/// file is rejected before any byte is read.
+fn read_file_capped_with<F>(path: &str, limit: u64, note: &str, read: F) -> Result<Vec<u8>, String>
+where
+    F: FnOnce(std::fs::File, u64) -> std::io::Result<Vec<u8>>,
+{
     let file = PathBuf::from(path);
-    let metadata =
-        std::fs::metadata(&file).map_err(|error| format!("could not read {path}: {error}"))?;
+    let handle =
+        std::fs::File::open(&file).map_err(|error| format!("could not read {path}: {error}"))?;
+    let metadata = handle
+        .metadata()
+        .map_err(|error| format!("could not read {path}: {error}"))?;
     if !metadata.is_file() {
         return Err(format!("{path} is not a file"));
     }
@@ -718,7 +742,7 @@ fn read_file_capped(path: &str, limit: u64, note: &str) -> Result<Vec<u8>, Strin
             limit / (1024 * 1024)
         ));
     }
-    std::fs::read(&file).map_err(|error| format!("could not read {path}: {error}"))
+    read(handle, limit).map_err(|error| format!("could not read {path}: {error}"))
 }
 
 /// The IPC shape for "here are the bytes and their identity".
@@ -2125,6 +2149,78 @@ mod tests {
         assert_eq!(
             payload["meshes"], fixture,
             "the serialized handoff must match the fixture Python renders"
+        );
+    }
+
+    /// Exclusively created sparse file; removal (and permission restore) on drop.
+    struct SparseGlb(std::path::PathBuf);
+
+    impl SparseGlb {
+        fn new(bytes: u64) -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "studio-mesh-cap-{}-{}-{}.glb",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+                NEXT.fetch_add(1, Ordering::Relaxed),
+            ));
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .unwrap();
+            // Own the path before resizing: a failed set_len must still clean up.
+            let guard = Self(path.clone());
+            file.set_len(bytes).unwrap();
+            guard
+        }
+    }
+
+    impl Drop for SparseGlb {
+        fn drop(&mut self) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o600));
+            }
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn mesh_import_accepts_above_the_old_cap_and_rejects_oversized_before_reading() {
+        // The old 32 MiB cap would reject this through the real command.
+        let old_cap_plus_one = 32 * 1024 * 1024 + 1;
+        let file = SparseGlb::new(old_cap_plus_one);
+        let reply = read_mesh_file(file.0.to_string_lossy().into_owned())
+            .expect("a mesh just above the old cap must import");
+        assert_eq!(reply.byte_size, old_cap_plus_one);
+
+        // Oversized: a recording reader proves the cap check precedes any
+        // read, on Windows and Linux alike, without relying on permissions.
+        let oversized = SparseGlb::new(MAX_MESH_BYTES + 1);
+        let mut reads = 0;
+        let error = read_file_capped_with(
+            &oversized.0.to_string_lossy(),
+            MAX_MESH_BYTES,
+            "imports are limited to",
+            |_file, _limit| {
+                reads += 1;
+                Ok(Vec::new())
+            },
+        )
+        .expect_err("a file over the cap must be rejected");
+        assert_eq!(
+            reads, 0,
+            "the oversized file must be rejected before reading"
+        );
+        assert!(
+            error.contains("128 MB"),
+            "the error must name the cap: {error}"
         );
     }
 }

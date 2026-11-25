@@ -533,7 +533,7 @@ consumed is gone.
 
 ## Known limitations
 
-- **glTF import reads the file whole** and is capped at 32 MB (streamed asset
+- **glTF import reads the file whole** and is capped at 128 MB (streamed asset
   loading is not implemented). Self-contained `.glb` works; a `.gltf` that
   references external `.bin`/texture files fails with an explicit message,
   because the webview cannot read neighbouring files.

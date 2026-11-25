@@ -50,6 +50,19 @@ jobs:
       - name: Shell unit tests (render payload, view override)
         run: cargo test -p forge3d-studio-shell --lib
 
+  studio-cap-windows:
+    name: Windows — mesh import cap and temp-file cleanup
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust cap test on Windows
+        run: cargo test -p forge3d-studio-shell --lib mesh_import_accepts_above_the_old_cap_and_rejects_oversized_before_reading
+
   studio-python:
     name: Python suites — render service, mesh composite, surface audit
     # These suites were left in the engine repo at the split. They are the only
