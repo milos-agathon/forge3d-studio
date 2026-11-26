@@ -36,12 +36,12 @@ export function buildShell(source, role, origin) {
   return join(target, "debug/forge3d-studio-shell.exe");
 }
 
-export async function desktop({ root, field, out, values, report, role, metrics = { width: 1440, height: 900 },
+export async function desktop({ root, field, out, values, report, role, port, metrics = { width: 1440, height: 900 },
   observeCandidate, candidatePlugins, beforeStudio }, run) {
   const blocked = role === "candidate";
   const candidate = role !== "field";
   const source = candidate ? root : field;
-  const origin = new URL("http://localhost:" + (candidate ? 1426 : 1422));
+  const origin = new URL("http://localhost:" + (port ?? (candidate ? 1426 : 1422)));
   const shell = values[candidate ? "shell" : "field-shell"] ?? buildShell(source, candidate ? "candidate" : "field", origin);
   const vite = await createServer({ root: source, plugins: candidate ? candidatePlugins : undefined,
     server: { host: "localhost", port: 0, strictPort: false, hmr: false }, logLevel: "error" });

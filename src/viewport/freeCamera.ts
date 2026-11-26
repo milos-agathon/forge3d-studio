@@ -38,6 +38,13 @@ export class FreeCamera {
     if (orientation) {
       this.camera.quaternion.fromArray(orientation);
       this.camera.updateMatrixWorld();
+    } else if (eye[0] === aim[0] && eye[2] === aim[2] && eye[1] !== aim[1]) {
+      // A Y-up lookAt at the pole tilts the camera to break the singularity.
+      // Use the map-north convention of the viewport's top view.
+      const up = this.camera.up.clone();
+      this.camera.up.set(0, 0, -1);
+      this.camera.lookAt(this.target);
+      this.camera.up.copy(up);
     } else {
       this.camera.lookAt(this.target);
     }

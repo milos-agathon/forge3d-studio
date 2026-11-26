@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Camera, TerrainDataset } from "@forge3d/web";
-import { BoxGeometry, BufferGeometry, Float32BufferAttribute, Group, InstancedMesh, Line, LineBasicMaterial, LineLoop, LineSegments, Matrix4, Mesh, PerspectiveCamera, PlaneGeometry, Points, PointsMaterial, Vector3 } from "three";
-import { cubeScatterGeometry } from "./forge3dWebMapping.ts";
-import { canvasPixel, measurePixelDepth, pickEditor, pickSurfaces } from "./viewportPicking.ts";
+import { BoxGeometry, BufferGeometry, DoubleSide, Float32BufferAttribute, Group, InstancedMesh, Line, LineBasicMaterial, LineLoop, LineSegments, Matrix4, Mesh, MeshBasicMaterial, PerspectiveCamera, PlaneGeometry, Points, PointsMaterial, Raycaster, Vector2, Vector3 } from "three";
+import { cubeScatterGeometry, framebufferProjection, terrainInput } from "./forge3dWebMapping.ts";
+import { canvasPixel, measurePixelDepth, pickEditor, pickSurfaces, terrainRayMetres } from "./viewportPicking.ts";
 import { terrainHitElevation } from "./editorTrianglePicking.ts";
 import { ViewportModel } from "./viewportState.ts";
 import { readFileSync } from "node:fs";
@@ -13,6 +13,163 @@ const center = [50, 50];
 const placement = { translation: [0, 0, 0], scale: 1 };
 const cube = { id: "cube", geometry: new BoxGeometry(2, 2, 2) };
 const facing = new Camera({ position: [0, 0, 5], target: [0, 0, 0], near: .1, far: 30 });
+
+const identityTerrain = {objectScale:1, translation:[0,0,0]};
+function cursorCamera({position, target, up=[0,1,0], near=.05, far=2000, aspect=1}) {
+  const camera = new PerspectiveCamera(45,aspect,near,far);
+  camera.position.fromArray(position);
+  camera.up.fromArray(up);
+  camera.lookAt(...target);
+  camera.updateMatrixWorld();
+  return camera;
+}
+
+function terrainCursorMetres(camera,u,v,grid,terrain,placement) {
+  const caster = new Raycaster();
+  caster.setFromCamera(new Vector2(2*u-1,1-2*v),camera);
+  return terrainRayMetres(caster.ray,caster.ray,grid,terrain,placement);
+}
+
+test("fractional DPR preserves both focal lengths at off-centre display points", () => {
+  for (const [cssWidth,cssHeight] of [[793,727],[795,728],[792,208]]) {
+    const width=Math.floor(cssWidth*1.25), height=Math.floor(cssHeight*1.25);
+    const projection=framebufferProjection({width,height,cssWidth,cssHeight,pixelRatio:1.25},45);
+    const camera=new Camera({position:[0,0,0],target:[0,0,-1],fovYDegrees:projection.fovYDegrees});
+    const displayWidth=cssWidth*projection.stretchX, displayHeight=cssHeight*projection.stretchY;
+    assert.ok(Math.abs(displayWidth/width-displayHeight/height)<1e-12);
+    assert.ok(displayWidth>=cssWidth && displayHeight>=cssHeight);
+    for (const [x,y] of [[-121.5,90.5],[244,-173]]) {
+      const ray=camera.screenRay(width*(.5+x/displayWidth),height*(.5+y/displayHeight),{width,height});
+      const focal=cssHeight/(2*Math.tan(Math.PI/8));
+      assert.ok(Math.abs(-ray.direction[0]/ray.direction[2] - x/focal)<1e-12);
+      assert.ok(Math.abs(ray.direction[1]/ray.direction[2] - y/focal)<1e-12);
+    }
+  }
+});
+
+test("a measurement inside the DEM cannot turn a submitted edge miss into a hit", () => {
+  const size = {width:991, height:908};
+  const preview = {resolution:2, heights:[10,10,10,10], minElevation:10, maxElevation:10, spanXz:[47,23.5]};
+  const grid = TerrainDataset.fromArray(terrainInput(preview,1,[1,1,1]));
+  const terrain = {preview,zScale:1};
+  const cx = 4.152991081648329, scale = 12/47;
+  const camera = new Camera({position:[cx/scale,5/scale,0],target:[cx/scale,0,0],up:[0,0,-1],fovYDegrees:45});
+  const submitted = new Raycaster().ray;
+  submitted.origin.set(cx,5,0);
+  submitted.direction.fromArray(camera.screenRay(900.5,472.5,size).direction);
+  const caster = new Raycaster();
+  caster.setFromCamera(new Vector2(2*900.5/991-1,1-2*472.5/908),
+    cursorCamera({position:[cx,5,0],target:[cx,0,0],up:[0,0,-1],aspect:793/727}));
+  assert.ok(Math.abs(terrainRayMetres(caster.ray,caster.ray,grid,terrain,identityTerrain)-10)<1e-9);
+  assert.equal(terrainRayMetres(submitted,caster.ray,grid,terrain,identityTerrain),null);
+});
+
+test("cursor intersects either side of the admitted triangles and excludes the skirt", () => {
+  const heights = [100,140,140,100], preview = {resolution:2, heights, minElevation:100, maxElevation:140, spanXz:[12,12]};
+  const grid = TerrainDataset.fromArray(terrainInput(preview, 1, [1,1,1]));
+  const metres = (position, target, up) => terrainCursorMetres(cursorCamera({position,target,up,near:.01,far:100}),
+    .5, .5, grid, {preview,zScale:1},identityTerrain);
+  assert.equal(grid.query(-3,-3).elevation,115);
+  for (const y of [-5,50]) assert.ok(Math.abs(metres([-3,y,-3],[-3,20,-3],[0,0,-1])-120)<1e-10);
+  assert.ok(Math.abs(metres([3,50,3],[3,20,3],[0,0,-1])-120)<1e-10);
+  const flat = {...preview, heights:[100,100,100,100], maxElevation:100};
+  const flatGrid = TerrainDataset.fromArray(terrainInput(flat, 1, [1,1,1]));
+  const skirtRay = cursorCamera({position:[0,-.1,10],target:[0,-.1,0],near:.01,far:100});
+  // The ray passes horizontally through both perimeter skirts below the top face.
+  assert.equal(terrainCursorMetres(skirtRay,.5,.5,flatGrid,{preview:flat,zScale:1},identityTerrain),null);
+});
+
+test("cursor includes the exact Field mesh edge and the forward ray on either side of the clip range", () => {
+  const preview = {resolution:2, heights:[10,10,10,10], minElevation:10, maxElevation:10, spanXz:[25.1,12.55]};
+  const grid = TerrainDataset.fromArray(terrainInput(preview, 1, [1,1,1]));
+  for (const y of [.02, 5, 500]) {
+    for (const [x, expected] of [[6,10], [6.000001,null], [-6,10], [-6.000001,null]]) {
+      const camera = cursorCamera({position:[x,y,0],target:[x,0,0],up:[0,0,-1],near:.05,far:30});
+      assert.equal(terrainCursorMetres(camera,.5,.5,grid,{preview,zScale:1},identityTerrain),expected,`x=${x}, y=${y}`);
+    }
+  }
+});
+
+test("the 47 m edge uses Field's inverse matrix for the original Studio eye", () => {
+  const preview = {resolution:2, heights:[10,10,10,10], minElevation:10, maxElevation:10, spanXz:[47,23.5]};
+  const grid = TerrainDataset.fromArray(terrainInput(preview,1,[1,1,1]));
+  for (const [x,expected] of [[6-1e-6,10],[6,10],[6+1e-6,null]]) {
+    const camera = cursorCamera({position:[x,5,0],target:[x,0,0],up:[0,0,-1]});
+    assert.equal(terrainCursorMetres(camera,.5,.5,grid,{preview,zScale:1},identityTerrain),expected);
+  }
+});
+
+test("an oblique half-metre tie follows the Field mesh hit in both rounding directions", () => {
+  const heights = Array.from({length:96**2}, (_,i) => i%96 < 10 ? 0 : 1.5);
+  const preview = {resolution:96, heights, minElevation:0, maxElevation:1.5, spanXz:[12,6]};
+  const grid = TerrainDataset.fromArray(terrainInput(preview,1,[1,1,1]));
+  const camera = cursorCamera({position:[9.5,7,11],target:[0,.8,0]});
+  for (const [y,metres] of [[366,1.4999999999999991],[381,1.5]]) {
+    assert.equal(terrainCursorMetres(camera,301/794,y/794,grid,{preview,zScale:1},identityTerrain),metres);
+  }
+});
+
+test("placed oblique cursor hits match the editor's world-to-local elevation", () => {
+  const n=12, zScale=3, h=12/31.7;
+  const heights=Array.from({length:n*n},(_,i)=>i%n < 4 ? 0 : 1.5);
+  const preview={resolution:n,heights,minElevation:0,maxElevation:1.5,spanXz:[31.7,15.85]};
+  const grid=TerrainDataset.fromArray(terrainInput(preview,zScale,[1,1,1]));
+  const transform={translation:[3.5,400000,-1],objectScale:1.7};
+  const group=new Group(), geometry=new PlaneGeometry(1,1,n-1,n-1).rotateX(-Math.PI/2);
+  heights.forEach((m,i)=>geometry.attributes.position.setY(i,m*zScale*h));
+  const mesh=new Mesh(geometry,new MeshBasicMaterial({side:DoubleSide}));
+  mesh.scale.set(31.7*h,1,15.85*h);
+  group.position.fromArray(transform.translation);
+  group.scale.setScalar(transform.objectScale);
+  group.add(mesh);
+  group.updateMatrixWorld();
+  const camera=cursorCamera({position:[13,400007,10],target:[3.5,400000.8,-1],aspect:793/727});
+  const caster=new Raycaster();
+  let hits=0, misses=0;
+  for (const u of [.1,.29,.43,.5,.67,.85]) {
+    for (const v of [.38,.44,.5,.56,.62]) {
+      caster.setFromCamera(new Vector2(u*2-1,1-v*2),camera);
+      const hit=caster.intersectObject(mesh)[0];
+      const expected=hit ? mesh.worldToLocal(hit.point).y/(zScale*h) : null;
+      assert.equal(terrainCursorMetres(camera,u,v,grid,{preview,zScale},transform),expected);
+      if (hit) hits++; else misses++;
+    }
+  }
+  assert.ok(hits && misses);
+});
+
+test("cursor intersects Float32 unit-plane coordinates on a striped slope", () => {
+  const heights = Array.from({length:96**2}, (_,i) => 100 + 40 * (i % 2));
+  const preview = {resolution:96, heights, minElevation:100, maxElevation:140, spanXz:[12,6]};
+  const grid = TerrainDataset.fromArray(terrainInput(preview, 1, [1,1,1]));
+  const col = 2, u = col / 95 - .5, v = (col+1) / 95 - .5;
+  const fraction = (20.5 - .00001) / 40;
+  const x = 12 * (Math.fround(u) + fraction * (Math.fround(v) - Math.fround(u)));
+  const camera = cursorCamera({position:[x,60,0],target:[x,0,0],up:[0,0,-1]});
+  const metres = terrainCursorMetres(camera,.5,.5,grid,{preview,zScale:1},identityTerrain);
+  assert.ok(Math.abs(metres - 120.49999) < 1e-8, String(metres));
+  assert.equal(Math.round(metres),120);
+});
+
+test("cursor reports the near slope when its ray also intersects the back slope", () => {
+  const preview = {resolution:3, heights:[0,0,0,3,3,3,0,0,0], minElevation:0, maxElevation:3, spanXz:[12,12]};
+  const grid = TerrainDataset.fromArray(terrainInput(preview, 1, [1,1,1]));
+  const camera = cursorCamera({position:[0,1,9],target:[0,.8,0],near:.05,far:30});
+  // On the near slope Y = 3 - Z/2. Along the ray Y = .8 + Z/45.
+  const z = (3-.8)/(.5+1/45);
+  assert.ok(Math.abs(terrainCursorMetres(camera,.5,.5,grid,{preview,zScale:1},identityTerrain)-(3-z/2))<1e-10);
+});
+
+test("cursor uses the admitted metre sample before Float32 mesh rounding", () => {
+  const datum = 4150.24;
+  const preview = {resolution:2, heights:[datum,datum+1.5,datum,datum+1.5],
+    minElevation:datum, maxElevation:datum+1.5, spanXz:[10,5]};
+  const grid = TerrainDataset.fromArray(terrainInput(preview, 1, [1,1,1],undefined,{},datum));
+  const camera = cursorCamera({position:[3,9.6,0],target:[3,0,0],up:[0,0,-1],near:.05,far:30});
+  const localY = Math.fround(1.5*1.2);
+  const expected = datum+.75*localY/1.2;
+  assert.ok(Math.abs(terrainCursorMetres(camera,.5,.5,grid,{preview,zScale:1},identityTerrain)-expected)<1e-10);
+});
 
 test("near and far planes clip individual faces, including oblique rays", () => {
   const pick = (camera, pixel = center) => pickSurfaces(camera, viewport, pixel, placement, { cube }, 7).hit;

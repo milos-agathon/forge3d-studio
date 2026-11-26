@@ -164,6 +164,24 @@ export function firstVisibleTerrain<T extends Pick<SceneObject, "visible" | "kin
   return frame.objects.find(object => object.visible && object.kind.type === "terrain");
 }
 
+/** Playback rebuilds the scene snapshot even when the same DEMs occupy the same places. */
+export function sameCursorTerrain(a: ViewportFrame, b: ViewportFrame) {
+  if (a.projectGeneration !== b.projectGeneration || a.projectId !== b.projectId ||
+      a.terrains.size !== b.terrains.size) return false;
+  if (a.terrains === b.terrains && a.objects === b.objects) return true;
+  const next = new Map(b.objects.filter(o => b.terrains.has(o.id)).map(o => [o.id, o]));
+  for (const before of a.objects) {
+    const terrain = a.terrains.get(before.id);
+    if (!terrain) continue;
+    const after = next.get(before.id);
+    if (b.terrains.get(before.id) !== terrain || !after || before.visible !== after.visible ||
+        !before.translation.every((v,i) => v === after.translation[i]) ||
+        !before.rotationDeg.every((v,i) => v === after.rotationDeg[i]) ||
+        !before.scale.every((v,i) => v === after.scale[i])) return false;
+  }
+  return true;
+}
+
 export function sceneObjectVisibility(objects: readonly SceneObject[] = []): ReadonlyMap<string, boolean> {
   const scene = new Map(objects.map(object => [object.id, object]));
   const inherited = new Map<string, boolean>();

@@ -1238,7 +1238,11 @@ kbd {
   touch-action: none;
 }
 
-.viewport-canvas--terrain { pointer-events: none; }
+.viewport-terrain-surface {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
 .transform-keyboard {
   position: absolute;
   bottom: 40px;

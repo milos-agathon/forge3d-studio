@@ -12,7 +12,7 @@ import { instrument } from "./vp07-page.mjs";
 import { fieldOracle } from "./vp10-field.mjs";
 
 import { inputRegressions } from "./vp10-regressions.mjs";
-import { recordField, measureControl, verifyLegacyTravel, clickTransformToolbar } from "./vp10-desktop-reference.mjs";
+import { gripScreenshot, recordField, measureControl, verifyLegacyTravel, clickTransformToolbar } from "./vp10-desktop-reference.mjs";
 
 const sequencesOnly = process.argv.includes("--sequences");
 const root = fileURLToPath(new URL("../",import.meta.url));
@@ -98,6 +98,13 @@ async function run(cdp) {
     await ev(raf);
   }
   await wait('!!document.querySelector(".menu__button")');
+  // Recovery entries can arrive after the first fixture has opened and shift
+  // the held viewport below the screen. Dismiss the startup banner once loaded.
+  if (await ev('(async()=>(await __TAURI_INTERNALS__.invoke("list_recovery")).length>0)()')) {
+    const dismiss = `document.querySelector('.recovery button[aria-label="Dismiss"]')`;
+    await wait("!!"+dismiss);
+    await ev(dismiss+".click()");
+  }
   await ev(`(${instrument})();localStorage.setItem("studio.viewport.mapGrid","0")`);
   for (const {mode,tool,space,axis,id,follow,chain,long} of cases) {
         const file=join(dirname(path),mode+".studio3d");
@@ -125,7 +132,7 @@ async function run(cdp) {
         row.before=await frame(true);
         const initial=await ev(S);
         const clip=await ev('document.querySelector(".viewport-canvas--terrain").getBoundingClientRect().toJSON()');
-        if (id==="solid-scale-local-Z") await writeFile(join(out,"studio-scale-Z-start.png"),await cdp.screenshot(clip));
+        if (id==="solid-scale-local-Z") await writeFile(join(out,"studio-scale-Z-start.png"),await gripScreenshot(cdp,clip));
         const [px,py]=fieldCase.point;
         const x=clip.x+px,y=clip.y+py;
         await cdp.send("Input.dispatchMouseEvent",{type:"mouseMoved",x,y,buttons:0});
@@ -154,7 +161,7 @@ async function run(cdp) {
         row.guideErrorPx=orientationError(await observed(true),fieldCase.heldGuides);
         assert.ok(row.guideErrorPx<.01,id+" held helpers "+row.guideErrorPx);
         row.preview.file=id+"-held.png";
-        await writeFile(join(out,row.preview.file),await cdp.screenshot({x:clip.x,y:clip.y,width:794,height:727}));
+        await writeFile(join(out,row.preview.file),await gripScreenshot(cdp,clip));
         const release=fieldCase.trace.at(-1);
         assert.equal(release.type,"pointerup");
         await input("mouseReleased",clip.x+release.x,clip.y+release.y);

@@ -1,10 +1,26 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
+import { encodePng } from "@forge3d/web";
+import { decodePng } from "../node_modules/@forge3d/web/dist/png-decode.js";
 import { openFixture } from "./vp08-fixture.mjs";
 import { until } from "./viewport-desktop.mjs";
 import { CUBE_ID } from "./vp01/fixture.mjs";
 import { instrument } from "./vp07-page.mjs";
+
+// A clipped CDP screenshot can resize the emulated viewport and release an
+// active Windows pointer capture. Crop the submitted screen at DPR 1 offline.
+export async function gripScreenshot(cdp, { x, y, width, height }) {
+  const screen = decodePng(await cdp.screenshot());
+  assert.ok([x,y,width,height].every(Number.isInteger) && x >= 0 && y >= 0 &&
+    x + width <= screen.width && y + height <= screen.height, `Viewport ${x},${y} ${width}×${height}, screen ${screen.width}×${screen.height}`);
+  const pixels = new Uint8Array(width * height * 4);
+  for (let row = 0; row < height; row++) {
+    const start = ((row + y) * screen.width + x) * 4;
+    pixels.set(screen.data.subarray(start, start + width * 4), row * width * 4);
+  }
+  return Buffer.from(await (await encodePng(width, height, pixels)).arrayBuffer());
+}
 
 // Measure geometry from both the ordinary grips and Field’s held helper group.
 export function measureControl(camera, controls, helpers) {
@@ -102,7 +118,7 @@ export async function recordField(cdp,{directory,out=directory,cases,reference,e
     const input=(type,dx,dy,buttons)=>cdp.send("Input.dispatchMouseEvent",{type,buttons,x:rect.x+point[0]+dx,y:rect.y+point[1]+dy,
       ...(type==="mouseMoved"?{}:{button:"left",clickCount:1})});
     const guide=id==="solid-scale-local-Z";
-    const screenshot=async phase=>writeFile(join(out,"field-scale-Z-"+phase+".png"),await cdp.screenshot(rect));
+    const screenshot=async phase=>writeFile(join(out,"field-scale-Z-"+phase+".png"),await gripScreenshot(cdp,rect));
     if (guide) await screenshot("start");
     await input("mouseMoved",0,0,0); await raf();
     assert.equal(await ev("rig.gizmo.axis"),axis,id+" Field hover");

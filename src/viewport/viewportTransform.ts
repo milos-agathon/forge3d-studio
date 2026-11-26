@@ -163,12 +163,14 @@ export class ViewportTransform {
     if (beforeDraw && target && !cube && !this.canvas.hidden) return;
     if (this.drag && !visible) this.cancel();
     const rect = this.canvas.getBoundingClientRect();
+    const offsetX = (this.canvas.clientWidth - rect.width) / 2;
+    const offsetY = (this.canvas.clientHeight - rect.height) / 2;
     const line = target?.tool === "move" && target.space === "world" && cube?.axis && projectedHandle(cube, rect);
     const handle = this.grip.parentElement!;
     handle.hidden = !line && !this.drag;
     handle.style.visibility = !line ? "hidden" : "";
     if (line) {
-      handle.style.transform = `translate(${line.x}px, ${line.y}px) rotate(${line.angle}rad)`;
+      handle.style.transform = `translate(${line.x + offsetX}px, ${line.y + offsetY}px) rotate(${line.angle}rad)`;
       handle.style.width = line.width + "px";
     }
     const overlay = this.renderer.domElement;
@@ -205,6 +207,8 @@ export class ViewportTransform {
         rig.scene.updateMatrixWorld(true);
       }
     }
+    overlay.style.left = `${offsetX}px`;
+    overlay.style.top = `${offsetY}px`;
     this.renderer.setSize(rect.width, rect.height);
     this.paint(this.display);
     // Field redraws its controls on toolbar changes even when the underlying
