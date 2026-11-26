@@ -8,7 +8,7 @@ import {
   cameraInput, cubeScatterGeometry, runtimeToStudio, studioToRuntime, terrainInput, terrainSamplePoint, terrainTransform,
 } from "./forge3dWebMapping.ts";
 import {
-  assetRevision, boundedTerrainResolution, cameraTarget, nativeRenderView, validateTerrainPreview,
+  assetRevision, boundedTerrainResolution, cameraTarget, nativeRenderView, sameCursorTerrain, validateTerrainPreview,
   viewportDimensions, ViewportModel, viewportTerrainBackend,
 } from "./viewportState.ts";
 
@@ -44,6 +44,32 @@ function nearPoint(actual, expected) {
   assert.equal(actual.length, 3);
   actual.forEach((value, axis) => near(value, expected[axis]));
 }
+
+test("cursor lifetime follows the admitted DEM and its placement across scene snapshots", () => {
+  const project = structuredClone(bryce), model = new ViewportModel(project, 1);
+  const dem = project.scene.objects[0];
+  const request = model.beginTerrain(dem.id,2);
+  assert.ok(model.acceptTerrain(request,brycePreview()));
+  const displayed = model.current;
+  model.setProject(project,1,false);
+  assert.notEqual(displayed.terrains,model.current.terrains);
+  assert.ok(sameCursorTerrain(displayed,model.current));
+  for (const key of ["translation","rotationDeg","scale"]) {
+    dem.transform[key].x += 1;
+    model.setProject(project,1,false);
+    assert.equal(sameCursorTerrain(displayed,model.current),false,key);
+    dem.transform[key].x -= 1;
+  }
+  dem.visible = false;
+  model.setProject(project,1,false);
+  assert.equal(sameCursorTerrain(displayed,model.current),false);
+  dem.visible = true;
+  model.setProject(project,1,false);
+  assert.ok(model.acceptTerrain(model.beginTerrain(dem.id,2),brycePreview()));
+  assert.equal(sameCursorTerrain(displayed,model.current),false);
+  model.setProject(project,2,false);
+  assert.equal(sameCursorTerrain(displayed,model.current),false);
+});
 
 test("empty project and Bryce build headlessly from their project objects", () => {
   const emptyProject = { ...bryce, assets: [], scene: { ...bryce.scene, objects: [], activeCamera: null } };

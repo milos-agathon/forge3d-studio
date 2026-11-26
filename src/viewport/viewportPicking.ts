@@ -3,7 +3,7 @@ import { Box3, Frustum, Line, LineBasicMaterial, LineLoop, LineSegments, Matrix4
   type BufferGeometry, type Group, type Intersection, type Material, type PerspectiveCamera } from "three";
 import { intersectEditorObject, isEditorTriangleMesh, terrainHitElevation } from "./editorTrianglePicking.ts";
 import { sampleHeight } from "./cartography.ts";
-import { runtimeToStudio, type TerrainTransform, type Triple, type UniformTransform } from "./forge3dWebMapping.ts";
+import { runtimeToStudio, studioUnitsPerGroundUnit, terrainGroundSpan, type TerrainTransform, type Triple, type UniformTransform } from "./forge3dWebMapping.ts";
 import type { ViewportObject, ViewportTerrain } from "./viewportState.ts";
 
 export type Pixel = [number, number];
@@ -34,12 +34,13 @@ type TriangleVisitor = (a: Vector3, b: Vector3, c: Vector3) => void;
 
 // Clip the XZ projection of the ray to each grid row. Test only the cells it
 // crosses, including both neighbours when the ray lies exactly on a grid edge.
-function visitTerrain(grid: TerrainDataset, ray: Ray, far: number, visit: TriangleVisitor, margin = 0) {
-  const { width, height, spacing: [dx, dz], heights, exaggeration } = grid;
+function visitTerrainCells(width: number, height: number, dx: number, dz: number, ray: Ray, far: number,
+  visit: TriangleVisitor, vertexY: (index: number) => number, skirts: boolean, margin = 0, unitPlane = false, around?: Vector3) {
   const cx = (width - 1) / 2, cz = (height - 1) / 2;
-  const datum = Math.fround(grid.domain[0]);
-  const vertex = (p: Vector3, x: number, z: number) => p.set((x - cx) * dx,
-    (heights[z * width + x] - datum) * exaggeration, (z - cz) * dz);
+  const column = (x: number) => unitPlane ? Math.fround(x * dx - .5) : (x - cx) * dx;
+  const row = (z: number) => unitPlane ? Math.fround(z * dz - .5) : (z - cz) * dz;
+  const vertex = (p: Vector3, x: number, z: number) =>
+    p.set(column(x), vertexY(z * width + x), row(z));
   const nw = new Vector3(), ne = new Vector3(), sw = new Vector3(), se = new Vector3();
   // The pinned dense mesh appends a 0.24-ground-unit skirt to its perimeter.
   const bottomA = new Vector3(), bottomB = new Vector3();
@@ -50,8 +51,11 @@ function visitTerrain(grid: TerrainDataset, ray: Ray, far: number, visit: Triang
     visit(b, bottomB, bottomA);
   };
   const { origin, direction } = ray;
-  for (let z = 0; z < height - 1; z++) {
-    const north = (z - cz) * dz - margin, south = (z + 1 - cz) * dz + margin;
+  const ix = around && Math.floor(around.x / dx + cx), iz = around && Math.floor(around.z / dz + cz);
+  const firstRow = iz === undefined ? 0 : Math.max(0, iz - 1);
+  const lastRow = iz === undefined ? height - 2 : Math.min(height - 2, iz + 1);
+  for (let z = firstRow; z <= lastRow; z++) {
+    const north = row(z) - margin, south = row(z + 1) + margin;
     let enter = 0, exit = far;
     if (direction.z === 0) {
       if (origin.z < north || origin.z > south) continue;
@@ -62,18 +66,77 @@ function visitTerrain(grid: TerrainDataset, ray: Ray, far: number, visit: Triang
       if (enter > exit) continue;
     }
     const x0 = cx + (origin.x + enter * direction.x) / dx;
-    const x1 = cx + (origin.x + exit * direction.x) / dx;
-    const start = Math.max(0, Math.ceil(Math.min(x0, x1) - margin / dx) - 1);
-    const end = Math.min(width - 2, Math.floor(Math.max(x0, x1) + margin / dx));
+    const x1 = direction.x === 0 ? x0 : cx + (origin.x + exit * direction.x) / dx;
+    const start = Math.max(0, ix === undefined ? 0 : ix - 1, Math.ceil(Math.min(x0, x1) - margin / dx) - 1);
+    const end = Math.min(width - 2, ix === undefined ? width - 2 : ix + 1, Math.floor(Math.max(x0, x1) + margin / dx));
     for (let x = start; x <= end; x++) {
-      visit(vertex(nw, x, z), vertex(ne, x + 1, z), vertex(sw, x, z + 1));
-      visit(ne, vertex(se, x + 1, z + 1), sw);
+      vertex(nw, x, z); vertex(ne, x + 1, z); vertex(sw, x, z + 1); vertex(se, x + 1, z + 1);
+      if (unitPlane) {
+        visit(nw, sw, ne);
+        visit(sw, se, ne);
+      } else {
+        visit(nw, ne, sw);
+        visit(ne, se, sw);
+      }
+      if (!skirts) continue;
       if (x === 0) skirt(nw, sw);
       if (x === width - 2) skirt(ne, se);
       if (z === 0) skirt(nw, ne);
       if (z === height - 2) skirt(sw, se);
     }
   }
+}
+
+function visitTerrain(grid: TerrainDataset, ray: Ray, far: number, visit: TriangleVisitor, margin = 0) {
+  const datum = Math.fround(grid.domain[0]);
+  visitTerrainCells(grid.width, grid.height, ...grid.spacing, ray, far, visit,
+    i => (grid.heights[i] - datum) * grid.exaggeration, true, margin);
+}
+
+/** The submitted ray selects the surface. Measure its face with Field's mesh
+ * arithmetic before rounding a raw elevation at a half-metre boundary. */
+export function terrainRayMetres(submittedRay: Ray, measurementRay: Ray,
+  grid: TerrainDataset, terrain: ViewportTerrain, placement: Pick<TerrainTransform, "objectScale" | "translation">) {
+  const { preview, zScale } = terrain;
+  const horizontal = studioUnitsPerGroundUnit(preview), s = zScale * horizontal;
+  const [width, depth] = terrainGroundSpan(preview);
+  const scale = placement.objectScale;
+  const world = new Matrix4().makeScale(scale * (width * horizontal), scale, scale * (depth * horizontal))
+    .setPosition(...placement.translation);
+  const inverse = world.clone().invert();
+  const ray = submittedRay.clone().applyMatrix4(inverse);
+  const measurement = measurementRay.clone().applyMatrix4(inverse);
+  const point = new Vector3(), nearest = new Vector3();
+  let distance = Infinity, faceMeasured = false;
+  const dx = 1 / (grid.width - 1), dz = 1 / (grid.height - 1);
+  const vertexY = (i: number) => Math.fround((preview.heights[i] - preview.minElevation) * s);
+  // Only the coarse search is padded for Float32 grid coordinates. The
+  // triangle test and the world-to-local conversion use Field's arithmetic.
+  visitTerrainCells(grid.width, grid.height, dx, dz,
+    ray, Infinity, (a, b, c) => {
+      if (!ray.intersectTriangle(a, b, c, false, point)) return;
+      point.applyMatrix4(world);
+      const d = submittedRay.origin.distanceTo(point);
+      if (d < distance) {
+        distance = d;
+        nearest.copy(point);
+        faceMeasured = measurement.intersectTriangle(a, b, c, false, point) !== null;
+        if (faceMeasured) nearest.copy(point.applyMatrix4(world));
+      }
+    }, vertexY, false, 2 ** -25, true);
+  if (distance === Infinity) return null;
+  if (!faceMeasured) {
+    // At a shared vertex the float view matrix can put the submitted hit on
+    // the adjoining face. Resolve the measurement on the same local patch.
+    const hit = nearest.clone(), local = hit.clone().applyMatrix4(inverse);
+    let separation = Infinity;
+    visitTerrainCells(grid.width, grid.height, dx, dz, measurement, Infinity, (a, b, c) => {
+      if (!measurement.intersectTriangle(a, b, c, false, point)) return;
+      const delta = point.applyMatrix4(world).distanceToSquared(hit);
+      if (delta < separation) { separation = delta; nearest.copy(point); }
+    }, vertexY, false, 2 ** -25, true, local);
+  }
+  return preview.minElevation + nearest.applyMatrix4(inverse).y / Math.max(1e-9, s);
 }
 
 export interface PickSurfaces {

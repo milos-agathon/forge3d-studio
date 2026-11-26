@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import type { Camera, CameraInput, Forge3DRuntime, LightCollection, LightingSnapshot, MaterialCollectionSnapshot, MeshLayer, TerrainDataset, TerrainMaterialImage, IblSnapshot, RgbeImage } from "@forge3d/web";
-import { cameraInput, worldXAxis, cubeParentWorld, cubeScatterGeometry, imageryMipLevel, imageryOverlays, queryTerrainDataset, runtimeToStudio, terrainInput, terrainTransform,
+import { cameraInput, framebufferProjection, worldXAxis, cubeParentWorld, cubeScatterGeometry, imageryMipLevel, imageryOverlays, queryTerrainDataset, runtimeToStudio, terrainInput, terrainTransform,
   type RendererPreference, type TerrainTransform } from "./forge3dWebMapping";
-import { measurePixelDepth, pickSurfaces, projectCubeFaces, type PickSurfaces, type Pixel, type StudioHit, type PixelDepthHints } from "./viewportPicking";
+import { measurePixelDepth, pickSurfaces, terrainRayMetres, projectCubeFaces, type PickSurfaces, type Pixel, type StudioHit, type PixelDepthHints } from "./viewportPicking";
 import { hillshadePixels } from "./hillshade";
 import { cameraTarget, validateTerrainPreview, viewportTerrainBackend,
   type ViewportDimensions, type ViewportFrame, type ViewportObject, type ViewportTerrain } from "./viewportState";
@@ -21,12 +21,12 @@ interface View {
   preference: RendererPreference;
   background: THREE.Color;
   clay: THREE.Color;
+  projectionCamera: THREE.PerspectiveCamera;
   frame: ViewportFrame;
   objectPreview?: Pick<ViewportObject, "id" | "translation" | "rotationDeg" | "scale">;
   sampling: { terrainResolution: number; remoteRung: number };
   editor?: {
     objects: Map<string, THREE.Group>;
-    projectionCamera: THREE.PerspectiveCamera;
     sunShadowsDisabled: boolean;
     skyEnabled: boolean;
   };
@@ -243,6 +243,8 @@ export class ForgeTerrainViewport {
   private problem?: string;
   private presentedAppearance?: PresentedAppearance;
   private submitted?: SubmittedFrame;
+  private readonly cameraToWorld = new THREE.Matrix4();
+  private readonly clipToCamera = new THREE.Matrix4();
   private submissions = 0;
 
   constructor(private canvas: HTMLCanvasElement, private skyPixels: RgbeImage, private invalidate: () => void,
@@ -612,7 +614,7 @@ export class ForgeTerrainViewport {
       child => child.userData.forgeTerrain === terrain) as TerrainMesh | undefined;
     const material = settings.mode === "material";
     const drape: THREE.Texture<HTMLImageElement> | undefined = material ? mesh?.userData.drape : undefined;
-    const level = drape && editor && mesh ? this.drapeLevel(editor.projectionCamera, dimensions, mesh, drape.image) : 0;
+    const level = drape && editor && mesh ? this.drapeLevel(view.projectionCamera, dimensions, mesh, drape.image) : 0;
     const decoded = drape ? this.drapes.get(drape)?.get(level) : undefined;
     const skyIntensity = material && (terrain || cube) && (editor?.skyEnabled ?? true) ? settings.studioSkyIntensity : 0;
     try {
@@ -699,7 +701,8 @@ export class ForgeTerrainViewport {
         web.setLighting(lights.snapshot());
         this.lightKey = key;
       }
-      const input = cameraInput(camera.eye, target, camera.up, camera.fovYDegrees,
+      const { stretchX, stretchY, fovYDegrees } = framebufferProjection(dimensions, camera.fovYDegrees);
+      const input = cameraInput(camera.eye, target, camera.up, fovYDegrees,
         camera.near, camera.far, transform.translation, transform.scale);
       this.setCamera(web, input);
       this.submitCube(web, cube, transform, view);
@@ -723,6 +726,12 @@ export class ForgeTerrainViewport {
       }
       const surfaces = { cube: this.cube?.surface,
         terrain: presentedTerrain && { id: object.id, grid: presentedTerrain.upload.dataset } };
+      this.canvas.style.transform = stretchX === 1 && stretchY === 1 ? "" : `scale(${stretchX}, ${stretchY})`;
+      if (presentedTerrain) {
+        const lens = view.projectionCamera;
+        this.cameraToWorld.compose(lens.position, lens.quaternion, lens.scale);
+        this.clipToCamera.copy(lens.projectionMatrixInverse);
+      }
       this.submitted = { sequence: ++this.submissions, projectId: frame.projectId,
         projectGeneration: frame.projectGeneration, width, height, source: frame, camera: new this.module!.Camera(input),
         placement: transform, pose: this.cube?.pose, visibleIds: Object.values(surfaces).flatMap(surface => surface ? [surface.id] : []),
@@ -761,11 +770,38 @@ export class ForgeTerrainViewport {
   private visibleSubmission(frame: ViewportFrame) {
     const submitted = this.submitted;
     const terrain = submitted?.terrain;
-    if (!terrain || submitted.projectId !== frame.projectId || this.#web?.disposed !== false) return;
+    if (!terrain || submitted.projectId !== frame.projectId || submitted.projectGeneration !== frame.projectGeneration || this.#web?.disposed !== false) return;
     const object = visibleSource(frame, terrain.upload.terrain);
     if (!object || terrain.upload.terrain !== frame.terrains.get(object.id)) return;
     if (!samePlacement(terrain.transform, object)) return;
     return terrain;
+  }
+
+  cursorElevation(frame: ViewportFrame, clientX: number, clientY: number) {
+    const submission = this.submitted;
+    const terrain = this.visibleSubmission(frame);
+    if (!submission || !terrain || this.canvas.hidden) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = (clientX - rect.left) * submission.width / rect.width;
+    const y = (clientY - rect.top) * submission.height / rect.height;
+    if (!(x >= 0 && x < submission.width && y >= 0 && y < submission.height)) return null;
+    const camera = submission.camera;
+    const { direction } = camera.screenRay(x, y, submission);
+    // The cursor extends the perspective ray back to its original Studio eye.
+    // At the optical centre its direction is exactly forward, including on an inclusive DEM edge.
+    const centre = x === submission.width / 2 && y === submission.height / 2;
+    const eye = new THREE.Vector3().setFromMatrixPosition(this.cameraToWorld);
+    const ray = new THREE.Ray(eye, new THREE.Vector3(...(centre ? camera.forward : direction)));
+
+    // Field measures in the logical canvas before framebuffer presentation
+    // scaling. Its layout box retains fractional CSS pixels on both axes.
+    const layout = this.canvas.parentElement!.getBoundingClientRect();
+    const u = (clientX - layout.left) / layout.width;
+    const v = (clientY - layout.top) / layout.height;
+    const through = new THREE.Vector3(2*u-1, 1-2*v, .5)
+      .applyMatrix4(this.clipToCamera).applyMatrix4(this.cameraToWorld);
+    const measurement = new THREE.Ray(eye, through.sub(eye).normalize());
+    return terrainRayMetres(ray, measurement, terrain.upload.dataset, terrain.upload.terrain, terrain.transform);
   }
 
   /** Query the ground plane in Studio world units, against the submitted terrain. */

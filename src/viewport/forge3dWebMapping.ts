@@ -1,6 +1,6 @@
 import type { CameraInput, TerrainDataset, TerrainHeightmapInput, TerrainMaterialImage, TerrainOverlayLayerInput, TerrainOverlaysInput } from "@forge3d/web";
 import { BoxGeometry, Euler, MathUtils, Matrix3, Matrix4, Vector3 } from "three";
-import type { ViewportObject, ViewportTerrain } from "./viewportState.ts";
+import type { ViewportDimensions, ViewportObject, ViewportTerrain } from "./viewportState.ts";
 import type { TerrainPreview, ViewportMode } from "../bridge/types";
 import { TERRAIN_VIEW_SIZE } from "./viewMath.ts";
 
@@ -346,6 +346,16 @@ export function terrainInput(preview: TerrainPreview, zScale: number, clay: Trip
     },
     overlays: appearance.drape ? imageryOverlays(appearance.drape) : layers?.length ? { layers } : undefined,
   };
+}
+
+/** Fit the complete viewport with uniformly scaled framebuffer pixels.
+ * The centre stays fixed and the viewport clips the excess on just one axis. */
+export function framebufferProjection({width,height,cssWidth,cssHeight}: ViewportDimensions, verticalFov: number) {
+  const aspectRatio = (width * cssHeight) / (height * cssWidth);
+  const stretchX = Math.max(1, aspectRatio), stretchY = Math.max(1, 1 / aspectRatio);
+  const fovYDegrees = stretchY === 1 ? verticalFov :
+    MathUtils.radToDeg(2 * Math.atan(stretchY * Math.tan(MathUtils.degToRad(verticalFov) / 2)));
+  return { stretchX, stretchY, fovYDegrees };
 }
 
 export function cameraInput(position: Triple, target: Triple, up: Triple, fov: number,

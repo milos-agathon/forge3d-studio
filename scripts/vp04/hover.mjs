@@ -21,25 +21,30 @@ export async function checkRoundedMesh(cdp, field, until) {
   return heights;
 }
 
-export async function checkHover(cdp, field, until, plateauReadout) {
+export async function checkHover(cdp, field, until, plateauReadout, backend = "three") {
   const plateau = plateauReadout !== undefined;
-  if (!field) await selectThree(cdp, until);
+  const gpu = !field && backend === "webgpu";
+  if (!field && !gpu) await selectThree(cdp, until);
   const runtime = field ? "__vp01FieldDiagnostics().runtime" : "forge3dViewportDiagnostics().runtime";
   const data = await cdp.evaluate(`(async () => {
     const r = ${runtime};
     const x = ${plateau ? 3 : 12*(69.5/95-.5)}, z = ${plateau ? 0 : 12*960/2688*(18.5/95-.5)};
-    r.camera.position.set(x,${plateau ? 6 : 3},z+.001);
-    r.orbit.target.set(x,0,z);
-    r.orbit.update();
-    r.camera.updateMatrixWorld(true);
-    r.needsRender = true;
+    const eye = [x,${plateau ? 6 : 3},z+.001], aim = [x,0,z];
+    if (${gpu}) forge3dViewportDiagnostics().setOrbitPose(eye, aim);
+    else {
+      r.camera.position.fromArray(eye);
+      r.orbit.target.fromArray(aim);
+      r.orbit.update();
+      r.camera.updateMatrixWorld(true);
+      r.needsRender = true;
+    }
     await new Promise(ok => requestAnimationFrame(() => requestAnimationFrame(ok)));
-    const canvas = r.renderer.domElement, rect = canvas.getBoundingClientRect();
+    const canvas = ${gpu} ? document.querySelector(".viewport-canvas--terrain") : r.renderer.domElement, rect = canvas.getBoundingClientRect();
     const pixel = [rect.x+rect.width/2,rect.y+rect.height/2];
-    if (document.elementFromPoint(...pixel) !== canvas) throw Error("Hover missed the terrain canvas");
-    const mesh = [...r.objects.values()].filter(g=>g.visible).flatMap(g=>g.children).find(m=>m.userData.elevation);
-    const meshY = mesh.geometry.attributes.position.getY(25*96+70);
-    return {pixel, meshY, camera:r.camera.position.toArray(), aim:r.orbit.target.toArray(),
+    if (!${gpu} && document.elementFromPoint(...pixel) !== canvas) throw Error("Hover missed the terrain canvas");
+    const mesh = r && [...r.objects.values()].filter(g=>g.visible).flatMap(g=>g.children).find(m=>m.userData.elevation);
+    const meshY = mesh?.geometry.attributes.position.getY(25*96+70);
+    return {pixel, meshY, camera:r?.camera.position.toArray() ?? forge3dViewportDiagnostics().frame.camera.eye, aim:r?.orbit.target.toArray() ?? forge3dViewportDiagnostics().frame.camera.aim.orbitTarget,
       size:[canvas.width,canvas.height], dpr:devicePixelRatio,
       backend:document.querySelector("[data-viewport-backend]")?.textContent ?? "Field Instrument"};
   })()`);

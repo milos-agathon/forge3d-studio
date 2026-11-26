@@ -11,7 +11,7 @@ import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 import { FREE_VIEW_FOCUS_DISTANCE, FreeCamera, type CameraDrag } from "./freeCamera";
 import { ForgeTerrainViewport, viewportErrorReason, type TerrainPresentation } from "./forge3dWebViewport";
 import { cubeParentWorld, studioUnitsPerGroundUnit, terrainGroundSpan, terrainVertexRelief, type RendererPreference } from "./forge3dWebMapping";
-import { assetRevision, boundedTerrainResolution, firstVisibleTerrain, nativeRenderView, sceneObjectVisibility, terrainSampleRevision, validateTerrainPreview, viewportDimensions, ViewportModel,
+import { assetRevision, boundedTerrainResolution, firstVisibleTerrain, nativeRenderView, sameCursorTerrain, sceneObjectVisibility, terrainSampleRevision, validateTerrainPreview, viewportDimensions, ViewportModel,
   type TerrainPreviewRequest, type ViewportDimensions, type ViewportFrame, type ViewportTerrain } from "./viewportState";
 import { editorDepthWinner, editorPrimitiveVisible, editorRasterDepths } from "./editorDepthWinner";
 import { canvasPixel, pickEditor, type StudioHit } from "./viewportPicking";
@@ -148,6 +148,7 @@ interface Runtime {
 }
 
 interface EditorViewport {
+  cursorElevation(clientX: number, clientY: number, camera: THREE.PerspectiveCamera): number | null;
   resize(dimensions: ViewportDimensions): void;
   update(): boolean;
   present(frame: TerrainPresentation | undefined, previewError?: string, camera?: THREE.PerspectiveCamera): void;
@@ -1273,7 +1274,10 @@ export function Viewport3D({ preference, onBackend }: {
     terrainCanvas.className = "viewport-canvas viewport-canvas--terrain";
     terrainCanvas.setAttribute("aria-hidden", "true");
     terrainCanvas.hidden = true;
-    container.insertBefore(terrainCanvas, canvas);
+    const terrainSurface = document.createElement("div");
+    terrainSurface.className = "viewport-terrain-surface";
+    terrainSurface.append(terrainCanvas);
+    container.insertBefore(terrainSurface, canvas);
     let dirty = true;
     let mounted = true;
     const invalidate = () => { dirty = true; };
@@ -1335,15 +1339,16 @@ export function Viewport3D({ preference, onBackend }: {
     viewStore.cancelTransformPreview = () => transformHandles.interrupt();
     hostSyncRef.current = () => {
       terrainViewport.sync(view());
+      if (pointer && !hoverFrameCurrent()) clearHover();
       invalidate();
     };
     const view = () => {
       const runtime = runtimeRef.current;
       const frame = viewport.current;
-      return { frame, preference: preferenceRef.current, sampling: previewResolutionRef.current, clay: CLAY,
+      return { frame, projectionCamera: camera, preference: preferenceRef.current, sampling: previewResolutionRef.current, clay: CLAY,
         objectPreview: transformHandles.preview,
         background: frame.settings.mode === "solid" ? SOLID_BG : MATERIAL_BG,
-        editor: runtime ? { objects: runtime.objects, projectionCamera: camera,
+        editor: runtime ? { objects: runtime.objects,
           sunShadowsDisabled: runtime.glStep >= GPU_STEP_WITHOUT_SUN_SHADOWS,
           skyEnabled: !!runtime.scene.environment } : undefined,
         editorError: editorErrorRef.current };
@@ -1418,17 +1423,22 @@ export function Viewport3D({ preference, onBackend }: {
     let resizePending = true;
     let observedDpr: number | undefined;
     let lastDimensions: ViewportDimensions | undefined;
+    let layoutBounds: DOMRectReadOnly | undefined;
     const observer = new ResizeObserver(() => { resizePending = true; });
     observer.observe(container);
     const resize = (dpr: number) => {
       resizePending = false;
       observedDpr = dpr;
+      const bounds = terrainSurface.getBoundingClientRect();
+      const layoutChanged = bounds.width !== layoutBounds?.width || bounds.height !== layoutBounds?.height ||
+        bounds.left !== layoutBounds?.left || bounds.top !== layoutBounds?.top;
+      layoutBounds = bounds;
       const width = container.clientWidth;
       const height = container.clientHeight;
-      if (!width || !height) return;
+      if (!width || !height) return layoutChanged;
       const dimensions = viewportDimensions(width, height, dpr);
       if (lastDimensions?.cssWidth === width && lastDimensions.cssHeight === height &&
-          lastDimensions.pixelRatio === dimensions.pixelRatio) return;
+          lastDimensions.pixelRatio === dimensions.pixelRatio) return layoutChanged;
       lastDimensions = dimensions;
       viewport.setDimensions(dimensions);
       camera.aspect = width / height;
@@ -1436,12 +1446,13 @@ export function Viewport3D({ preference, onBackend }: {
       editorRef.current?.resize(dimensions);
       setSize({ width, height });
       invalidate();
+      return layoutChanged;
     };
 
     // Orbit damping can move the live camera below its redraw threshold.
     // Both pickers must use the pose that produced the displayed pixels.
     const displayedCamera = new THREE.PerspectiveCamera();
-    let displayed: { frame: ViewportFrame; orientation: THREE.QuaternionTuple; gpu: boolean; revision: number } | undefined;
+    let displayed: { frame: ViewportFrame; orientation: THREE.QuaternionTuple; gpu: boolean; preference: RendererPreference; revision: number } | undefined;
     let lastPick: { pixel: [number, number]; hit: StudioHit | null; projectGeneration: number } | undefined;
     let revision = 0;
     let lastTerrain: TerrainPresentation | undefined;
@@ -1463,6 +1474,37 @@ export function Viewport3D({ preference, onBackend }: {
     const inputSurface = (event: Event) =>
       event.target === canvas || event.target === container || event.target === terrainCanvas ||
       grip.parentElement!.contains(event.target as Node);
+    let lastSample = -Infinity;
+    let hoverTimer: number | undefined;
+    let pointer: [number, number] | undefined;
+    const clearHover = () => {
+      window.clearTimeout(hoverTimer);
+      hoverTimer = undefined;
+      pointer = undefined;
+      setCursorElevation(null);
+    };
+    const orbitPointers = new Set<number>();
+    const hoverSuspended = () => drag || orbitPointers.size || transformHandles.active ||
+      runtimeRef.current?.gizmo.dragging || viewportModeRef.current === "rendered";
+    const hoverFrameCurrent = () => displayed && displayed.preference === preferenceRef.current &&
+      (!displayed.gpu || !terrainCanvas.hidden) && sameCursorTerrain(displayed.frame, viewport.current);
+    const sampleHover = () => {
+      hoverTimer = undefined;
+      if (!pointer || !displayed || !hoverFrameCurrent() || hoverSuspended()) {
+        clearHover();
+        return;
+      }
+      const remaining = 60 - (performance.now() - lastSample);
+      if (remaining > 0) {
+        hoverTimer = window.setTimeout(sampleHover, Math.ceil(remaining));
+        return;
+      }
+      lastSample = performance.now();
+      const [x, y] = pointer;
+      const metres = displayed.gpu ? terrainViewport.cursorElevation(displayed.frame, x, y)
+        : editorRef.current?.cursorElevation(x, y, displayedCamera);
+      setCursorElevation(metres ?? null);
+    };
     let controlHeld = false;
     let shiftHeld = false;
     const navigationKey = (event: KeyboardEvent) => {
@@ -1484,6 +1526,8 @@ export function Viewport3D({ preference, onBackend }: {
       }
     };
     const blur = () => {
+      clearHover();
+      orbitPointers.clear();
       shiftHeld = false;
       controlHeld = false;
       if (owner === "fly" && (drag || flyKeys.size)) finishCameraMove();
@@ -1506,8 +1550,8 @@ export function Viewport3D({ preference, onBackend }: {
     const contextMenu = (event: MouseEvent) => {
       if (hostNavigates() && inputSurface(event)) event.preventDefault();
     };
-    const orbitPointers = new Set<number>();
     const pointerDown = (event: PointerEvent) => {
+      clearHover();
       if (transformHandles.active || (inputSurface(event) && transformHandles.begin(event))) {
         endDrag();
         // The drag plane belongs to this submission. Discard any wheel or
@@ -1545,8 +1589,10 @@ export function Viewport3D({ preference, onBackend }: {
       pressRef.current = canPick
         ? { id: event.pointerId, x: event.clientX, y: event.clientY, generation: viewport.current.projectGeneration } : null;
     };
+    // OrbitControls captures the first contact. Later contacts can finish outside the viewport.
+    const releaseOrbitPointer = (event: PointerEvent) => { orbitPointers.delete(event.pointerId); };
     const pointerCancel = (event: PointerEvent) => {
-      orbitPointers.delete(event.pointerId);
+      clearHover();
       if (drag?.id === event.pointerId) endDrag();
       pressRef.current = null;
       transformHandles.cancel(event);
@@ -1564,9 +1610,26 @@ export function Viewport3D({ preference, onBackend }: {
     };
     const exceedsClickRadius = (press: { x: number; y: number }, point: PointerEvent) =>
       Math.hypot(point.clientX - press.x, point.clientY - press.y) > 4;
+    const updateHover = (event: PointerEvent, overViewport: boolean) => {
+      if (event.buttons || hoverSuspended() || !overViewport) {
+        if (pointer) clearHover();
+      } else {
+        pointer = [event.clientX, event.clientY];
+        if (hoverTimer === undefined) sampleHover();
+      }
+    };
+    const pointerEnter = (event: PointerEvent) => {
+      // Layout changes can expose a stationary pointer. Skip the enter events
+      // delivered to ancestors of the actual hit (for example, above a toolbar).
+      if (event.pointerType !== "touch" && event.target === container.ownerDocument.elementFromPoint(event.clientX, event.clientY)) {
+        updateHover(event, inputSurface(event));
+      }
+    };
     const pointerMove = (event: PointerEvent) => {
+      const overViewport = inputSurface(event);
+      updateHover(event, overViewport);
       if (transformHandles.active) { transformHandles.move(event); return; }
-      if (!drag && !event.buttons) transformHandles.hover(inputSurface(event) ? event : undefined);
+      if (!drag && !event.buttons) transformHandles.hover(overViewport ? event : undefined);
       const press = pressRef.current;
       if (press?.id === event.pointerId &&
           (exceedsClickRadius(press, event) || event.getCoalescedEvents?.().some(point => exceedsClickRadius(press, point)))) {
@@ -1586,7 +1649,6 @@ export function Viewport3D({ preference, onBackend }: {
       }
     };
     const pointerUp = (event: PointerEvent) => {
-      orbitPointers.delete(event.pointerId);
       if (drag?.id === event.pointerId) {
         const looking = drag.kind === "look";
         endDrag();
@@ -1621,19 +1683,20 @@ export function Viewport3D({ preference, onBackend }: {
       if (!pixel || !current()) return;
 
       const pick = presentation.gpu ? terrainViewport.pick(frame, pixel) : undefined;
+      const editorPixel = runtimeRef.current && canvasPixel(event.clientX, event.clientY, canvas.getBoundingClientRect(), dimensions);
       const additive = event.shiftKey || event.ctrlKey || event.metaKey;
       const selectedIds = async () => {
         const gpu = await pick;
         if (!current() || (presentation.gpu && !gpu)) return;
         const owned = gpu?.visibleIds ?? [];
-        const hit = runtime ? pickEditor(displayedCamera, dimensions, pixel, frame.objects, runtime.objects,
+        const hit = runtime && editorPixel ? pickEditor(displayedCamera, dimensions, editorPixel, frame.objects, runtime.objects,
           owned, gpu?.revision ?? presentation.revision, {
             pointSizeRange: runtime.pointSizeRange, maxLineWidth: runtime.maxLineWidth,
             gpuHit: gpu?.hit,
-            rasterDepths: candidates => editorRasterDepths(runtime, displayedCamera, dimensions, pixel, candidates),
+            rasterDepths: candidates => editorRasterDepths(runtime, displayedCamera, dimensions, editorPixel, candidates),
             primitiveVisible: (object, offset, instanceId) => editorPrimitiveVisible(runtime.renderer, runtime.depthBits, displayedCamera,
-              dimensions, pixel, object, offset, instanceId),
-            resolveDepth: candidates => editorDepthWinner(runtime, displayedCamera, dimensions, pixel, candidates, owned),
+              dimensions, editorPixel, object, offset, instanceId),
+            resolveDepth: candidates => editorDepthWinner(runtime, displayedCamera, dimensions, editorPixel, candidates, owned),
           })
           : gpu?.hit ?? null;
         if (import.meta.env.DEV) lastPick = { pixel, hit, projectGeneration: frame.projectGeneration };
@@ -1641,6 +1704,8 @@ export function Viewport3D({ preference, onBackend }: {
       };
       void actionsRef.current.select({ pick: selectedIds(), isCurrent: current }, additive);
     };
+    container.addEventListener("pointerenter", pointerEnter, true);
+    container.addEventListener("pointerleave", clearHover);
     container.addEventListener("pointerdown", pointerDown, true);
     container.addEventListener("lostpointercapture", navigationCaptureLost);
     container.addEventListener("contextmenu", contextMenu);
@@ -1649,6 +1714,8 @@ export function Viewport3D({ preference, onBackend }: {
     window.addEventListener("keyup", navigationKey, true);
     window.addEventListener("focusin", focusChanged);
     window.addEventListener("blur", blur);
+    container.ownerDocument.addEventListener("pointerup", releaseOrbitPointer, true);
+    container.ownerDocument.addEventListener("pointercancel", releaseOrbitPointer, true);
     container.ownerDocument.addEventListener("pointermove", pointerMove, true);
     container.addEventListener("pointerup", pointerUp);
     container.addEventListener("pointercancel", pointerCancel);
@@ -1658,7 +1725,11 @@ export function Viewport3D({ preference, onBackend }: {
     const drawFrame = () => {
       // A display scale change can leave the CSS box unchanged.
       const dpr = window.devicePixelRatio;
-      if (resizePending || dpr !== observedDpr) resize(dpr);
+      const layoutChanged = (resizePending || dpr !== observedDpr) && resize(dpr);
+      if (layoutChanged && pointer && layoutBounds) {
+        const [x, y] = pointer;
+        if (x < layoutBounds.left || x >= layoutBounds.right || y < layoutBounds.top || y >= layoutBounds.bottom) clearHover();
+      }
       const editor = editorRef.current;
       const runtime = runtimeRef.current;
       const moved = !transformHandles.active && editor?.update();
@@ -1667,6 +1738,8 @@ export function Viewport3D({ preference, onBackend }: {
       if (runtime) runtime.selectionNeedsRender = false;
       if (!dirty && !navigationChanged && !moved && !runtime?.needsRender && !lost) {
         if (redrawSelection && displayed) editor?.present(lastTerrain, lastPreviewError, displayedCamera);
+        // CSS can remap the existing pixels without resizing or submitting a new buffer.
+        if (layoutChanged && pointer && hoverTimer === undefined) sampleHover();
         return;
       }
       dirty = false;
@@ -1690,9 +1763,18 @@ export function Viewport3D({ preference, onBackend }: {
       lastTerrain = presented;
       lastPreviewError = previewError;
       editor?.present(presented, previewError);
-      if (editor) displayedCamera.copy(camera, false);
+      if (pointer && (displayed?.gpu !== !!presented?.submitted || !hoverFrameCurrent())) clearHover();
+      const viewChanged = pointer && (layoutChanged || displayed?.frame.dimensions !== viewport.current.dimensions ||
+        !displayedCamera.position.equals(camera.position) || !displayedCamera.quaternion.equals(camera.quaternion) ||
+        !displayedCamera.projectionMatrix.equals(camera.projectionMatrix));
       displayed = presented?.submitted || editor
-        ? { frame: viewport.current, orientation: quaternion, gpu: !!presented?.submitted, revision: ++revision } : undefined;
+        ? { frame: viewport.current, orientation: quaternion, gpu: !!presented?.submitted, preference: preferenceRef.current, revision: ++revision } : undefined;
+      if (displayed) {
+        displayedCamera.copy(camera, false);
+        // A stationary pointer sees the newly presented view. A pending sample
+        // already reads this presentation and the latest pointer at its deadline.
+        if (viewChanged && hoverTimer === undefined) sampleHover();
+      }
     };
     // OrbitControls integrates its remaining damping on update, even while
     // disabled. Consume it before handing the current pose to another owner.
@@ -1737,6 +1819,7 @@ export function Viewport3D({ preference, onBackend }: {
       syncMode(recordCameraId) {
         const next = flyModeRef.current ? "fly" : cameraViewRef.current ? "camera" : "orbit";
         if (next !== owner) {
+          clearHover();
           stopOrbit();
           lookPending = false;
           flyKeys.clear();
@@ -1855,6 +1938,9 @@ export function Viewport3D({ preference, onBackend }: {
       viewStore.cancelTransformPreview = null;
       grip.removeEventListener("lostpointercapture", captureLost);
       window.removeEventListener("keydown", cancelOnEscape, true);
+      clearHover();
+      container.removeEventListener("pointerenter", pointerEnter, true);
+      container.removeEventListener("pointerleave", clearHover);
       container.removeEventListener("pointerdown", pointerDown, true);
       container.removeEventListener("lostpointercapture", navigationCaptureLost);
       container.removeEventListener("contextmenu", contextMenu);
@@ -1863,6 +1949,8 @@ export function Viewport3D({ preference, onBackend }: {
       window.removeEventListener("keyup", navigationKey, true);
       window.removeEventListener("focusin", focusChanged);
       window.removeEventListener("blur", blur);
+      container.ownerDocument.removeEventListener("pointerup", releaseOrbitPointer, true);
+      container.ownerDocument.removeEventListener("pointercancel", releaseOrbitPointer, true);
       container.ownerDocument.removeEventListener("pointermove", pointerMove, true);
       container.removeEventListener("pointerup", pointerUp);
       container.removeEventListener("pointercancel", pointerCancel);
@@ -1874,7 +1962,7 @@ export function Viewport3D({ preference, onBackend }: {
       viewStore.resolve = null;
       viewStore.cameraTransform = null;
       terrainViewport.dispose();
-      terrainCanvas.remove();
+      terrainSurface.remove();
       if (import.meta.env.DEV) Reflect.deleteProperty(window, "forge3dViewportDiagnostics");
     };
   }, []);
@@ -2068,49 +2156,22 @@ export function Viewport3D({ preference, onBackend }: {
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
 
-    // Cursor readout: elevation of the terrain under the pointer, sampled at
-    // most every 60 ms and never while a drag is running. A move that lands
-    // inside the 60 ms window is sampled when the window closes, so the
-    // readout always ends on where the pointer stopped.
-    let hoverAt = 0;
-    let hoverTimer: number | undefined;
-    const sampleHover = (clientX: number, clientY: number) => {
-      hoverAt = performance.now();
+    const cursorElevation: EditorViewport["cursorElevation"] = (clientX, clientY, displayedCamera) => {
       const rect = canvas.getBoundingClientRect();
       pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(pointer, camera);
+      raycaster.setFromCamera(pointer, displayedCamera);
       const terrains: THREE.Object3D[] = [];
-      // A hidden terrain is not under the cursor: traverseVisible skips it.
-      for (const object of runtime.objects.values()) {
-        object.traverseVisible((child) => {
-          if (child.userData.elevation) terrains.push(child);
+      for (const [id, terrain] of viewport.current.terrains) {
+        runtime.objects.get(id)?.traverseVisible(child => {
+          if (child.userData.forgeTerrain === terrain && child.userData.elevation) terrains.push(child);
         });
       }
       const hit = terrains.length ? raycaster.intersectObjects(terrains, false)[0] : undefined;
-      if (!hit) {
-        setCursorElevation(null);
-        return;
-      }
+      if (!hit) return null;
       const { min, scale } = hit.object.userData.elevation as { min: number; scale: number };
-      setCursorElevation(min + hit.object.worldToLocal(hit.point.clone()).y / scale);
+      return min + hit.object.worldToLocal(hit.point.clone()).y / scale;
     };
-    const onPointerMove = (event: PointerEvent) => {
-      if (event.buttons) return;
-      window.clearTimeout(hoverTimer);
-      const wait = 60 - (performance.now() - hoverAt);
-      if (wait <= 0) sampleHover(event.clientX, event.clientY);
-      else {
-        const { clientX, clientY } = event;
-        hoverTimer = window.setTimeout(() => sampleHover(clientX, clientY), wait);
-      }
-    };
-    canvas.addEventListener("pointermove", onPointerMove);
-    const onPointerLeave = () => {
-      window.clearTimeout(hoverTimer);
-      setCursorElevation(null);
-    };
-    canvas.addEventListener("pointerleave", onPointerLeave);
 
     const update = () => {
       const moved = orbit.enabled && !orbitAwaitingGesture.current && !gizmo.dragging && orbit.update();
@@ -2269,13 +2330,10 @@ export function Viewport3D({ preference, onBackend }: {
         }
       }
     };
-    editorRef.current = { resize, update, present };
+    editorRef.current = { resize, update, present, cursorElevation };
 
     return () => {
       editorRef.current = null;
-      canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerleave", onPointerLeave);
-      window.clearTimeout(hoverTimer);
       gizmo.detach();
       gizmo.dispose();
       orbit.dispose();
@@ -2382,9 +2440,6 @@ export function Viewport3D({ preference, onBackend }: {
         removeObjectGroup(runtime.scene, group);
         runtime.scene.add(group);
       }
-      // The cursor readout measures the terrain; once it is hidden the last
-      // reading no longer describes anything on screen.
-      if (object.kind.type === "terrain" && !group.visible) setCursorElevation(null);
       applyTransform(group, object.transform);
 
       // The preview's elevation ramp: the engine's own LUT, sampled by the
@@ -3387,7 +3442,7 @@ export function Viewport3D({ preference, onBackend }: {
                 <dd>{footprintReadout}</dd>
               </div>
             )}
-            {editorAvailable && !renderedMode && (
+            {!renderedMode && (
               <div className="viewport-readout__cursor">
                 <dt>CURSOR</dt>
                 <dd>
