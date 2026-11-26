@@ -21,6 +21,7 @@ import {
   newRenderJob,
   nextQueuedJob,
   patchJob,
+  renderJobFailure,
   type RenderJob,
 } from "./renderQueue";
 import type {
@@ -975,17 +976,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         } catch (cause) {
           // A frame that fails because the job was cancelled (or its project
           // closed under it) is a cancellation, not an error to shout about.
-          const stale = job.sessionId !== sessionIdRef.current;
-          const cancelled = cancelledJobs.current.has(job.id) || stale;
-          updateJob(job.id, {
-            status: cancelled ? "cancelled" : "failed",
-            error: cancelled
-              ? stale ? "Project changed before render" : null
-              : cause instanceof Error
-                ? cause.message
-                : String(cause),
-          });
-          if (!cancelled) fail(cause);
+          const failure = renderJobFailure(
+            job,
+            sessionIdRef.current,
+            cancelledJobs.current.has(job.id),
+            cause,
+          );
+          updateJob(job.id, failure);
+          if (failure.status !== "cancelled") fail(cause);
         } finally {
           jobSpecs.current.delete(job.id);
           cancelledJobs.current.delete(job.id);

@@ -40,6 +40,11 @@ pub struct AutosaveStatus {
     pub directory: String,
 }
 
+/// Stable wire marker for a command rejected because its project was replaced.
+/// The queue classifies this as cancellation even if React has not published
+/// the replacement session yet.
+pub(crate) const SESSION_MISMATCH: &str = "studio.session_mismatch";
+
 fn lock(state: &AppState) -> Result<std::sync::MutexGuard<'_, Session>, String> {
     state
         .session
@@ -52,7 +57,9 @@ fn require_session(session: &Session, expected: Option<u64>) -> Result<u64, Stri
     match session.active_id() {
         Some(id) if expected.is_none() || expected == Some(id) => Ok(id),
         None if expected.is_none() => Err("no project is open".to_owned()),
-        _ => Err("the project changed before the command could be applied".to_owned()),
+        _ => Err(format!(
+            "{SESSION_MISMATCH}: the project changed before the command could be applied"
+        )),
     }
 }
 
@@ -541,11 +548,8 @@ pub fn set_sun_from_solar(
         let session = lock(&state)?;
         require_session(&session, session_id)?
     };
-    let engine = forge.probe(false);
-    if !engine.available {
-        return Err(engine.detail);
-    }
-    let solar = crate::forge3d::solar_position(&engine.python, latitude, longitude, datetime_utc)?;
+    let engine = forge.solar_engine()?;
+    let solar = crate::forge3d::solar_position(&engine, latitude, longitude, datetime_utc)?;
     let rotation = studio_core::workspace::sun_rotation(solar.direction);
 
     let mut session = lock_project(&state, Some(issuing_session))?;
@@ -783,8 +787,8 @@ pub fn terrain_preview(
     path: String,
     resolution: Option<u32>,
 ) -> Result<serde_json::Value, String> {
-    let python = forge.probe(false).python;
-    crate::forge3d::sample_terrain(&python, &path, resolution.unwrap_or(96))
+    let engine = forge.probe(false);
+    crate::forge3d::sample_terrain(&engine, &path, resolution.unwrap_or(96))
 }
 
 /// A polygon layer: filled areas draped on the terrain, holes and all.
@@ -859,9 +863,9 @@ pub fn vector_geometry(
     label_field: Option<String>,
     legend_field: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let python = forge.probe(false).python;
+    let engine = forge.probe(false);
     crate::forge3d::vector_geometry(
-        &python,
+        &engine,
         &dem_path,
         &vector_path,
         label_field.as_deref().unwrap_or(""),
@@ -878,8 +882,8 @@ pub fn polygon_geometry(
     dem_path: String,
     vector_path: String,
 ) -> Result<serde_json::Value, String> {
-    let python = forge.probe(false).python;
-    crate::forge3d::polygon_geometry(&python, &dem_path, &vector_path)
+    let engine = forge.probe(false);
+    crate::forge3d::polygon_geometry(&engine, &dem_path, &vector_path)
 }
 
 /// The graticule for the DEM's CRS and bounds, from the engine's own
@@ -894,8 +898,8 @@ pub fn graticule_geometry(
     if !interval_deg.is_finite() || interval_deg <= 0.0 {
         return Err("the graticule interval must be a positive number of degrees".to_owned());
     }
-    let python = forge.probe(false).python;
-    crate::forge3d::graticule_geometry(&python, &dem_path, interval_deg, labels.unwrap_or(true))
+    let engine = forge.probe(false);
+    crate::forge3d::graticule_geometry(&engine, &dem_path, interval_deg, labels.unwrap_or(true))
 }
 
 /// Probe a remote DEM with the engine's native COG reader. The dialog shows
@@ -905,8 +909,8 @@ pub fn remote_cog_info(
     forge: State<'_, Forge3dState>,
     url: String,
 ) -> Result<crate::forge3d::RemoteCogInfo, String> {
-    let python = forge.probe(false).python;
-    crate::forge3d::remote_cog_info(&python, &url)
+    let engine = forge.probe(false);
+    crate::forge3d::remote_cog_info(&engine, &url)
 }
 
 /// A remote DEM's preview, read through the engine's range reader: the
@@ -917,8 +921,8 @@ pub fn remote_cog_preview(
     url: String,
     resolution: Option<u32>,
 ) -> Result<serde_json::Value, String> {
-    let python = forge.probe(false).python;
-    crate::forge3d::remote_cog_preview(&python, &url, resolution.unwrap_or(96))
+    let engine = forge.probe(false);
+    crate::forge3d::remote_cog_preview(&engine, &url, resolution.unwrap_or(96))
 }
 
 /// The engine's dataset registry (bundled + downloadable samples).
@@ -927,8 +931,8 @@ pub fn remote_cog_preview(
 pub fn dataset_list(
     forge: State<'_, Forge3dState>,
 ) -> Result<Vec<crate::forge3d::DatasetInfo>, String> {
-    let python = forge.probe(false).python;
-    crate::forge3d::dataset_list(&python)
+    let engine = forge.probe(false);
+    crate::forge3d::dataset_list(&engine)
 }
 
 /// The engine's colormap, sampled into the stops the Material preview paints.
@@ -937,8 +941,8 @@ pub fn colormap_stops(
     forge: State<'_, Forge3dState>,
     name: String,
 ) -> Result<Vec<[f64; 3]>, String> {
-    let python = forge.probe(false).python;
-    crate::forge3d::colormap_stops(&python, &name)
+    let engine = forge.probe(false);
+    crate::forge3d::colormap_stops(&engine, &name)
 }
 
 /// Per-parameter capability table: what each material/light/camera parameter
@@ -996,8 +1000,8 @@ pub fn forge3d_probe(forge: State<'_, Forge3dState>, force: Option<bool>) -> Eng
 /// engine's own install instructions.
 #[tauri::command(async)]
 pub fn dataset_path(forge: State<'_, Forge3dState>, name: String) -> Result<String, String> {
-    let python = forge.probe(false).python;
-    crate::forge3d::dataset_fetch(&python, &name)
+    let engine = forge.probe(false);
+    crate::forge3d::dataset_fetch(&engine, &name)
 }
 
 // ---------------------------------------------------------------------- render
@@ -1027,7 +1031,8 @@ pub fn import_terrain_dem(
     terrain_generation: Option<u64>,
 ) -> Result<Option<SessionState>, String> {
     import_dem_with_sampler(&state, path, session_id, terrain_generation, |path| {
-        crate::forge3d::sample_terrain(&forge.probe(false).python, path, 48)
+        let engine = forge.probe(false);
+        crate::forge3d::sample_terrain(&engine, path, 48)
     })
 }
 
@@ -1341,9 +1346,9 @@ pub fn raster_preview(
     path: String,
     width: Option<u32>,
 ) -> Result<MeshFilePayload, String> {
-    let python = forge.probe(false).python;
+    let engine = forge.probe(false);
     let width = width.unwrap_or(2048).clamp(64, 4096);
-    let bytes = crate::forge3d::raster_preview_png(&python, &path, width)?;
+    let bytes = crate::forge3d::raster_preview_png(&engine, &path, width)?;
     Ok(payload(
         path,
         studio_core::AssetKind::Orthophoto,
@@ -1440,7 +1445,7 @@ pub fn render_frame(
             source,
         )
     };
-    let python = forge.ready_python()?;
+    let engine = forge.ready_render_engine()?;
     let request = build_request(
         &handoff,
         &settings,
@@ -1451,7 +1456,7 @@ pub fn render_frame(
     )?;
     let quality = quality.unwrap_or_else(|| "final".to_owned());
     let mut frame = render.render(
-        &python,
+        &engine,
         &request.dem,
         &mut request.to_payload(&quality, None),
         crate::render::PREVIEW_TIMEOUT,
@@ -1490,7 +1495,7 @@ pub fn render_still(
         )
     };
 
-    let python = forge.ready_python()?;
+    let engine = forge.ready_render_engine()?;
 
     // Default output lives with the project, under renders/, and carries a
     // sidecar describing exactly what produced it.
@@ -1532,7 +1537,7 @@ pub fn render_still(
     )?;
     let mut payload = request.to_payload("final", Some(&target.to_string_lossy()));
     let mut frame = render.render(
-        &python,
+        &engine,
         &request.dem,
         &mut payload,
         crate::render::FRAME_TIMEOUT,
@@ -1590,7 +1595,7 @@ pub fn render_animation_frame(
             .ok_or_else(|| "no project is open".to_owned())?;
         (snapshot.project, snapshot.revision)
     };
-    let python = forge.ready_python()?;
+    let engine = forge.ready_render_engine()?;
     let frame = studio_core::timeline::evaluate(&mut project, frame);
 
     let handoff = studio_core::workspace::handoff(&project, revision, Workspace::Forge3d);
@@ -1616,7 +1621,7 @@ pub fn render_animation_frame(
 
     let quality = quality.unwrap_or_else(|| "final".to_owned());
     let mut written = render.render(
-        &python,
+        &engine,
         &request.dem,
         &mut request.to_payload(&quality, Some(&target.to_string_lossy())),
         crate::render::FRAME_TIMEOUT,
@@ -1671,6 +1676,22 @@ mod tests {
             path("Bryce_Canyon_1024.tif"),
             path("Bryce_Canyon.tif"),
         )
+    }
+
+    #[test]
+    fn replaced_project_errors_carry_a_stable_session_mismatch_marker() {
+        let (state, first, _, _) = terrain_import_fixture();
+        let second = lock(&state)
+            .unwrap()
+            .open_project(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../samples/bryce-terrain.studio3d"),
+            )
+            .unwrap();
+        assert_ne!(first.session_id, second.session_id);
+        let error = lock_project(&state, Some(first.session_id))
+            .err()
+            .expect("stale session must be rejected");
+        assert!(error.starts_with(SESSION_MISMATCH), "{error}");
     }
 
     #[test]

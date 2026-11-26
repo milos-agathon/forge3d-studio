@@ -181,14 +181,20 @@ The CI `bundle` job on `main` ships a `deb` artifact. Locally:
 ```bash
 npm run tauri:build -- --bundles deb
 sudo dpkg -i target/release/bundle/deb/*.deb
-GIT_LFS_SKIP_SMUDGE=1 python3 -m pip install --user \
+python3 -m venv "$HOME/forge3d-studio-venv"
+GIT_LFS_SKIP_SMUDGE=1 "$HOME/forge3d-studio-venv/bin/python" -m pip install \
   'forge3d @ git+https://github.com/milos-agathon/forge3d.git@9804091086364a1824ea8bb0e7f9f2a172fddf45' \
   rasterio pillow
+export FORGE3D_STUDIO_PYTHON="$HOME/forge3d-studio-venv/bin/python"
 ```
 
+For a desktop-menu launch, also set `FORGE3D_STUDIO_PYTHON` in your desktop
+session environment; the installer cannot export it into your shell or menu.
+
 Studio's renderer needs Rasterio for local GeoTIFFs and remote COGs, and Pillow
-for image output and cartography. `--engine-check` validates both before it
-reports the interpreter ready.
+for image output and cartography. A venv is required on Debian 12 and other
+installs whose system Python is externally managed; `--engine-check` validates
+both dependencies before it reports the interpreter ready.
 
 The `deb` is the bundle CI audits (`deb-audit` job: builds the deb, installs
 it with `dpkg -i`, validates the desktop entry, then runs `--engine-check` in
@@ -231,25 +237,27 @@ the intended honest behaviour, not a bug.
 the exact remedies it tried). Discovery order: `FORGE3D_STUDIO_PYTHON`
 (validated, never trusted blind) → ancestors' `.venv` → `PATH python3` → `PATH python`.
 No auto-install, no `sudo pip`, no bare-python fallback. One nuance: when the
-shell runs inside a repo checkout, the probe imports the checkout's
-`python/forge3d` (a dev convenience), with your own `PYTHONPATH` kept as the
-tail; the installed bundle has no checkout above it, so a stranger probes
-the interpreter alone. The probe is also what `dpkg -i` expects you to run
-next — the postinst names it.
+shell runs inside a repo checkout, the probe tries the checkout's
+`python/forge3d` first (a dev convenience), with your own `PYTHONPATH` kept as the
+tail. If that package has no loadable native extension, the same interpreter is
+probed again without the checkout so its installed wheel can be used; the
+renderer reuses the exact search path that passed. The probe is also what
+`dpkg -i` expects you to run next — the postinst names it.
 
 Troubleshooting:
 
 | `--engine-check` says | Fix |
 |---|---|
-| `fail: import forge3d failed: No module named 'forge3d'` | `pip install --user forge3d rasterio pillow` |
-| `fail: import forge3d failed: No module named 'numpy'` | `pip install --user forge3d` (the wheel brings NumPy) |
-| `fail: Studio requires rasterio and Pillow` | Install the named missing package in the same interpreter. |
+| `fail: import forge3d failed: No module named 'forge3d'` | Create a venv and install `forge3d rasterio pillow` with its Python (see above). |
+| `fail: import forge3d failed: No module named 'numpy'` | Reinstall `forge3d` in the same venv (the wheel brings NumPy). |
+| `fail: Studio requires rasterio and Pillow` | Install the named missing package in the same interpreter, then click the engine status chip to recheck. |
 | `fail: could not run python3: No such file or directory` | `apt-get install python3` |
 | `fail: <path> did not answer the engine probe within 20s` | interpreter hangs on import — try a plain venv; the probe times out by design |
 
 If the app opens with **"the engine is unavailable"** in the status bar, run
 `forge3d-studio-shell --engine-check` — the shell is telling the truth about
-what it sees; the remedy is one `pip install` away.
+what it sees. After repairing the interpreter, click the status chip to force a
+fresh probe before retrying the render.
 
 ### Tests
 

@@ -16,6 +16,7 @@ import {
   newRenderJob,
   nextQueuedJob,
   patchJob,
+  renderJobFailure,
   queueSummary,
 } from "./renderQueue.ts";
 
@@ -91,6 +92,19 @@ check(
 );
 check("a done job has nothing to cancel", !canCancelJob({ ...sequence, status: "done" }));
 check("a failed job has nothing to cancel", !canCancelJob({ ...sequence, status: "failed" }));
+
+// A native session rejection is authoritative even when React has not yet
+// published project B. Both reply orders are cancellations, never failures.
+const mismatch = new Error("studio.session_mismatch: the project changed before the command could be applied");
+const afterSwitch = renderJobFailure({ ...still, status: "running" }, 2, false, mismatch);
+equal("mismatch after React switched is cancelled", afterSwitch.status, "cancelled");
+equal("mismatch after React switched has no error", afterSwitch.error, "Project changed before render");
+const beforeSwitch = renderJobFailure({ ...still, status: "running" }, 1, false, mismatch);
+equal("mismatch before React switched is cancelled", beforeSwitch.status, "cancelled");
+equal("mismatch before React switched has no error", beforeSwitch.error, "Project changed before render");
+const ordinary = renderJobFailure({ ...still, status: "running" }, 1, false, new Error("renderer crashed"));
+equal("ordinary failure stays failed", ordinary.status, "failed");
+equal("ordinary failure keeps its message", ordinary.error, "renderer crashed");
 
 // --- summary and clearing -------------------------------------------
 const mixed = [

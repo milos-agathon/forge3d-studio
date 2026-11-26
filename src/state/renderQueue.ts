@@ -95,6 +95,29 @@ export function canCancelJob(job: RenderJob): boolean {
   return job.status === "running" && job.kind === "sequence";
 }
 
+export interface RenderJobFailure {
+  status: "cancelled" | "failed";
+  error: string | null;
+}
+
+/** Classify an IPC failure without depending on React's publication order. */
+export function renderJobFailure(
+  job: RenderJob,
+  currentSessionId: number | undefined,
+  explicitlyCancelled: boolean,
+  cause: unknown,
+): RenderJobFailure {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const stale = job.sessionId !== currentSessionId || message.includes("studio.session_mismatch");
+  if (explicitlyCancelled || stale) {
+    return {
+      status: "cancelled",
+      error: stale ? "Project changed before render" : null,
+    };
+  }
+  return { status: "failed", error: message };
+}
+
 /** Counts for the queue header. */
 export function queueSummary(jobs: RenderJob[]): {
   queued: number;

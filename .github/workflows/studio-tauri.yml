@@ -108,10 +108,12 @@ jobs:
         run: |
           # No .venv anywhere above the checkout root and no engine in
           # ubuntu-latest's stock python3: this is the stranger's case.
-          ! forge3d-studio-shell --engine-check > out.txt
+          status=0
+          forge3d-studio-shell --engine-check > out.txt || status=$?
+          test "$status" -eq 1
           cat out.txt
-          EXPECTED="pip install --user forge3d rasterio pillow"
-          grep -q "$EXPECTED" out.txt || (echo "missing remedy line in --engine-check output"; exit 1)
+          EXPECTED='python3 -m venv "$HOME/forge3d-studio-venv"'
+          grep -qF "$EXPECTED" out.txt || (echo "missing venv remedy line in --engine-check output"; exit 1)
 
       - name: --engine-check succeeds with the engine in a fresh venv
         run: |
@@ -121,8 +123,10 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/missing-pillow"
           printf '%s\n' 'raise ImportError("Pillow intentionally unavailable")' > "$RUNNER_TEMP/missing-pillow/PIL.py"
-          ! PYTHONPATH="$RUNNER_TEMP/missing-pillow" FORGE3D_STUDIO_PYTHON="$HOME/stranger-venv/bin/python" \
-            forge3d-studio-shell --engine-check > missing-pillow.txt
+          status=0
+          PYTHONPATH="$RUNNER_TEMP/missing-pillow" FORGE3D_STUDIO_PYTHON="$HOME/stranger-venv/bin/python" \
+            forge3d-studio-shell --engine-check > missing-pillow.txt || status=$?
+          test "$status" -eq 1
           cat missing-pillow.txt
           grep -q "Studio requires rasterio and Pillow" missing-pillow.txt
 

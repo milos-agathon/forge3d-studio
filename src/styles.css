@@ -1995,6 +1995,20 @@ kbd {
   border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
+.status-chip--button {
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.status-chip--button:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 .status-dirty {
   color: var(--accent);
 }

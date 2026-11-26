@@ -660,7 +660,8 @@ async function cameraAndVisibilityControls(cdp, fixtures) {
   await hideTerrain(cdp);
   await settle(cdp, "s.object?.visible === false && !s.nativeView", "All terrain hidden");
   const emptyExport = join(out, "hidden-only-export.png");
-  for (const [command, args] of [["render_frame", { width: 320, height: 240 }], ["render_still", { path: emptyExport }]]) {
+  const sessionId = (await projectState(cdp)).sessionId;
+  for (const [command, args] of [["render_frame", { width: 320, height: 240 }], ["render_still", { path: emptyExport, sessionId }]]) {
     const error = await cdp.evaluate(`__TAURI_INTERNALS__.invoke(${e(command)}, ${e(args)}).then(() => null, String)`);
     assert.match(error, /no visible terrain to render/);
   }

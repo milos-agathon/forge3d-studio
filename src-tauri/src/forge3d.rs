@@ -187,7 +187,20 @@ def main():
         except Exception:
             version = "unknown"
     try:
+        import importlib
+        native = importlib.import_module("forge3d._forge3d")
+        if not hasattr(native, "TerrainRenderer"):
+            raise RuntimeError("the native module does not expose TerrainRenderer")
+    except Exception as exc:
+        print(json.dumps({
+            "ok": False,
+            "version": version,
+            "detail": "forge3d native module could not be loaded: %s" % (exc,),
+        }))
+        return
+    try:
         import rasterio
+        from rasterio import Env as RasterioEnv, open as rasterio_open
         from PIL import Image
     except Exception as exc:
         print(json.dumps({
@@ -273,6 +286,11 @@ pub struct EngineStatus {
     pub available: bool,
     /// Interpreter that was probed (the one Rendered mode will use).
     pub python: String,
+    /// Exact `PYTHONPATH` used by the successful probe. The renderer reuses
+    /// it, so a broken checkout cannot shadow the installed wheel at render
+    /// time after the probe fell back to that wheel.
+    #[serde(skip)]
+    pub(crate) python_path: Option<String>,
     pub package_version: Option<String>,
     pub viewer_binary: Option<String>,
     /// wgpu backend the engine selected, when the probe could reach the GPU.
@@ -311,14 +329,52 @@ impl Forge3dState {
         }
     }
 
-    /// Return the interpreter only when the cached probe says rendering can use it.
-    pub fn ready_python(&self) -> Result<String, String> {
+    /// A render retry may discover a dependency installed since Studio started.
+    pub fn ready_render_engine(&self) -> Result<EngineStatus, String> {
         let status = self.probe(false);
         if status.available {
-            Ok(status.python)
-        } else {
-            Err(status.detail)
+            return Ok(status);
         }
+        let refreshed = self.probe(true);
+        if refreshed.available {
+            Ok(refreshed)
+        } else {
+            Err(refreshed.detail)
+        }
+    }
+
+    /// Find an interpreter that can compute a solar position. This deliberately
+    /// does not require Rasterio, Pillow, a viewer binary, or a GPU.
+    pub fn solar_engine(&self) -> Result<EngineStatus, String> {
+        let mut best: Option<EngineStatus> = None;
+        for python in interpreter_candidates() {
+            for python_path in python_path_candidates() {
+                match probe_interpreter_with_script(
+                    &python,
+                    python_path.as_deref(),
+                    SOLAR_PROBE_SCRIPT,
+                ) {
+                    Ok(status) if status.available => return Ok(status),
+                    Ok(status) => {
+                        if best.is_none() {
+                            best = Some(status);
+                        }
+                    }
+                    Err(detail) => {
+                        if best.is_none() {
+                            best = Some(engine_status_from_probe(
+                                &python,
+                                python_path.clone(),
+                                &serde_json::json!({"ok": false, "detail": detail}),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        Err(best
+            .map(|status| status.detail)
+            .unwrap_or_else(|| "no Python interpreter was found".to_owned()))
     }
 
     /// Probe the engine once and cache the result.
@@ -335,37 +391,40 @@ impl Forge3dState {
         let mut best: Option<EngineStatus> = None;
 
         for python in interpreter_candidates() {
-            match probe_interpreter(&python) {
-                Ok(status) => {
-                    if status.available {
-                        if let Ok(mut guard) = self.engine.lock() {
-                            *guard = Some(status.clone());
+            for python_path in python_path_candidates() {
+                match probe_interpreter(&python, python_path.as_deref()) {
+                    Ok(status) => {
+                        if status.available {
+                            if let Ok(mut guard) = self.engine.lock() {
+                                *guard = Some(status.clone());
+                            }
+                            return status;
                         }
-                        return status;
+                        let better = status.package_version.is_some();
+                        let current = best
+                            .as_ref()
+                            .map(|entry| entry.package_version.is_some())
+                            .unwrap_or(false);
+                        if best.is_none() || (better && !current) {
+                            best = Some(status);
+                        }
                     }
-                    let better = status.package_version.is_some();
-                    let current = best
-                        .as_ref()
-                        .map(|entry| entry.package_version.is_some())
-                        .unwrap_or(false);
-                    if best.is_none() || (better && !current) {
-                        best = Some(status);
-                    }
-                }
-                Err(detail) => {
-                    if best.is_none() {
-                        best = Some(EngineStatus {
-                            available: false,
-                            python: python.clone(),
-                            package_version: None,
-                            viewer_binary: None,
-                            backend: None,
-                            adapter: None,
-                            denoise: None,
-                            software: None,
-                            features: None,
-                            detail,
-                        });
+                    Err(detail) => {
+                        if best.is_none() {
+                            best = Some(EngineStatus {
+                                available: false,
+                                python: python.clone(),
+                                python_path: None,
+                                package_version: None,
+                                viewer_binary: None,
+                                backend: None,
+                                adapter: None,
+                                denoise: None,
+                                software: None,
+                                features: None,
+                                detail,
+                            });
+                        }
                     }
                 }
             }
@@ -374,6 +433,7 @@ impl Forge3dState {
         let last = best.unwrap_or(EngineStatus {
             available: false,
             python: "python3".to_owned(),
+            python_path: None,
             package_version: None,
             viewer_binary: None,
             backend: None,
@@ -401,9 +461,9 @@ impl Forge3dState {
         if let Some(url) = preset.and_then(|id| id.strip_prefix("url:")) {
             // Keep the URL, actual byte length and full-source footprint.
             // Only the metadata and a coarse overview are read here.
-            let python = self.probe(false).python;
-            let info = remote_cog_info(&python, url)?;
-            let overview = remote_cog_preview(&python, url, 64)?;
+            let engine = self.probe(false);
+            let info = remote_cog_info(&engine, url)?;
+            let overview = remote_cog_preview(&engine, url, 64)?;
             let trimmed = url
                 .split(['?', '#'])
                 .next()
@@ -439,12 +499,12 @@ impl Forge3dState {
             }));
         }
         if let Some(name) = preset.and_then(|id| id.strip_prefix("dataset:")) {
-            let python = self.probe(false).python;
-            let title = dataset_list(&python)
+            let engine = self.probe(false);
+            let title = dataset_list(&engine)
                 .ok()
                 .and_then(|rows| rows.into_iter().find(|row| row.name == name))
                 .and_then(|row| row.filename);
-            let path = dataset_fetch(&python, name)?;
+            let path = dataset_fetch(&engine, name)?;
             return Ok(self.seed_for_absolute(PathBuf::from(path), title));
         }
         let relative = preset
@@ -503,8 +563,8 @@ impl Forge3dState {
             overlay: None,
         };
 
-        let python = self.probe(false).python;
-        match sample_terrain(&python, &path_text, 48) {
+        let engine = self.probe(false);
+        match sample_terrain(&engine, &path_text, 48) {
             Ok(value) => {
                 seed.span_metres_per_unit = non_metre_ground_unit(&value);
                 let width = value.get("width").and_then(|v| v.as_u64());
@@ -583,11 +643,12 @@ const SCRIPT_TIMEOUT: Duration = Duration::from_secs(30);
 /// (a DEM preview, a base64 PNG) can fill the pipe buffer and stall the child
 /// before it exits.
 fn run_script(
-    python: &str,
+    engine: &EngineStatus,
     script: &str,
     args: &[String],
     timeout: Duration,
 ) -> Result<(String, String), String> {
+    let python = engine.python.as_str();
     let mut command = Command::new(python);
     command
         .arg("-c")
@@ -596,7 +657,7 @@ fn run_script(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    configure_python_command(&mut command);
+    configure_python_command(&mut command, engine.python_path.as_deref());
 
     let mut child = command
         .spawn()
@@ -653,12 +714,12 @@ pub fn non_metre_ground_unit(preview: &serde_json::Value) -> Option<f64> {
 
 /// Sample a DEM into a heightfield for the Studio viewport.
 pub fn sample_terrain(
-    python: &str,
+    engine: &EngineStatus,
     path: &str,
     resolution: u32,
 ) -> Result<serde_json::Value, String> {
     let (stdout, stderr) = run_script(
-        python,
+        engine,
         PREVIEW_SCRIPT,
         &[path.to_owned(), resolution.to_string()],
         SCRIPT_TIMEOUT,
@@ -714,8 +775,8 @@ print(json.dumps({"ok": True, "name": token, "stops": stops}))
 "#;
 
 /// One-shot colormap sample. No GPU session: the preview only needs the ramp.
-pub fn colormap_stops(python: &str, name: &str) -> Result<Vec<[f64; 3]>, String> {
-    let (stdout, stderr) = run_script(python, COLORMAP_SCRIPT, &[name.to_owned()], SCRIPT_TIMEOUT)?;
+pub fn colormap_stops(engine: &EngineStatus, name: &str) -> Result<Vec<[f64; 3]>, String> {
+    let (stdout, stderr) = run_script(engine, COLORMAP_SCRIPT, &[name.to_owned()], SCRIPT_TIMEOUT)?;
     let line = stdout
         .lines()
         .find(|line| line.trim_start().starts_with('{'))
@@ -765,6 +826,22 @@ pub struct SolarPosition {
     pub daytime: bool,
 }
 
+/// Solar capability is independent of Rasterio/Pillow and the renderer.
+const SOLAR_PROBE_SCRIPT: &str = r#"
+import json
+try:
+    import forge3d
+    if not callable(getattr(forge3d, "sun_position", None)):
+        raise RuntimeError("this forge3d build does not provide sun_position")
+    print(json.dumps({
+        "ok": True,
+        "version": getattr(forge3d, "__version__", "unknown"),
+        "detail": "solar ephemeris available",
+    }))
+except Exception as exc:
+    print(json.dumps({"ok": False, "detail": "solar ephemeris unavailable: %s" % (exc,)}))
+"#;
+
 /// One-shot ephemeris call. No GPU session: the shell's solar button must not
 /// wait for the renderer service.
 const SOLAR_SCRIPT: &str = r#"
@@ -791,13 +868,13 @@ except Exception as exc:
 /// direction into the light's rotation (`workspace::sun_rotation`). The
 /// direction is in MapScene axes, so no azimuth conversion happens here.
 pub fn solar_position(
-    python: &str,
+    engine: &EngineStatus,
     latitude: f64,
     longitude: f64,
     datetime_utc: &str,
 ) -> Result<SolarPosition, String> {
     let (stdout, stderr) = run_script(
-        python,
+        engine,
         SOLAR_SCRIPT,
         &[
             latitude.to_string(),
@@ -1047,9 +1124,13 @@ except Exception as exc:
 "#;
 
 /// Decode a raster into a downsampled PNG for the Solid viewport's drape.
-pub fn raster_preview_png(python: &str, path: &str, width: u32) -> Result<Vec<u8>, String> {
+pub fn raster_preview_png(
+    engine: &EngineStatus,
+    path: &str,
+    width: u32,
+) -> Result<Vec<u8>, String> {
     let (stdout, stderr) = run_script(
-        python,
+        engine,
         RASTER_PREVIEW_SCRIPT,
         &[path.to_owned(), width.to_string()],
         SCRIPT_TIMEOUT,
@@ -1083,14 +1164,14 @@ pub fn raster_preview_png(python: &str, path: &str, width: u32) -> Result<Vec<u8
 /// viewport needs the geometry itself, not pixels. `label_field` empty reads
 /// only the lines; the field is the labels layer's attribute.
 pub fn vector_geometry(
-    python: &str,
+    engine: &EngineStatus,
     dem_path: &str,
     vector_path: &str,
     label_field: &str,
     legend_field: &str,
 ) -> Result<serde_json::Value, String> {
     run_vector_preview(
-        python,
+        engine,
         "vector",
         dem_path,
         &[
@@ -1105,23 +1186,23 @@ pub fn vector_geometry(
 /// frame, normalised to the preview's 0..1 lattice — the still's reader,
 /// never a second GeoPackage parser.
 pub fn polygon_geometry(
-    python: &str,
+    engine: &EngineStatus,
     dem_path: &str,
     vector_path: &str,
 ) -> Result<serde_json::Value, String> {
-    run_vector_preview(python, "polygon", dem_path, &[vector_path.to_owned()])
+    run_vector_preview(engine, "polygon", dem_path, &[vector_path.to_owned()])
 }
 
 /// Read the graticule's grid (and, when asked, its coordinate annotations)
 /// for the DEM's CRS and bounds — the engine's own `generate_graticule`.
 pub fn graticule_geometry(
-    python: &str,
+    engine: &EngineStatus,
     dem_path: &str,
     interval_deg: f64,
     with_labels: bool,
 ) -> Result<serde_json::Value, String> {
     run_vector_preview(
-        python,
+        engine,
         "graticule",
         dem_path,
         &[
@@ -1132,7 +1213,7 @@ pub fn graticule_geometry(
 }
 
 fn run_vector_preview(
-    python: &str,
+    engine: &EngineStatus,
     kind: &str,
     dem_path: &str,
     tail: &[String],
@@ -1146,7 +1227,7 @@ fn run_vector_preview(
         service.to_string_lossy().into_owned(),
     ];
     args.extend_from_slice(tail);
-    let (stdout, stderr) = run_script(python, VECTOR_PREVIEW_SCRIPT, &args, SCRIPT_TIMEOUT)?;
+    let (stdout, stderr) = run_script(engine, VECTOR_PREVIEW_SCRIPT, &args, SCRIPT_TIMEOUT)?;
     let line = stdout
         .lines()
         .find(|line| line.trim_start().starts_with('{'))
@@ -1224,8 +1305,8 @@ pub struct DatasetInfo {
 
 /// The registry, as the shell sees it. Errors here are non-fatal: the
 /// gallery just does not appear.
-pub fn dataset_list(python: &str) -> Result<Vec<DatasetInfo>, String> {
-    let (stdout, stderr) = run_script(python, DATASET_LIST_SCRIPT, &[], SCRIPT_TIMEOUT)?;
+pub fn dataset_list(engine: &EngineStatus) -> Result<Vec<DatasetInfo>, String> {
+    let (stdout, stderr) = run_script(engine, DATASET_LIST_SCRIPT, &[], SCRIPT_TIMEOUT)?;
     let line = stdout
         .lines()
         .find(|line| line.trim_start().starts_with('{'))
@@ -1265,7 +1346,7 @@ pub fn dataset_list(python: &str) -> Result<Vec<DatasetInfo>, String> {
 
 /// Resolve a dataset to a local file, fetching it if need be. The name must
 /// come from the registry — no arbitrary engine calls.
-pub fn dataset_fetch(python: &str, name: &str) -> Result<String, String> {
+pub fn dataset_fetch(engine: &EngineStatus, name: &str) -> Result<String, String> {
     if name.is_empty()
         || !name
             .chars()
@@ -1273,12 +1354,12 @@ pub fn dataset_fetch(python: &str, name: &str) -> Result<String, String> {
     {
         return Err(format!("invalid dataset name {name:?}"));
     }
-    let known = dataset_list(python)?;
+    let known = dataset_list(engine)?;
     if !known.iter().any(|entry| entry.name == name) {
         return Err(format!("unknown dataset {name:?}"));
     }
     let (stdout, stderr) = run_script(
-        python,
+        engine,
         DATASET_FETCH_SCRIPT,
         &[name.to_owned()],
         Duration::from_secs(300),
@@ -1341,13 +1422,13 @@ except Exception as exc:
 );
 
 pub fn remote_cog_preview(
-    python: &str,
+    engine: &EngineStatus,
     url: &str,
     resolution: u32,
 ) -> Result<serde_json::Value, String> {
     validate_remote_url(url)?;
     let (stdout, stderr) = run_script(
-        python,
+        engine,
         REMOTE_COG_PREVIEW_SCRIPT,
         &[url.to_owned(), resolution.to_string()],
         SCRIPT_TIMEOUT,
@@ -1407,10 +1488,10 @@ fn validate_remote_url(url: &str) -> Result<(), String> {
 }
 
 /// Probe the COG file's length and directory metadata without fetching pixels.
-pub fn remote_cog_info(python: &str, url: &str) -> Result<RemoteCogInfo, String> {
+pub fn remote_cog_info(engine: &EngineStatus, url: &str) -> Result<RemoteCogInfo, String> {
     validate_remote_url(url)?;
     let (stdout, stderr) = run_script(
-        python,
+        engine,
         REMOTE_COG_INFO_SCRIPT,
         &[url.to_owned()],
         SCRIPT_TIMEOUT,
@@ -1500,14 +1581,66 @@ fn python_path_entries() -> Option<String> {
     None
 }
 
-fn configured_python_path() -> Option<String> {
-    python_path_entries().map(|path| merge_python_path(path, std::env::var("PYTHONPATH").ok()))
+/// Package search paths the probe tries, in order. The checkout is a dev
+/// convenience, not a requirement: when its native extension is absent or
+/// cannot load, the same interpreter's installed wheel must get a turn.
+fn python_path_candidates() -> Vec<Option<String>> {
+    python_path_candidates_for(python_path_entries(), std::env::var("PYTHONPATH").ok())
 }
 
-pub(crate) fn configure_python_command(command: &mut Command) {
-    if let Some(path) = configured_python_path() {
-        // Probe and renderer must see the same checkout package and user path.
-        command.env("PYTHONPATH", path);
+fn python_path_candidates_for(
+    checkout: Option<String>,
+    existing: Option<String>,
+) -> Vec<Option<String>> {
+    let mut candidates = Vec::new();
+    if let Some(path) = checkout.as_deref() {
+        candidates.push(Some(merge_python_path(path.to_owned(), existing.clone())));
+    }
+    let installed = existing
+        .filter(|path| !path.trim().is_empty())
+        .map(|path| without_checkout_path(path, checkout.as_deref()))
+        .filter(|path| !path.trim().is_empty());
+    if !candidates.contains(&installed) {
+        candidates.push(installed);
+    }
+    candidates
+}
+
+fn without_checkout_path(existing: String, checkout: Option<&str>) -> String {
+    let Some(checkout) = checkout else {
+        return existing;
+    };
+    let checkout = PathBuf::from(checkout);
+    let paths: Vec<PathBuf> = std::env::split_paths(&existing)
+        .filter(|path| !same_python_path(path, &checkout))
+        .collect();
+    if paths.is_empty() {
+        String::new()
+    } else {
+        std::env::join_paths(paths)
+            .map(|joined| joined.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+}
+
+fn same_python_path(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+pub(crate) fn configure_python_command(command: &mut Command, python_path: Option<&str>) {
+    match python_path {
+        Some(path) => {
+            command.env("PYTHONPATH", path);
+        }
+        None => {
+            command.env_remove("PYTHONPATH");
+        }
     }
 }
 
@@ -1525,27 +1658,42 @@ impl Drop for ProbeScript {
     }
 }
 
-fn probe_script() -> Result<ProbeScript, String> {
+fn probe_script(source: &str) -> Result<ProbeScript, String> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let directory = std::env::temp_dir().join(format!(
         "forge3d-studio-probe-{}-{sequence}",
         std::process::id()
     ));
-    std::fs::create_dir(&directory)
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+        .create(&directory)
         .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
     let script = ProbeScript(directory);
     let path = script.path();
-    std::fs::write(&path, PROBE_SCRIPT)
+    std::fs::write(&path, source)
         .map_err(|error| format!("could not write {}: {error}", path.display()))?;
     Ok(script)
 }
 
-fn probe_interpreter(python: &str) -> Result<EngineStatus, String> {
-    let script = probe_script()?;
+fn probe_interpreter(python: &str, python_path: Option<&str>) -> Result<EngineStatus, String> {
+    probe_interpreter_with_script(python, python_path, PROBE_SCRIPT)
+}
+
+fn probe_interpreter_with_script(
+    python: &str,
+    python_path: Option<&str>,
+    source: &str,
+) -> Result<EngineStatus, String> {
+    let script = probe_script(source)?;
     let mut command = Command::new(python);
     command.arg(script.path());
-    configure_python_command(&mut command);
+    configure_python_command(&mut command, python_path);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1601,7 +1749,11 @@ fn probe_interpreter(python: &str) -> Result<EngineStatus, String> {
     let value: serde_json::Value = serde_json::from_str(line.trim())
         .map_err(|error| format!("the engine probe returned invalid JSON: {error}"))?;
 
-    Ok(engine_status_from_probe(python, &value))
+    Ok(engine_status_from_probe(
+        python,
+        python_path.map(str::to_owned),
+        &value,
+    ))
 }
 
 /// A stranger-readable probe result for `--engine-check`.
@@ -1618,21 +1770,31 @@ pub fn engine_check() -> i32 {
     println!("{:<24}interpreter  result", "candidate");
     let mut found: Option<(String, String)> = None;
     for (label, candidate) in &candidates {
-        match probe_interpreter(candidate) {
-            Ok(status) if status.available => {
-                let version = status.package_version.as_deref().unwrap_or("unversioned");
-                println!("{:<24}{}  ok (forge3d {version})", label, candidate);
-                if found.is_none() {
-                    found = Some((label.clone(), version.to_owned()));
+        for python_path in python_path_candidates() {
+            let path_label = if python_path.is_some() {
+                ""
+            } else {
+                " (installed)"
+            };
+            match probe_interpreter(candidate, python_path.as_deref()) {
+                Ok(status) if status.available => {
+                    let version = status.package_version.as_deref().unwrap_or("unversioned");
+                    println!(
+                        "{:<24}{}  ok (forge3d {version}){path_label}",
+                        label, candidate
+                    );
+                    if found.is_none() {
+                        found = Some((label.clone(), version.to_owned()));
+                    }
                 }
-            }
-            Ok(status) => {
-                let detail = status.detail.lines().next().unwrap_or("unavailable");
-                println!("{:<24}{}  fail: {}", label, candidate, detail);
-            }
-            Err(error) => {
-                let detail = error.lines().next().unwrap_or("probe failed");
-                println!("{:<24}{}  fail: {}", label, candidate, detail);
+                Ok(status) => {
+                    let detail = status.detail.lines().next().unwrap_or("unavailable");
+                    println!("{:<24}{}  fail: {}{}", label, candidate, detail, path_label);
+                }
+                Err(error) => {
+                    let detail = error.lines().next().unwrap_or("probe failed");
+                    println!("{:<24}{}  fail: {}{}", label, candidate, detail, path_label);
+                }
             }
         }
     }
@@ -1651,8 +1813,10 @@ pub fn engine_check() -> i32 {
 
 fn print_engine_check_remedies() {
     println!("remedies:");
-    println!("  pip install --user forge3d rasterio pillow");
-    println!("  or point the shell at a working interpreter:");
+    println!("  python3 -m venv \"$HOME/forge3d-studio-venv\"");
+    println!("  \"$HOME/forge3d-studio-venv/bin/python\" -m pip install forge3d rasterio pillow");
+    println!("  export FORGE3D_STUDIO_PYTHON=\"$HOME/forge3d-studio-venv/bin/python\"");
+    println!("  or point the shell at an existing working interpreter:");
     println!("  FORGE3D_STUDIO_PYTHON=/path/to/python forge3d-studio-shell --engine-check");
 }
 
@@ -1680,10 +1844,15 @@ fn merge_python_path(path: String, existing: Option<String>) -> String {
 ///
 /// Split out from the process plumbing so the wire shape (including a missing
 /// `features` key from an older engine) is testable without Python.
-fn engine_status_from_probe(python: &str, value: &serde_json::Value) -> EngineStatus {
+pub(crate) fn engine_status_from_probe(
+    python: &str,
+    python_path: Option<String>,
+    value: &serde_json::Value,
+) -> EngineStatus {
     EngineStatus {
         available: value.get("ok").and_then(|ok| ok.as_bool()).unwrap_or(false),
         python: python.to_owned(),
+        python_path,
         package_version: value
             .get("version")
             .and_then(|version| version.as_str())
@@ -1728,13 +1897,164 @@ mod tests {
     use super::{merge_python_path, parse_solar_reply};
     use std::path::PathBuf;
 
+    struct TempDir(PathBuf);
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn probe_script_directory_is_removed_on_drop() {
-        let script = super::probe_script().expect("probe script");
+        let script = super::probe_script(super::PROBE_SCRIPT).expect("probe script");
         let directory = script.0.clone();
         assert!(directory.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&directory)
+                .expect("probe directory metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
         drop(script);
         assert!(!directory.exists());
+    }
+
+    #[test]
+    fn unbuilt_checkout_is_rejected_and_installed_wheel_is_probed_next() {
+        let root = std::env::temp_dir().join(format!(
+            "forge3d-studio-probe-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _cleanup = TempDir(root.clone());
+        let checkout = root.join("checkout/python");
+        let installed = root.join("installed");
+        std::fs::create_dir_all(checkout.join("forge3d")).unwrap();
+        std::fs::create_dir_all(installed.join("forge3d")).unwrap();
+        std::fs::create_dir_all(installed.join("rasterio")).unwrap();
+        std::fs::create_dir_all(installed.join("PIL")).unwrap();
+        std::fs::write(
+            checkout.join("forge3d/__init__.py"),
+            "__version__ = '1.52.0'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            installed.join("forge3d/__init__.py"),
+            "__version__ = '1.52.0'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            installed.join("forge3d/_forge3d.py"),
+            "class TerrainRenderer: pass\n",
+        )
+        .unwrap();
+        std::fs::write(
+            installed.join("rasterio/__init__.py"),
+            "class Env: pass\ndef open(*args, **kwargs): pass\n",
+        )
+        .unwrap();
+        std::fs::write(installed.join("PIL/__init__.py"), "class Image: pass\n").unwrap();
+
+        let candidates = super::python_path_candidates_for(
+            Some(checkout.to_string_lossy().into_owned()),
+            Some(installed.to_string_lossy().into_owned()),
+        );
+        assert_eq!(candidates.len(), 2);
+        let broken = super::probe_interpreter_with_script(
+            "python3",
+            candidates[0].as_deref(),
+            super::PROBE_SCRIPT,
+        )
+        .expect("checkout probe runs");
+        assert!(!broken.available);
+        assert!(broken.detail.contains("native module"), "{}", broken.detail);
+
+        let working = super::probe_interpreter_with_script(
+            "python3",
+            candidates[1].as_deref(),
+            super::PROBE_SCRIPT,
+        )
+        .expect("installed probe runs");
+        assert!(working.available, "{}", working.detail);
+        assert_eq!(
+            working.python_path.as_deref(),
+            Some(installed.to_string_lossy().as_ref())
+        );
+
+        std::fs::write(installed.join("rasterio/__init__.py"), "").unwrap();
+        let incomplete = super::probe_interpreter_with_script(
+            "python3",
+            candidates[1].as_deref(),
+            super::PROBE_SCRIPT,
+        )
+        .expect("incomplete Rasterio probe runs");
+        assert!(!incomplete.available);
+        assert!(
+            incomplete.detail.contains("rasterio and Pillow"),
+            "{}",
+            incomplete.detail
+        );
+
+        // Solar needs only the ephemeris. Removing the render dependencies
+        // must not disable its independent capability probe.
+        std::fs::remove_dir_all(installed.join("rasterio")).unwrap();
+        std::fs::remove_dir_all(installed.join("PIL")).unwrap();
+        std::fs::write(
+            installed.join("forge3d/__init__.py"),
+            "__version__ = '1.52.0'\ndef sun_position(*args): pass\n",
+        )
+        .unwrap();
+        let solar = super::probe_interpreter_with_script(
+            "python3",
+            candidates[1].as_deref(),
+            super::SOLAR_PROBE_SCRIPT,
+        )
+        .expect("solar probe runs");
+        assert!(solar.available, "{}", solar.detail);
+        let render = super::probe_interpreter_with_script(
+            "python3",
+            candidates[1].as_deref(),
+            super::PROBE_SCRIPT,
+        )
+        .expect("render probe runs");
+        assert!(!render.available);
+        assert!(
+            render.detail.contains("rasterio and Pillow"),
+            "{}",
+            render.detail
+        );
+    }
+
+    #[test]
+    fn installed_fallback_removes_only_the_broken_checkout_entry() {
+        let checkout = if cfg!(windows) {
+            r"C:\repo\python"
+        } else {
+            "/repo/python"
+        };
+        let user = if cfg!(windows) {
+            "D:/user/libs"
+        } else {
+            "/user/libs"
+        };
+        let existing = std::env::join_paths([checkout, user])
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let candidates =
+            super::python_path_candidates_for(Some(checkout.to_owned()), Some(existing));
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(
+            std::env::split_paths(candidates[1].as_deref().unwrap()).collect::<Vec<_>>(),
+            [PathBuf::from(user)]
+        );
     }
 
     #[test]
@@ -1788,17 +2108,15 @@ mod tests {
     }
 
     #[test]
-    fn ready_python_rejects_an_interpreter_the_probe_refused() {
+    fn cached_probe_failure_is_returned_until_a_forced_recheck() {
         let state = super::Forge3dState::new();
         let status = super::engine_status_from_probe(
             "python3",
+            None,
             &serde_json::json!({"ok": false, "detail": "missing rasterio"}),
         );
         *state.engine.lock().expect("engine mutex") = Some(status);
-        assert_eq!(
-            state.ready_python().expect_err("must be rejected"),
-            "missing rasterio"
-        );
+        assert_eq!(state.probe(false).detail, "missing rasterio");
     }
 
     #[test]
@@ -1836,7 +2154,7 @@ fn probe_json_maps_the_engine_facts() {
     )
     .expect("probe JSON parses");
 
-    let status = engine_status_from_probe("/venv/bin/python", &value);
+    let status = engine_status_from_probe("/venv/bin/python", None, &value);
     assert!(status.available);
     assert_eq!(status.python, "/venv/bin/python");
     assert_eq!(status.package_version.as_deref(), Some("1.47.1"));
@@ -1862,7 +2180,7 @@ fn an_older_probe_without_features_is_not_an_error() {
     let value: serde_json::Value =
         serde_json::from_str(r#"{"ok": true, "version": "1.40.0", "detail": "engine ready"}"#)
             .expect("probe JSON parses");
-    let status = engine_status_from_probe("python3", &value);
+    let status = engine_status_from_probe("python3", None, &value);
     assert_eq!(status.features, None);
     assert_eq!(status.software, None);
     assert_eq!(status.denoise, None);
@@ -1874,7 +2192,7 @@ fn a_failed_probe_stays_unavailable() {
     let value: serde_json::Value =
         serde_json::from_str(r#"{"ok": false, "detail": "import forge3d failed: no module"}"#)
             .expect("probe JSON parses");
-    let status = engine_status_from_probe("python3", &value);
+    let status = engine_status_from_probe("python3", None, &value);
     assert!(!status.available);
     assert_eq!(status.detail, "import forge3d failed: no module");
 }

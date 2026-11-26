@@ -15,18 +15,22 @@ function time(unixMs: number | null | undefined): string {
 }
 
 export function StatusBar({ viewport }: { viewport: string }) {
-  const { state, autosave, recovery, busy, engine } = useSession();
+  const { state, autosave, recovery, busy, engine, actions } = useSession();
 
   const objects = state?.project.scene.objects.length ?? 0;
   const selected = state?.project.selection.length ?? 0;
 
   return (
     <footer className="statusbar">
-      <span
-        className={`status-chip ${engine?.available ? "status-chip--ready" : "status-chip--waiting"}`}
+      <button
+        type="button"
+        className={`status-chip status-chip--button ${engine?.available ? "status-chip--ready" : "status-chip--waiting"}`}
+        title={`Click to recheck. ${engine?.detail ?? "Probing for the Forge3D engine…"}`}
+        aria-label="Recheck Forge3D engine"
+        onClick={() => void actions.refreshEngine(true)}
       >
         {engine ? (engine.available ? "Engine ready" : "No engine") : "Engine…"}
-      </span>
+      </button>
       <span
         className={`status-engine ${engine?.available ? "is-ready" : ""}`}
         title={[

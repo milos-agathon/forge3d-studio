@@ -465,7 +465,8 @@ async function run(cdp, role) {
   for (const c of lane.renderCalls.filter(c=>c.ok)) assert.equal(c.renderPath,"mapscene");
   for (const frame of [4,8]) {
     const output = join(out,role,"native-"+frame+".png");
-    const result = await ev('__TAURI_INTERNALS__.invoke("render_animation_frame",'+JSON.stringify({frame,width:320,height:240,quality:"final",output})+')');
+    const sessionId = await ev('__TAURI_INTERNALS__.invoke("project_state").then(s=>s.sessionId)');
+    const result = await ev('__TAURI_INTERNALS__.invoke("render_animation_frame",'+JSON.stringify({frame,sessionId,width:320,height:240,quality:"final",output})+')');
     assert.equal(result.evaluatedFrame,frame);
   }
   const native = (await readFile(process.env.VP09_RENDER_LOG,"utf8")).trim().split(/\r?\n/).map(s=>JSON.parse(s));
@@ -548,10 +549,11 @@ async function run(cdp, role) {
     await writeFile(join(out,role,"rolled-preview.png"),Buffer.from(await ev("lastNativePreview.png"),"base64"));
     await click('[title^="Solid mode"]');
     const imagePath = name=>join(out,role,name+".png");
+    const sessionId = await ev('__TAURI_INTERNALS__.invoke("project_state").then(s=>s.sessionId)');
     for (const [name,view] of [["rolled-still",nativeView],["level-still",{...nativeView,rollDeg:0}]]) {
-      await ev('__TAURI_INTERNALS__.invoke("render_still",'+JSON.stringify({path:imagePath(name),view})+')');
+      await ev('__TAURI_INTERNALS__.invoke("render_still",'+JSON.stringify({path:imagePath(name),view,sessionId})+')');
     }
-    await ev('__TAURI_INTERNALS__.invoke("render_animation_frame",'+JSON.stringify({frame:0,width:320,height:240,quality:"final",output:imagePath("rolled-key")})+')');
+    await ev('__TAURI_INTERNALS__.invoke("render_animation_frame",'+JSON.stringify({frame:0,sessionId,width:320,height:240,quality:"final",output:imagePath("rolled-key")})+')');
     const log = (await readFile(process.env.VP09_RENDER_LOG,"utf8")).trim().split(/\r?\n/).map(s=>JSON.parse(s));
     const still = log.find(r=>r.output===imagePath("rolled-still")).camera;
     const keyed = log.find(r=>r.output===imagePath("rolled-key")).camera;
