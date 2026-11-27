@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { MeshLayer, TerrainDataset } from "@forge3d/web";
+import * as forge from "@forge3d/web";
+import { Color } from "three";
+import { buildObjects, updateFaces, submitObjectBatches, objectMaskBatches, helperVectors } from "./viewportObjects.ts";
+import { TerrainDataset } from "@forge3d/web";
 import { queryTerrainDataset } from "./forge3dWebMapping.ts";
 import { worldPosition } from "./cartography.ts";
 import {
-  cameraInput, cubeScatterGeometry, runtimeToStudio, studioToRuntime, terrainInput, terrainSamplePoint, terrainTransform,
+  cameraInput, runtimeToStudio, studioToRuntime, terrainInput, terrainSamplePoint, terrainTransform,
 } from "./forge3dWebMapping.ts";
 import {
   assetRevision, boundedTerrainResolution, cameraTarget, nativeRenderView, sameCursorTerrain, validateTerrainPreview,
@@ -196,7 +199,7 @@ test("backend eligibility follows the headless project's mode, environment and s
   assert.equal(choose().backend, "native");
 });
 
-test("one untextured cube shares the terrain backend and keeps its UUID without a DEM", () => {
+test("untextured primitives share the terrain backend and keep their UUIDs without a DEM", () => {
   const model = new ViewportModel();
   const choose = (objects, editorAvailable, layers = []) => {
     model.setProject({ ...bryce, scene: { ...bryce.scene, objects }, cartography: layers,
@@ -208,22 +211,127 @@ test("one untextured cube shares the terrain backend and keeps its UUID without 
     for (const editor of [false, true]) {
       const result = choose(objects, editor);
       assert.equal(result.backend, "forge3d-web");
-      assert.equal(result.cube.object.id, meshObject.id);
-      assert.equal(result.cube.size, 2);
+      assert.equal(result.objects[0].id, meshObject.id);
+      assert.equal(result.objects[0].kind.source.primitive.size, 2);
     }
   }
   const duplicate = { ...meshObject, id: "second-cube" };
-  assert.equal(choose([meshObject, duplicate], false).backend, "three");
-  assert.equal(choose([meshObject, duplicate], true).cube, undefined);
-  assert.equal(choose([{ ...meshObject, visible: false }], false).cube, undefined);
+  assert.equal(choose([meshObject, duplicate], false).backend, "forge3d-web");
+  assert.deepEqual(choose([meshObject, duplicate], true).objects.map(o => o.id), [meshObject.id, duplicate.id]);
+  assert.equal(choose([{ ...meshObject, visible: false }], false).objects.length, 0);
   const imagery = [{ type: "imagery", visible: true, asset: "photo" }];
-  assert.equal(choose([meshObject, terrainObject], true, imagery).cube, undefined);
+  assert.equal(choose([meshObject, terrainObject], true, imagery).objects.length, 0);
   assert.equal(choose([meshObject, terrainObject], false, imagery).backend, "three");
+});
+
+function submittedCube(pose, placement, parent) {
+  const cube = { id:"cube", visible:true, kind:{...meshObject.kind, source:{type:"primitive",primitive:{type:"cube",size:2}}}, ...pose, parent:parent?.id };
+  const hierarchy = new Map([[cube.id,cube]]);
+  if (parent) hierarchy.set(parent.id,parent);
+  const scene = buildObjects(forge,[cube],hierarchy,placement,new Color(0x8a949a),{mode:"solid",exposure:1.35});
+  updateFaces(scene,[20,20,20]);
+  const record = scene.records.get(cube.id);
+  submitObjectBatches(forge,scene,[record],[0,0,-1]);
+  return {...record, batch:scene.batches[0]};
+}
+
+test("dense display and UUID masks keep scene order across alternating material runs", () => {
+  const objects = Array.from({length:257},(_,i) => ({
+    id:String(i), translation:[i,0,0], scale:[1,1,1], rotationDeg:[0,0,0],
+    kind:{...meshObject.kind, material:{...meshObject.kind.material,
+      baseColor:i%2 ? [0,1,0] : [1,0,0], roughness:i%2 ? .3 : .7}},
+  }));
+  const scene = buildObjects(forge,objects,new Map(objects.map(o => [o.id,o])),
+    {translation:[0,0,0],scale:1},new Color(),{mode:"material",exposure:1.35});
+  updateFaces(scene,[0,0,10]);
+  const records = [...scene.records.values()];
+  submitObjectBatches(forge,scene,records,[0,0,-1]);
+  function assertOrder(batch, expected) {
+    const mesh = batch.levels[0].mesh;
+    let offset = 0;
+    for (const r of expected) {
+      const positions = r.surface.geometry.attributes.position.array;
+      assert.deepEqual(mesh.positions.subarray(offset,offset+positions.length),positions);
+      offset += positions.length;
+    }
+    assert.equal(mesh.positions.length,offset);
+  }
+  assert.equal(scene.batches.length,1);
+  assertOrder(scene.batches[0],records);
+  const masks = objectMaskBatches(forge,scene,id => id==="128");
+  assert.deepEqual(masks.map(b => b.materialIndex),[0,1,0]);
+  assertOrder(masks[0],records.slice(0,128));
+  assertOrder(masks[1],[records[128]]);
+  assertOrder(masks[2],records.slice(129));
+});
+
+function sampleAtlasChannel(texture, u, v, channel) {
+  const x = u * texture.width - .5, y = v * texture.height - .5;
+  const dx = x - Math.floor(x), dy = y - Math.floor(y);
+  return [0,1,2,3].reduce((sum,tap) => {
+    const index = (Math.floor(y) + (tap >> 1)) * texture.width + Math.floor(x) + (tap & 1);
+    const value = texture.levels[0].data[index * 4 + channel] / 255;
+    const linear = texture.colorSpace === "srgb" ? new Color(value,0,0).convertSRGBToLinear().r : value;
+    return sum + linear * (tap & 1 ? dx : 1-dx) * (tap & 2 ? dy : 1-dy);
+  }, 0);
+}
+
+test("Solid ray and spoke styles follow Field exposure and keep their owner and opacity", () => {
+  const lights = ["directional","point"].map(kind => ({
+    id:kind, translation:[0,0,0], scale:[1,1,1], rotationDeg:[0,0,0],
+    kind:{type:"light",kind,color:[.75,.25,.125],intensity:1},
+  }));
+  for (const [exposure,expected] of [[.5,[180,104,69]],[8,[255,243,232]]]) {
+    const scene = buildObjects(forge,lights,new Map(lights.map(light => [light.id,light])),
+      {translation:[0,0,0],scale:1},new Color(),{mode:"solid",exposure});
+    const { vectors,owners } = helperVectors(forge,scene.records,new Map());
+    const strokes = vectors.snapshot().layers[0].features;
+    assert.deepEqual(strokes.map(s => owners.get(s.id)), ["directional",...Array(8).fill("point")]);
+    for (const stroke of strokes) {
+      assert.equal(stroke.style.opacity,owners.get(stroke.id)==="point" ? .6 : .75);
+      assert.deepEqual(stroke.style.color.slice(0,3).map(c => Math.round(255*c)),expected);
+    }
+  }
+});
+
+test("Solid emission preserves the three Field bulb colours at default exposure", () => {
+  const lights = [[1,.75,.02], [.75,1,.02], [.8,.8,.02]].map((color,i) => ({
+    id:String(i), translation:[i,0,0], scale:[1,1,1], rotationDeg:[0,0,0],
+    kind:{type:"light",kind:"directional",intensity:1,color},
+  }));
+  const scene = buildObjects(forge,lights,new Map(lights.map(light => [light.id,light])),
+    {translation:[0,0,0],scale:1},new Color(),{mode:"solid",exposure:1.35});
+  updateFaces(scene,[0,0,10]);
+  submitObjectBatches(forge,scene,[...scene.records.values()],[0,0,-1]);
+  const emission = scene.materials.materials[1].material.textures.emissive;
+  const pixels = scene.batches.map(batch => {
+    const [u,v] = batch.levels[0].mesh.uvs;
+    return [0,1,2].map(c => Math.round(255 * sampleAtlasChannel(emission,u,v,c)));
+  });
+  assert.deepEqual(pixels, [[238,227,123], [231,235,136], [232,229,123]]);
+});
+
+test("material samples preserve low linear channels through atlas resizing and reordering", () => {
+  const cube = {id:"dim",translation:[0,0,0],scale:[1,1,1],rotationDeg:[0,0,0],
+    kind:{...meshObject.kind,material:{baseColor:[.0018,.0008,.123456],roughness:.1234,metallic:.9876}}};
+  const scene=buildObjects(forge,[cube],new Map([[cube.id,cube]]),{translation:[0,0,0],scale:1},new Color(),{mode:"material",exposure:1.35});
+  updateFaces(scene,[0,0,10]);
+  const record=scene.records.get(cube.id), bright={...record,scatter:{...record.scatter,tint:[1,1,1,1]}};
+  for(const records of [[record],[bright,record],Array(256).fill(bright).concat(record)]) {
+    submitObjectBatches(forge,scene,records,[0,0,-1]);
+    const mesh=scene.batches.at(-1).levels[0].mesh;
+    const [u,v]=mesh.uvs.slice(-2);
+    const textures=scene.materials.materials[1].material.textures;
+
+    cube.kind.material.baseColor.forEach((value,c)=>assert.ok(Math.abs(sampleAtlasChannel(textures.baseColor,u,v,c)-value)<.000002));
+    assert.ok(Math.abs(sampleAtlasChannel(textures.metallicRoughness,u,v,1)-.1234)<.000001);
+    assert.ok(Math.abs(sampleAtlasChannel(textures.metallicRoughness,u,v,2)-.9876)<.000001);
+  }
 });
 
 test("scatter packs rotated and nonuniformly scaled cube axes and relative translations into rows", () => {
   const cube = { rotationDeg: [90,90,0], scale: [2,3,4], translation: [4e9+3,8,1] };
-  const { transforms: rows } = cubeScatterGeometry(2, cube, { translation: [4e9,10,-4], scale: 0.5 });
+  const { transforms: rows } = submittedCube(cube, { translation: [4e9,10,-4], scale: 0.5 }).scatter;
   const expected = [0,6,0,6, 0,0,-8,-4, -4,0,0,10, 0,0,0,1];
   expected.forEach((value, i) => near(rows[i], value));
 });
@@ -231,7 +339,8 @@ test("scatter packs rotated and nonuniformly scaled cube axes and relative trans
 test("flattened and very thin cubes retain their transformed faces in a valid scatter batch", () => {
   for (const scaleX of [0, 1e-16, -1e-16]) {
     const cube = { rotationDeg: [0, 0, 90], scale: [scaleX, 3, 2], translation: [4e9+2, 9, 4] };
-    const { geometry, transforms } = cubeScatterGeometry(2, cube, { translation: [4e9, 10, -4], scale: 0.5 });
+    const record = submittedCube(cube, { translation: [4e9, 10, -4], scale: 0.5 });
+    const { local:geometry, transforms } = record.scatter;
     assert.deepEqual([...transforms], [1,0,0,4, 0,1,0,-2, 0,0,1,16, 0,0,0,1]);
     const { position, normal } = geometry.attributes;
     for (let i = 0; i < position.count; i++) {
@@ -242,11 +351,18 @@ test("flattened and very thin cubes retain their transformed faces in a valid sc
     // The two X faces become opposite sides of an XZ plane after rotation.
     near(Math.abs(normal.getY(0)), 1);
     near(normal.getY(4), -normal.getY(0));
-    const layer = new MeshLayer({ positions: position.array, normals: normal.array,
-      indices: new Uint32Array(geometry.index.array) }, { transforms });
-    assert.ok(layer.toBatch());
-    layer.dispose();
+    assert.ok(record.batch.levels[0].mesh.indices.length);
   }
+});
+
+test("a cube below a rotated singular parent bakes its displayed geometry", () => {
+  const parent = {id:"parent", rotationDeg:[20,30,40], translation:[4e9,10,0], scale:[0,2,3]};
+  const cube = {rotationDeg:[10,20,30], translation:[1,2,3], scale:[1,1,1]};
+  const record = submittedCube(cube,{translation:parent.translation,scale:1},parent);
+  assert.equal(record.axis,undefined);
+  assert.deepEqual(Array.from(record.scatter.transforms).filter((_,i)=>![3,7,11].includes(i)),
+    [1,0,0,0,1,0,0,0,1,0,0,0,1]);
+  assert.ok(record.batch.levels[0].mesh.indices.length);
 });
 
 test("hiding a terrain invalidates its pending and accepted previews", () => {
@@ -511,4 +627,20 @@ test("admitted heights belong only to the current terrain and retain its source 
   model.setProject(bryce, 4, false);
   assert.equal(model.admitTerrain(again, 8, new Float32Array(64), owner), undefined);
   assert.equal(grid.resolution, 16);
+});
+
+test("camera view hides its fallback camera when no camera is explicitly active", () => {
+  const second = { ...authoredCamera, id:"second-camera" };
+  const project = {...bryce, scene:{...bryce.scene, activeCamera:null, objects:[authoredCamera,second]}};
+  const model = new ViewportModel();
+  model.setProject(project, 1, true);
+  assert.deepEqual(model.current.objects.map(o=>o.visible),[false,true]);
+});
+
+test("default empty projects can add a primitive in the standalone viewport", () => {
+  const project = {...bryce, render:{...bryce.render, shadows:true}, scene:{...bryce.scene,objects:[meshObject]}};
+  const model = new ViewportModel(project);
+  const choice = viewportTerrainBackend(model.current,"auto",{gpu:true,editorAvailable:false});
+  assert.equal(choice.backend,"forge3d-web");
+  assert.deepEqual(choice.objects.map(o=>o.id),[meshObject.id]);
 });

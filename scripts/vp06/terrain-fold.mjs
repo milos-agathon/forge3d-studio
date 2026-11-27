@@ -48,6 +48,7 @@ export async function terrainFoldControl(cdp, { fixture, path, openFile, settle,
   for (const mode of ["solid", "material"]) {
     if (mode === "material") await cdp.evaluate('document.querySelector(\'button[title^="Material preview"]\').click()');
     await settle(mode, [CUBE_ID,TERRAIN_ID]);
+    await click("clear fold selection before colour control", [80,94], null, []);
     const both = await colours(pixels);
 
     await toggle(CUBE_ID);
@@ -64,6 +65,7 @@ export async function terrainFoldControl(cdp, { fixture, path, openFile, settle,
 
     await toggle(TERRAIN_ID);
     await settle(mode, [CUBE_ID,TERRAIN_ID]);
+    await click("clear fold selection before restored colour control", [80,94], null, []);
     assert.deepEqual(await colours(pixels), both);
     for (const [i, sample] of samples.entries()) {
       assert.notEqual(terrainOnly[i], cubeOnly[i]);

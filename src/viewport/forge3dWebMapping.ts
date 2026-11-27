@@ -1,7 +1,7 @@
 import type { CameraInput, TerrainDataset, TerrainHeightmapInput, TerrainMaterialImage, TerrainOverlayLayerInput, TerrainOverlaysInput } from "@forge3d/web";
-import { BoxGeometry, Euler, MathUtils, Matrix3, Matrix4, Vector3 } from "three";
+import { type BufferGeometry, Euler, MathUtils, Matrix3, Matrix4, Vector3 } from "three";
 import type { ViewportDimensions, ViewportObject, ViewportTerrain } from "./viewportState.ts";
-import type { TerrainPreview, ViewportMode } from "../bridge/types";
+import type { SceneObject, TerrainPreview, ViewportMode } from "../bridge/types";
 import { TERRAIN_VIEW_SIZE } from "./viewMath.ts";
 
 export type RendererPreference = "auto" | "forge3d-web" | "three";
@@ -105,7 +105,35 @@ export function studioToRuntime([x, y, z]: Triple, { translation: [tx, ty, tz], 
   return [(x - tx) / scale, (y - ty) / scale, (z - tz) / scale];
 }
 
-function localMatrix(object: ViewportObject) {
+export function sceneObjectVisibility(objects: readonly SceneObject[] = []): ReadonlyMap<string, boolean> {
+  const scene = new Map(objects.map(object => [object.id, object]));
+  const inherited = new Map<string, boolean>();
+  const path: string[] = [];
+  for (const object of objects) {
+    let node: SceneObject | undefined = object;
+    while (node && !inherited.has(node.id)) {
+      // An unfinished path that reaches itself is a hidden cycle.
+      inherited.set(node.id, false);
+      path.push(node.id);
+      if (!node.visible) break;
+      node = node.parent ? scene.get(node.parent) : undefined;
+    }
+    const visible = !node || inherited.get(node.id) === true;
+    for (const id of path) inherited.set(id, visible);
+    path.length = 0;
+  }
+  return inherited;
+}
+
+export function viewportPose(object: SceneObject) {
+  const tuple = (v: typeof object.transform.translation): Triple => [v.x, v.y, v.z];
+  return { translation: tuple(object.transform.translation), rotationDeg: tuple(object.transform.rotationDeg),
+    scale: tuple(object.transform.scale) };
+}
+
+type TransformNode = Pick<ViewportObject, "id" | "parent" | "translation" | "rotationDeg" | "scale">;
+
+export function localMatrix(object: TransformNode) {
   const [x, y, z] = object.rotationDeg.map(MathUtils.degToRad);
   return new Matrix4().makeRotationFromEuler(new Euler(x, y, z, "ZYX")).scale(new Vector3(...object.scale))
     .setPosition(...object.translation);
@@ -113,11 +141,13 @@ function localMatrix(object: ViewportObject) {
 
 // Effective visibility has already excluded cycles. Keep the full affine
 // product: nonuniform scale followed by rotation can introduce shear.
-export function cubeParentWorld(parentId: string, byId: ReadonlyMap<string, ViewportObject>) {
+export function objectParentWorld(parentId: string, byId: ReadonlyMap<string, TransformNode>) {
   const matrix = new Matrix4();
   let parent = byId.get(parentId);
   let singular = false;
-  while (parent) {
+  const seen = new Set<string>();
+  while (parent && !seen.has(parent.id)) {
+    seen.add(parent.id);
     singular ||= parent.scale.includes(0);
     matrix.premultiply(localMatrix(parent));
     parent = parent.parent ? byId.get(parent.parent) : undefined;
@@ -140,27 +170,35 @@ export function worldXAxis(parent: Matrix4) {
   return { linear: basis.linear, local: new Vector3(1, 0, 0).applyMatrix3(basis.inverse).toArray() };
 }
 
-export function cubeScatterGeometry(size: number, object: ViewportObject, placement: UniformTransform, editorWorld?: Matrix4,
-  parent?: ReturnType<typeof cubeParentWorld>) {
-  const world = editorWorld?.clone() ?? localMatrix(object);
-  if (!editorWorld && parent) world.premultiply(parent.matrix);
-  // Subtract the Studio origin in double precision before changing units.
-  // Three stores columns; the scatter ABI consumes four packed rows.
-  for (let axis = 0; axis < 3; axis++) world.elements[12 + axis] -= placement.translation[axis];
-  const inverseScale = 1 / placement.scale;
-  world.premultiply(new Matrix4().makeScale(inverseScale, inverseScale, inverseScale));
-  const geometry = new BoxGeometry(size, size, size);
+export function runtimeMatrix(world: Matrix4, placement: UniformTransform) {
+  // Subtract the Studio origin in double precision before packing the ABI's four rows.
+  const relative = world.clone();
+  for (let i = 0; i < 3; i++) relative.elements[12+i] -= placement.translation[i];
+  const s = 1 / placement.scale;
+  return relative.premultiply(new Matrix4().makeScale(s,s,s));
+}
+
+export function scatterGeometry(geometry: BufferGeometry, relative: Matrix4, singular = false) {
+  const world = relative.clone();
   // Match the pinned scatter ABI's determinant check on the packed matrix.
   // Keep the shape of a flattened box, including its two opposing faces.
   const stable = stableLinearPart(world, 2 ** -23);
   world.fromArray(new Float32Array(world.elements));
   const determinant = world.determinant();
-  if (parent?.singular || !stable || !stableLinearPart(world, 2 ** -23) || Math.abs(determinant) < 1e-12) {
+  if (singular || !stable || !stableLinearPart(world, 2 ** -23) || Math.abs(determinant) < 1e-12) {
     const origin = new Vector3().setFromMatrixPosition(world);
     world.setPosition(0, 0, 0);
     geometry.attributes.position.applyMatrix4(world);
+    // Preserve local front winding when a thin mirrored basis is baked.
+    if (!singular && relative.determinant() < 0) {
+      const index = geometry.index!;
+      for (let i = 0; i < index.count; i += 3) {
+        const b = index.getX(i+1);
+        index.setX(i+1, index.getX(i+2));
+        index.setX(i+2, b);
+      }
+    }
     geometry.computeVertexNormals();
-    if (determinant < 0) geometry.attributes.normal.applyMatrix4(new Matrix4().makeScale(-1, -1, -1));
     world.makeTranslation(origin);
   }
   return { geometry, transforms: new Float32Array(world.transpose().elements) };

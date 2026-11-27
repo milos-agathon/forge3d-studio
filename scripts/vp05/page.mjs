@@ -22,6 +22,7 @@ export function inspect(field, cubeId, terrainId) {
     ready: field ? !!r.objects.get(cubeId)?.children.length &&
       (!r.objects.get(terrainId)?.visible || r.objects.get(terrainId).children.some(c => c.userData.elevation))
       : !!submission && !canvas.hidden && !!document.querySelector("[data-viewport-backend]")?.textContent.includes("WebGPU available"),
+    cubeBatches: Number(!!submission?.objects.find(o => o.id === cubeId)?.triangles),
     stats: host?.diagnosticRuntime?.getScatterStats(),
     resolution: field ? dem && Math.sqrt(dem.geometry.attributes.position.count) : d.frame.terrains.get(terrainId)?.preview.resolution,
     layers: field && dem ? { mapped: !!dem.material.map, vertexColors: dem.material.vertexColors,

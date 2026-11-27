@@ -1,3 +1,4 @@
+import { primitiveGeometry, buildCameraGizmo, buildLightGizmo } from "./viewportGeometry";
 import { isEditable } from "../state/shortcuts";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
@@ -10,8 +11,8 @@ import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 
 import { FREE_VIEW_FOCUS_DISTANCE, FreeCamera, type CameraDrag } from "./freeCamera";
 import { ForgeTerrainViewport, viewportErrorReason, type TerrainPresentation } from "./forge3dWebViewport";
-import { cubeParentWorld, studioUnitsPerGroundUnit, terrainGroundSpan, terrainVertexRelief, type RendererPreference } from "./forge3dWebMapping";
-import { assetRevision, boundedTerrainResolution, firstVisibleTerrain, nativeRenderView, sameCursorTerrain, sceneObjectVisibility, terrainSampleRevision, validateTerrainPreview, viewportDimensions, ViewportModel,
+import { worldXAxis, localMatrix, objectParentWorld, studioUnitsPerGroundUnit, terrainGroundSpan, terrainVertexRelief, type RendererPreference } from "./forge3dWebMapping";
+import { viewportCameraObject, assetRevision, boundedTerrainResolution, firstVisibleTerrain, nativeRenderView, sameCursorTerrain, sceneObjectVisibility, terrainSampleRevision, validateTerrainPreview, viewportDimensions, ViewportModel,
   type TerrainPreviewRequest, type ViewportDimensions, type ViewportFrame, type ViewportTerrain } from "./viewportState";
 import { editorDepthWinner, editorPrimitiveVisible, editorRasterDepths } from "./editorDepthWinner";
 import { canvasPixel, pickEditor, type StudioHit } from "./viewportPicking";
@@ -19,7 +20,6 @@ import { hillshadePixels } from "./hillshade";
 import { bridge } from "../bridge/env";
 import type {
   CameraObject,
-  LightObject,
   Primitive,
   SceneObject,
   Transform,
@@ -50,7 +50,7 @@ import {
   topRamp,
   vectorLayers,
 } from "../state/cartography";
-import { lightingRig, type LightingRig } from "./lighting";
+import { sceneSun, lightingRig, type LightingRig } from "./lighting";
 import { rampColor } from "./colormap";
 import { TERRAIN_VIEW_SIZE } from "./viewMath";
 import {
@@ -75,7 +75,6 @@ const ACCENT = 0xefa026;
  */
 const CLAY_COLOUR = 0x8a949a;
 const CLAY = new THREE.Color(CLAY_COLOUR);
-const CAMERA_COLOUR = 0xc6ced2; // --text-secondary: cyan is reserved for measurement (the map grid)
 const SOLID_BACKGROUND = 0x0e1113;
 /** Material preview backdrop: the studio HDRI provides the light, this the
  *  neutral surround, so nothing hides the albedo. */
@@ -125,6 +124,7 @@ interface Runtime {
   hemi: THREE.HemisphereLight;
   grid: THREE.GridHelper;
   objects: Map<string, THREE.Group>;
+  syncedObjects?: ViewportFrame["objects"];
   helpers: THREE.BoxHelper[];
   /** Selection + camera-view identity the current helpers were built for. */
   helperKey: string;
@@ -220,18 +220,7 @@ function clayMaterial(side: THREE.Side = THREE.FrontSide): THREE.MeshStandardMat
 }
 
 function buildPrimitive(primitive: Primitive, material?: Material): THREE.Object3D {
-  let geometry: THREE.BufferGeometry;
-  switch (primitive.type) {
-    case "cube":
-      geometry = new THREE.BoxGeometry(primitive.size, primitive.size, primitive.size);
-      break;
-    case "sphere":
-      geometry = new THREE.SphereGeometry(primitive.radius, 32, 24);
-      break;
-    case "plane":
-      geometry = new THREE.PlaneGeometry(primitive.size, primitive.size);
-      break;
-  }
+  const geometry = primitiveGeometry(primitive);
   const side = primitive.type === "plane" ? THREE.DoubleSide : THREE.FrontSide;
   const standard = new THREE.MeshStandardMaterial({
     color: material
@@ -249,7 +238,6 @@ function buildPrimitive(primitive: Primitive, material?: Material): THREE.Object
   mesh.userData.clayMaterial = clayMaterial(side);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
-  if (primitive.type === "plane") mesh.rotation.x = -Math.PI / 2;
   return mesh;
 }
 
@@ -474,82 +462,6 @@ function applyShadowRig(runtime: Runtime, rig: LightingRig): void {
     // without a recompile keeps stale samplers.
     recompileMaterials(runtime);
   }
-}
-
-/** A small frustum, drawn where the project's active camera sits. */
-function buildCameraGizmo(camera: CameraObject): THREE.LineSegments {
-  const forward = 1.15;
-  const halfHeight = Math.tan((camera.fovDeg * Math.PI) / 360) * forward;
-  const halfWidth = halfHeight * 1.45;
-  const apex: [number, number, number] = [0, 0, 0];
-  const corners: Array<[number, number, number]> = [
-    [-halfWidth, -halfHeight, -forward],
-    [halfWidth, -halfHeight, -forward],
-    [halfWidth, halfHeight, -forward],
-    [-halfWidth, halfHeight, -forward],
-  ];
-
-  const points: number[] = [];
-  corners.forEach((corner, index) => {
-    points.push(...apex, ...corner);
-    points.push(...corner, ...corners[(index + 1) % corners.length]);
-  });
-  points.push(0, 0, 0, 0, 0.24, 0, 0, 0, 0, 0.24, 0, 0);
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
-  const lines = new THREE.LineSegments(
-    geometry,
-    new THREE.LineBasicMaterial({ color: CAMERA_COLOUR }),
-  );
-  lines.userData.owned = true;
-  return lines;
-}
-
-function buildLightGizmo(light: LightObject): THREE.Group {
-  const group = new THREE.Group();
-  const colour = new THREE.Color(light.color[0], light.color[1], light.color[2]);
-
-  const bulb = new THREE.Mesh(
-    new THREE.SphereGeometry(0.09, 14, 10),
-    new THREE.MeshBasicMaterial({ color: colour }),
-  );
-  bulb.userData.owned = true;
-  group.add(bulb);
-
-  if (light.kind === "directional") {
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, -1.6], 3),
-    );
-    const ray = new THREE.Line(
-      geometry,
-      new THREE.LineBasicMaterial({ color: colour, transparent: true, opacity: 0.75 }),
-    );
-    ray.userData.owned = true;
-    group.add(ray);
-  } else {
-    for (let index = 0; index < 8; index += 1) {
-      const angle = (index / 8) * Math.PI * 2;
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute(
-        "position",
-        new THREE.Float32BufferAttribute(
-          [0, 0, 0, Math.cos(angle) * 0.42, Math.sin(angle) * 0.42, 0],
-          3,
-        ),
-      );
-      const spike = new THREE.Line(
-        geometry,
-        new THREE.LineBasicMaterial({ color: colour, transparent: true, opacity: 0.6 }),
-      );
-      spike.userData.owned = true;
-      group.add(spike);
-    }
-  }
-  group.userData.owned = true;
-  return group;
 }
 
 /**
@@ -959,6 +871,8 @@ export function Viewport3D({ preference, onBackend }: {
     setCameraView,
   } = useSession();
   const project = state?.project;
+  const selection = useRef(project?.selection ?? []);
+  selection.current = project?.selection ?? [];
   const scene = project?.scene;
   const visibility = useMemo(() => sceneObjectVisibility(scene?.objects), [scene?.objects]);
   const visibleTerrain = scene?.objects.find(object => object.kind.type === "terrain" && visibility.get(object.id));
@@ -1330,7 +1244,7 @@ export function Viewport3D({ preference, onBackend }: {
         return { id: selected.object.id, transform: selected.object.transform, tool: selected.tool, space: selected.space, generation: viewport.current.projectGeneration,
           sequence: snapshot.projectSequence };
       }
-    }, (id, allowPrevious) => terrainViewport.displayedCube(viewport.current, id, allowPrevious), invalidate,
+    }, (id, allowPrevious) => terrainViewport.displayedObject(viewport.current, id, allowPrevious), invalidate,
     async (id, transform, sequence) => {
       const result = await actionsRef.current.apply({ type: "setTransform", id, transform }, sequence);
       return result?.projectSequence ?? null;
@@ -1346,7 +1260,7 @@ export function Viewport3D({ preference, onBackend }: {
       const runtime = runtimeRef.current;
       const frame = viewport.current;
       return { frame, projectionCamera: camera, preference: preferenceRef.current, sampling: previewResolutionRef.current, clay: CLAY,
-        objectPreview: transformHandles.preview,
+        objectPreview: transformHandles.preview, selection: selection.current,
         background: frame.settings.mode === "solid" ? SOLID_BG : MATERIAL_BG,
         editor: runtime ? { objects: runtime.objects,
           sunShadowsDisabled: runtime.glStep >= GPU_STEP_WITHOUT_SUN_SHADOWS,
@@ -1732,11 +1646,16 @@ export function Viewport3D({ preference, onBackend }: {
       }
       const editor = editorRef.current;
       const runtime = runtimeRef.current;
+      // The layout effect publishes the authored frame before the scene
+      // effect applies its transforms. Never submit that new revision using
+      // the previous editor matrices, including on Undo of a parent drag.
+      if (runtime && runtime.syncedObjects !== viewport.current.objects) return;
       const moved = !transformHandles.active && editor?.update();
       const lost = terrainViewport.lost();
       const redrawSelection = runtime?.selectionNeedsRender;
       if (runtime) runtime.selectionNeedsRender = false;
       if (!dirty && !navigationChanged && !moved && !runtime?.needsRender && !lost) {
+        if (!runtime) terrainViewport.refreshSelection(selection.current);
         if (redrawSelection && displayed) editor?.present(lastTerrain, lastPreviewError, displayedCamera);
         // CSS can remap the existing pixels without resizing or submitting a new buffer.
         if (layoutChanged && pointer && hoverTimer === undefined) sampleHover();
@@ -1857,15 +1776,20 @@ export function Viewport3D({ preference, onBackend }: {
         takeLens = owner === "fly" && recordingTarget && recordingTarget.kind.type === "camera" ? recordingTarget.kind : undefined;
         if (takeLens) applyLens(takeLens);
         if (owner !== "camera") return;
-        const active = scene?.objects.find(o => o.id === scene.activeCamera && o.kind.type === "camera")
-          ?? scene?.objects.find(o => o.kind.type === "camera");
+        const active = viewportCameraObject(scene);
         if (active?.kind.type !== "camera") {
           setProblem("Camera view needs a camera object in the scene.");
           return;
         }
-        const { translation, rotationDeg } = active.transform;
-        camera.position.set(translation.x, translation.y, translation.z);
-        camera.rotation.set(rotationDeg.x * DEG, rotationDeg.y * DEG, rotationDeg.z * DEG, "ZYX");
+        const hierarchy = new Map(viewport.current.objects.map(o => [o.id,o]));
+        const object = hierarchy.get(active.id);
+        if (!object) return;
+        const world = localMatrix(object);
+        if (object.parent) world.premultiply(objectParentWorld(object.parent, hierarchy).matrix);
+        camera.position.setFromMatrixPosition(world);
+        const forward = new THREE.Vector3(0,0,-1).transformDirection(world);
+        const up = new THREE.Vector3(0,1,0).transformDirection(world);
+        camera.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(),forward,up));
         applyLens(active.kind);
         setProblem(current => current?.startsWith("Camera view") ? null : current);
         invalidate();
@@ -2125,6 +2049,22 @@ export function Viewport3D({ preference, onBackend }: {
       orbit.enabled = !event.value && !flyModeRef.current && !cameraViewRef.current;
     });
     gizmo.addEventListener("objectChange", () => {
+      const dragged = gizmo.object;
+      if (dragged) {
+        const hierarchy = new Map(viewport.current.objects.map(o => [o.id,o]));
+        const id = dragged.userData.studioId;
+        const authored = hierarchy.get(id);
+        if (authored) hierarchy.set(id, { ...authored, translation: dragged.position.toArray(),
+          scale: dragged.scale.toArray(), rotationDeg: [dragged.rotation.x / DEG, dragged.rotation.y / DEG, dragged.rotation.z / DEG] });
+        for (const object of hierarchy.values()) {
+          const placement = runtime.objects.get(object.id)?.parent;
+          if (!object.visible || !object.parent || !placement || placement === runtime.scene) continue;
+          placement.matrix.copy(objectParentWorld(object.parent, hierarchy).matrix);
+          placement.updateMatrixWorld(true);
+        }
+        const sun = sceneSun([...hierarchy.values()], runtime.objects);
+        if (sun) runtime.sun.position.fromArray(sun.direction).multiplyScalar(-20);
+      }
       for (const helper of runtime.helpers) helper.update();
       // The gizmo moves the object directly; the command that records it is
       // applied later, so this frame has to be drawn on its own.
@@ -2293,8 +2233,8 @@ export function Viewport3D({ preference, onBackend }: {
       }
       if (frame?.submitted) {
         // Retain depth for editor helpers and gizmos over WebGPU-owned surfaces.
-        const cube = frame.cubeId && runtime.objects.get(frame.cubeId)?.children[0];
-        const surfaces = [frame.terrain, cube].filter((mesh): mesh is THREE.Mesh<THREE.BufferGeometry, THREE.Material> =>
+        const meshes = frame.objectIds.map(id => runtime.objects.get(id)?.children[0]);
+        const surfaces = [frame.terrain, ...meshes].filter((mesh): mesh is THREE.Mesh<THREE.BufferGeometry, THREE.Material> =>
           mesh instanceof THREE.Mesh);
         const background = scene.background;
         const saved = surfaces.map(mesh => ({ mesh, order: mesh.renderOrder, colorWrite: mesh.material.colorWrite }));
@@ -2376,6 +2316,7 @@ export function Viewport3D({ preference, onBackend }: {
     const runtime = runtimeRef.current;
     if (!runtime) return;
     const project = sceneProject;
+    const objects = viewport.current.objects;
     // The viewport hillshade flag (shared for both call sites in this effect).
     const hillshade = project?.viewport.hillshade ?? true;
     if (!project) {
@@ -2399,11 +2340,12 @@ export function Viewport3D({ preference, onBackend }: {
         void pending.then((texture) => texture.dispose()).catch(() => undefined);
       }
       textureCache.current.clear();
+      runtime.syncedObjects = objects;
       runtime.needsRender = true;
       return;
     }
 
-    const frameObjects = new Map(viewport.current.objects.map(object => [object.id, object]));
+    const frameObjects = new Map(objects.map(object => [object.id, object]));
     const live = new Map(project.scene.objects.map((object) => [object.id, object]));
     for (const [id, group] of runtime.objects) {
       if (live.has(id)) continue;
@@ -2424,9 +2366,10 @@ export function Viewport3D({ preference, onBackend }: {
       }
       const frameObject = frameObjects.get(object.id);
       group.visible = !!frameObject?.visible;
-      const parentMatrix = frameObject?.visible && frameObject.parent && object.kind.type === "mesh" &&
-        object.kind.source.type === "primitive" && object.kind.source.primitive.type === "cube"
-        ? cubeParentWorld(frameObject.parent, frameObjects).matrix : undefined;
+      const parented = object.kind.type === "camera" || object.kind.type === "light" ||
+        (object.kind.type === "mesh" && object.kind.source.type === "primitive");
+      const parentMatrix = frameObject?.visible && frameObject.parent && parented
+        ? objectParentWorld(frameObject.parent, frameObjects).matrix : undefined;
       if (parentMatrix) {
         if (group.parent === runtime.scene) {
           const placement = new THREE.Group();
@@ -2623,6 +2566,10 @@ export function Viewport3D({ preference, onBackend }: {
       const [r, g, b] = rig.sun.color;
       runtime.sun.color.setRGB(r, g, b, THREE.LinearSRGBColorSpace);
       runtime.sun.intensity = rig.sun.intensity;
+    } else {
+      runtime.sun.position.set(6, 9, 4);
+      runtime.sun.color.setRGB(1, 1, 1);
+      runtime.sun.intensity = 3;
     }
 
     // One rig for every mode: the scene sun plus the project environment (or
@@ -2648,14 +2595,15 @@ export function Viewport3D({ preference, onBackend }: {
       project.viewport.gridVisible &&
       !project.scene.objects.some((object) => object.kind.type === "terrain");
 
+    runtime.syncedObjects = objects;
     runtime.needsRender = true;
   }, [assetGenerations, loadColormapStops, loadTexture, projectGeneration,
-    readMesh, previewVersion, sceneProject, viewport]);
+    readMesh, previewVersion, sceneProject, viewport, cameraView, visibility]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime || !project) return;
-    const activeCameraId = project.scene.activeCamera;
+    const activeCameraId = viewportCameraObject(project.scene)?.id;
     // Selection boxes follow their objects every tick (playback moves them at
     // the timeline's rate), so only rebuild them when the selection or the
     // camera view changes.
@@ -3199,15 +3147,25 @@ export function Viewport3D({ preference, onBackend }: {
     const camera = cameraRef.current;
     const project = stateRef.current?.project;
     if (!camera || !project) return;
-    const transform = cameraTransform(camera);
-
-    const active = project.scene.objects.find(
-      (object) => object.id === project.scene.activeCamera,
-    );
+    const active = viewportCameraObject(project.scene);
     if (active?.kind.type !== "camera") {
       setProblem("There is no camera object to receive this view — add one from Add.");
       return;
     }
+    const hierarchy = new Map(viewport.current.objects.map(o => [o.id, o]));
+    const parent = active.parent ? objectParentWorld(active.parent, hierarchy) : undefined;
+    const scale = active.transform.scale;
+    if (parent?.singular || (parent && !worldXAxis(parent.matrix)) || !scale.y || !scale.z) {
+      setProblem("Camera capture needs a parent transform and camera axes with nonzero scale.");
+      return;
+    }
+    const inverse = parent?.matrix.invert() ?? new THREE.Matrix4();
+    const position = camera.position.clone().applyMatrix4(inverse);
+    const forward = camera.getWorldDirection(new THREE.Vector3()).transformDirection(inverse).multiplyScalar(Math.sign(scale.z));
+    const up = new THREE.Vector3(0,1,0).applyQuaternion(camera.quaternion).transformDirection(inverse).multiplyScalar(Math.sign(scale.y));
+    const angles = new THREE.Euler().setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), forward, up), "ZYX");
+    const transform = { translation: {x:position.x,y:position.y,z:position.z}, scale,
+      rotationDeg:{x:angles.x / DEG,y:angles.y / DEG,z:angles.z / DEG} };
     await actionsRef.current.apply({
       type: "setTransform",
       id: active.id,
@@ -3306,7 +3264,7 @@ export function Viewport3D({ preference, onBackend }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderScale]);
 
-  const camera = scene?.objects.find((object) => object.id === scene.activeCamera);
+  const camera = cameraView ? viewportCameraObject(scene) : scene?.objects.find(object => object.id === scene.activeCamera);
   // The renderer is a terrain pipeline: say which objects it cannot draw.
   const renderedFrame = visibleTerrain && render.frame?.source?.sessionId === state?.sessionId &&
     render.frame?.source?.terrainId === visibleTerrain.id ? render.frame : null;

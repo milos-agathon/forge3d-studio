@@ -140,7 +140,7 @@ export function terrainRayMetres(submittedRay: Ray, measurementRay: Ray,
 }
 
 export interface PickSurfaces {
-  cube?: { id: string; geometry: BufferGeometry };
+  mesh?: { id: string; geometry: BufferGeometry; kind?: StudioHit["kind"] };
   terrain?: { id: string; grid: TerrainDataset };
 }
 
@@ -151,8 +151,8 @@ export interface PixelDepthHints {
 }
 
 type SurfacePick = { hit: StudioHit | null } | {
-  terrain: StudioHit | null; cube: StudioHit | null;
-  terrainDepths?: PixelDepthHints; cubeDepths?: PixelDepthHints;
+  terrain: StudioHit | null; mesh: StudioHit | null;
+  terrainDepths?: PixelDepthHints; meshDepths?: PixelDepthHints;
 };
 
 function clipFace(vertices: Vector3[], distance: (point: Vector3) => number) {
@@ -169,7 +169,17 @@ function clipFace(vertices: Vector3[], distance: (point: Vector3) => number) {
 
 type ScreenEdge = [ScreenPoint, ScreenPoint];
 
-export function projectCubeFaces(camera: Camera, size: Size, geometry: BufferGeometry) {
+export function projectMeshFaces(camera: Camera, size: Size, geometry: BufferGeometry) {
+  if (geometry.type !== "BoxGeometry" || !geometry.groups.length) {
+    const faces: ScreenPoint[][] = [];
+    const index = geometry.index!, positions = geometry.attributes.position;
+    for (let i = 0; i < index.count; i += 3) {
+      const corners = [0,1,2].map(k => new Vector3().fromBufferAttribute(positions, index.getX(i+k)));
+      const face = projectFace(camera, size, corners);
+      if (face.length >= 3) faces.push(face);
+    }
+    return faces;
+  }
   return geometry.groups.map(({ start }) => {
     // BoxGeometry indexes the two triangles (a,b,d), (b,c,d) of each face.
     const corners = [0, 1, 4, 2].map(i => new Vector3().fromBufferAttribute(
@@ -205,6 +215,31 @@ function projectFace(camera: Camera, size: Size, face: Vector3[]) {
   return clipped.map(v => camera.worldToScreen(v.toArray(), size)!);
 }
 
+/** Conservative screen-space test before requesting a one-pixel GPU wire ID. */
+export function strokeNearPixel(camera: Camera, size: Size, segment: [Triple, Triple], pixel: Pixel) {
+  const [start,end] = segment.map(v => new Vector3(...v));
+  const delta = end.clone().sub(start);
+  const forward = new Vector3(...camera.forward);
+  const z = start.clone().sub(new Vector3(...camera.position)).dot(forward);
+  const dz = delta.dot(forward);
+  let enter = 0, leave = 1;
+  if (dz === 0) {
+    if (z < camera.near || z > camera.far) return false;
+  } else {
+    const near = (camera.near-z)/dz, far = (camera.far-z)/dz;
+    enter = Math.max(0,Math.min(near,far));
+    leave = Math.min(1,Math.max(near,far));
+    if (enter > leave) return false;
+  }
+  const project = (t: number) => camera.worldToScreen(start.clone().addScaledVector(delta,t).toArray(),size);
+  const a = project(enter), b = project(leave);
+  if (!a || !b) return true; // Defer a numerically marginal endpoint to the GPU.
+  const dx = b.x-a.x, dy = b.y-a.y, lengthSq = dx*dx + dy*dy;
+  const x = pixel[0]+.5-a.x, y = pixel[1]+.5-a.y;
+  const t = lengthSq ? Math.min(1,Math.max(0,(x*dx + y*dy)/lengthSq)) : 0;
+  return (x-t*dx)**2 + (y-t*dy)**2 <= 4;
+}
+
 function faceEdge(screen: ScreenPoint[], x: number, y: number) {
   return nearestEdge(screen.map((p, i) => [p, screen[(i + 1) % screen.length]]), x, y);
 }
@@ -225,7 +260,7 @@ function pixelDepthRange(screen: ScreenPoint[], x: number, y: number) {
 
 // An edge can change which face covers the sample. Even inside a grazing face,
 // snapping by a fraction of a pixel can noticeably change its interpolated depth.
-function cubePixelDepths(faces: ScreenPoint[][], x: number, y: number, rayDepth?: number) {
+function meshPixelDepths(faces: ScreenPoint[][], x: number, y: number, rayDepth?: number) {
   const depths: PixelDepthHints = { minimum: 1, maximum: 0, hints: rayDepth === undefined ? [] : [rayDepth] };
   const tolerance = depthTieWindow(24);
   let nearest: ReturnType<typeof nearestEdge>;
@@ -379,7 +414,7 @@ export async function measurePixelDepth(depths: PixelDepthHints, markerInFront: 
 
 export function pickSurfaces(camera: Camera, size: Size, pixel: Pixel,
   placement: UniformTransform | TerrainTransform, surfaces: PickSurfaces, frameRevision: number,
-  cubeFaces = surfaces.cube ? projectCubeFaces(camera, size, surfaces.cube.geometry) : []): SurfacePick {
+  meshFaces = surfaces.mesh ? projectMeshFaces(camera, size, surfaces.mesh.geometry) : []): SurfacePick {
   const x = pixel[0] + 0.5, y = pixel[1] + 0.5;
   const { origin, direction } = camera.screenRay(x, y, size);
   const ray = new Ray(new Vector3(...origin), new Vector3(...direction));
@@ -403,38 +438,38 @@ export function pickSurfaces(camera: Camera, size: Size, pixel: Pixel,
     if (!Number.isFinite(t)) return;
     return { hit: hitAt(id, kind, nearest), position: nearest.toArray() };
   }
-  const { terrain, cube } = surfaces;
+  const { terrain, mesh } = surfaces;
   const face = [new Vector3(), new Vector3(), new Vector3()];
   const ground = terrain && intersect(terrain.id, "terrain", visit => visitTerrain(terrain.grid, ray, far, visit), face);
-  const box = cube && intersect(cube.id, "cube", visit => {
-    const position = cube.geometry.getAttribute("position"), index = cube.geometry.index!;
+  const meshHit = mesh && intersect(mesh.id, mesh.kind ?? "mesh", visit => {
+    const position = mesh.geometry.getAttribute("position"), index = mesh.geometry.index!;
     const a = new Vector3(), b = new Vector3(), c = new Vector3();
     for (let i = 0; i < index.count; i += 3) {
       visit(a.fromBufferAttribute(position, index.getX(i)), b.fromBufferAttribute(position, index.getX(i + 1)),
         c.fromBufferAttribute(position, index.getX(i + 2)));
     }
   });
-  const boxDepth = box && camera.worldToScreen(box.position, size)!.depth;
-  const { edge: cubeEdge, depths: cubeDepths } = cubePixelDepths(cubeFaces, x, y, boxDepth);
+  const meshDepth = meshHit && camera.worldToScreen(meshHit.position, size)!.depth;
+  const { edge: meshEdge, depths: meshDepths } = meshPixelDepths(meshFaces, x, y, meshDepth);
   const groundDepth = ground && camera.worldToScreen(ground.position, size)!.depth;
   const depths: PixelDepthHints = { minimum: 1, maximum: 0, hints: [] };
   let terrainEdge = ground && faceEdge(projectFace(camera, size, face), x, y);
   if (terrain && terrainEdge && insideTerrainPatch(camera, size, terrain.grid, face, x, y)) terrainEdge = undefined;
   if (terrain) terrainEdge = terrainRasterEdge(camera, size, terrain.grid, ray, far, x, y, depths, terrainEdge, groundDepth) ?? terrainEdge;
-  if (cubeDepths || terrainEdge) {
+  if (meshDepths || terrainEdge) {
     const atDepth = (id: string, kind: StudioHit["kind"], depth: number) => hitAt(id, kind,
       point.fromArray(camera.screenToWorld(x, y, Math.max(0, Math.min(1, depth)), size)));
     return {
-      cube: box?.hit ?? (cube && cubeEdge ? atDepth(cube.id, "cube", cubeEdge.depth) : null),
+      mesh: meshHit?.hit ?? (mesh && meshEdge ? atDepth(mesh.id, mesh.kind ?? "mesh", meshEdge.depth) : null),
       terrain: ground?.hit ?? (terrain && terrainEdge ? atDepth(terrain.id, "terrain", terrainEdge.depth) : null),
-      terrainDepths: terrainEdge ? depths : undefined, cubeDepths,
+      terrainDepths: terrainEdge ? depths : undefined, meshDepths,
     };
   }
-  if (!ground || !box) return { hit: ground?.hit ?? box?.hit ?? null };
+  if (!ground || !meshHit) return { hit: ground?.hit ?? meshHit?.hit ?? null };
   // Near a Depth24Plus tie, fragment interpolation and rounding are device
   // dependent. Hand both intersections to the submitted frame's GPU ID pass.
-  if (Math.abs(groundDepth! - boxDepth!) <= depthTieWindow(24)) return { terrain: ground.hit, cube: box.hit };
-  return { hit: ground.hit.distance < box.hit.distance ? ground.hit : box.hit };
+  if (Math.abs(groundDepth! - meshDepth!) <= depthTieWindow(24)) return { terrain: ground.hit, mesh: meshHit.hit };
+  return { hit: ground.hit.distance < meshHit.hit.distance ? ground.hit : meshHit.hit };
 }
 
 // Three's vertex-position reader applies the object's current relative or

@@ -60,6 +60,8 @@ export async function terrainEdgeControl(cdp, bryce, flat, report) {
         await until(cdp, `${submission}?.camera.position.every((v,i) =>
           Math.abs(v * ${submission}.placement.scale + ${submission}.placement.translation[i] - ${JSON.stringify(eye)}[i]) < .0001)`);
         await cdp.evaluate(raf);
+        await click([80,94]);
+        await until(cdp, submission+".selectionBoxes.length===0");
         const state = await cdp.evaluate(submission);
         const colours = await cdp.evaluate(`(async () => {
           const rgba = await ${diagnostics}.terrainViewport.diagnosticRuntime.readRgba();

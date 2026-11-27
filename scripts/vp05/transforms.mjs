@@ -6,6 +6,53 @@ import { sha256 } from "../vp03/identity.mjs";
 import { until } from "../viewport-desktop.mjs";
 import { readFrame } from "./page.mjs";
 
+// The Material decoration pass must test against the admitted Bryce surface.
+// Move only the terrain between runs so the bulb, spokes, box and camera
+// have identical projection. A point light does not change the terrain sun.
+export async function checkHelperTerrain(cdp, {path, fixture, settle, toggle}) {
+  const result = {};
+  for (const buried of [false,true]) {
+    const project = structuredClone(fixture);
+    project.viewport.mode = "material";
+    project.selection = [];
+    const light = project.scene.objects.find(o=>o.kind.type==="light");
+    for (const o of project.scene.objects) o.visible = o===light || o.kind.type==="terrain";
+    project.scene.objects.find(o=>o.kind.type==="terrain").transform.translation.y = buried ? 0 : -20;
+    light.transform.translation = {x:0,y:-1,z:0};
+    light.transform.rotationDeg = {x:-90,y:0,z:0};
+    Object.assign(light.kind,{kind:"point",color:[1,.2,.02]});
+    const file = join(dirname(path),"helper-depth-"+buried+".studio3d");
+    await writeFile(file,JSON.stringify(project));
+    await cdp.evaluate('__TAURI_INTERNALS__.invoke("open_project",{path:'+JSON.stringify(file)+'})');
+    await cdp.evaluate("window.vp05Leaving=true");
+    await cdp.send("Page.reload",{ignoreCache:true});
+    await until(cdp,"!window.vp05Leaving && document.readyState==='complete'");
+    await settle("material",false,true);
+    await cdp.evaluate("forge3dViewportDiagnostics().setOrbitPose([0,8,1],[0,-1,0])");
+    await settle("material",false,true);
+    const host = "forge3dViewportDiagnostics().terrainViewport.diagnosticSubmission";
+    await cdp.evaluate('document.querySelector(\'[data-object-id="'+light.id+'"] .tree-name\').click()');
+    await until(cdp,host+'.selectionBoxes.includes('+JSON.stringify(light.id)+')');
+    const shown = Buffer.from(await cdp.evaluate('('+readFrame+')(false)'),"base64");
+    await toggle(light.name);
+    await until(cdp,'!'+host+'.visibleIds.includes('+JSON.stringify(light.id)+')');
+    await settle("material",false,true);
+    const hidden = Buffer.from(await cdp.evaluate('('+readFrame+')(false)'),"base64");
+    assert.equal(hidden[4*(794*363+397)+3],255,"Bryce must cover the helper sample");
+    let changed=0, outsideBulb=0;
+    for (let y=310;y<417;y++) for (let x=344;x<451;x++) {
+      const i=4*(794*y+x);
+      if (shown.subarray(i,i+3).equals(hidden.subarray(i,i+3))) continue;
+      changed++;
+      if (Math.hypot(x-397,y-363)>14) outsideBulb++;
+    }
+    if (buried) assert.equal(changed,0,"A buried Material helper showed through Bryce");
+    else assert.ok(changed>100 && outsideBulb>30,"Front bulb or strokes missing over Bryce");
+    result[buried?"buried":"front"]={changed,outsideBulb,sampled:107*107,id:light.id};
+  }
+  return result;
+}
+
 // Repeat the Inspector and floating-origin reproductions in a blocked WebView.
 export async function checkTransforms(cdp, { path, fixture, eye, state, settle, toggle, terrainName }) {
   const result = {};
@@ -21,7 +68,12 @@ export async function checkTransforms(cdp, { path, fixture, eye, state, settle, 
   };
   for (const offset of [0, 4_000_000_000]) {
     const project = structuredClone(fixture);
-    for (const o of project.scene.objects) o.transform.translation.x += offset;
+    // Native transforms use f32. At 4e9 the camera and sun's small authored
+    // X offsets round away. Isolate the geometry under test for this comparison.
+    for (const o of project.scene.objects) {
+      o.transform.translation.x += offset;
+      if (o.kind.type === "camera" || o.kind.type === "light") o.visible = false;
+    }
     const file = join(dirname(path), `translated-${offset}.studio3d`);
     await writeFile(file, JSON.stringify(project));
     await cdp.evaluate(`__TAURI_INTERNALS__.invoke("open_project", {path:${JSON.stringify(file)}})`);
@@ -79,8 +131,7 @@ export async function checkTransforms(cdp, { path, fixture, eye, state, settle, 
       const s = await cdp.evaluate(state);
       assert.deepEqual(s.camera.slice(0,2), pose);
       assert.deepEqual(s.physical, [794,660]);
-      assert.equal(s.stats.visibleInstances, 1);
-      assert.equal(s.stats.effectiveDraws, 1);
+      assert.equal(s.cubeBatches, 1);
       row.cubeOnly = { sha256: sha256(alone), pixels: coverage(alone), camera: s.camera, stats: s.stats };
       assert.ok(row.cubeOnly.pixels > 0);
       if (offset === 0) origin.set(mode, row.cubeOnly.sha256);

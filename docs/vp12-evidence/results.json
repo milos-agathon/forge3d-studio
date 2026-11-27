@@ -1,0 +1,5669 @@
+{
+  "base": "7baf54c4dc3e50477039d74ce3070a9d3fe41a8f",
+  "field": "64b7cf093cf38d73cd88b8b099193f44a36bf764",
+  "runtime": "d6459a26f04c637909360a0351c7ed98d6e0b84a",
+  "contexts": [
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1275.199999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1275.699999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1283.5,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1283.5999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 4038.9000000059605,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1288.300000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1288.800000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1294.2000000178814,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1294.5,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1869.5999999940395,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1130,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1130.300000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1135.4000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1135.7000000178814,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1727.9000000059605,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1239.199999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1239.4000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1244.5,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1244.699999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1907.199999988079,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1182.5999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1183,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1187.199999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1187.5,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2471.699999988079,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 21471.100000023842,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 21471.40000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 21476.40000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 21476.70000001788,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 22251.20000001788,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 12244.40000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 12244.59999999404,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 12249.09999999404,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 12249.300000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 13087.699999988079,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5862.299999982119,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5862.699999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5868.0999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5868.399999976158,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 6677.5,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7085.299999982119,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 10651.799999982119,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1305.7999999821186,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1306.199999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1312.199999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1312.5,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2067.7999999821186,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2471.5999999940395,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 3581.5,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 4613.5,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 4613.9000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 4619,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 4619.5,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5430.0999999940395,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5852.699999988079,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 6956,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 12989.90000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 12990.299999982119,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 12995.40000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 12995.799999982119,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 13981.09999999404,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 14480.09999999404,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 6768.800000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 6769,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 6774.200000017881,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 6774.4000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7499.0999999940395,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7911.200000017881,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9050.299999982119,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9050.90000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9057.40000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9057.699999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 10303.199999988079,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 10753.299999982119,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2375.300000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2375.7000000178814,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2398,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2398.4000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 3600.2000000178814,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2601.699999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2602.0999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2623.0999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2623.2999999821186,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 3436,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1711.199999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1711.5,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1716.9000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1717.0999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2512.9000000059605,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2944.800000011921,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5116.799999982119,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5117.0999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5123.5999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5123.799999982119,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5988,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 10668.800000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 10669.09999999404,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 10673.300000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 10673.700000017881,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 11652,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 14525.700000017881,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 14526.200000017881,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 14533.700000017881,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 14533.90000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 15529.600000023842,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 3568.699999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 3569,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 3574.4000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 3574.5999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 4326.0999999940395,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 19060.79999998212,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1416.4000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1416.7999999821186,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1422.4000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1422.7999999821186,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1987.5,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 8055,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 8055.300000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 8060.800000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 8061,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 8995.09999999404,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9760.199999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9760.40000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9766,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9766.199999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 10769.5,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2065.4000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2065.699999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2070.800000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2071,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 3063.9000000059605,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 18973,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 18973.29999998212,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 18978.19999998808,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 18978.399999976158,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 19984.19999998808,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 6232.5999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 6232.9000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 6239.0999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 6239.300000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7316.4000000059605,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7685.299999982119,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7685.5999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7691.399999976158,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7691.699999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 8680.5,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9698.200000017881,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9698.5,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9705.600000023842,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9705.800000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 10548.100000023842,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1651.5999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1651.9000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1657.9000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1658.199999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2335.0999999940395,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5659.800000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5660.0999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5665.0999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5665.300000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 6347,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 14082.600000023842,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 14082.90000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 14088.700000017881,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 14088.90000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 14743,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7799.799999982119,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7800.199999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7805.5999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7805.699999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 8480.899999976158,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 8828.09999999404,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 17973,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 17973.20000001788,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 17979.5,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 17979.70000001788,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 18748.90000000596,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 19208.5,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5177.799999982119,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5178.199999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5184.199999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5184.5,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5809.799999982119,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 6204.0999999940395,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 4970.4000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 4971.100000023842,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 4976.9000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 4977.100000023842,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5518.100000023842,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5889.200000017881,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7205.300000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7205.5999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7211.800000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 7212,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 8041.300000011921,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 8483.300000011921,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 14116.09999999404,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 14116.40000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 14122.40000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 14122.799999982119,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 14705.90000000596,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 15063.90000000596,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9152.40000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9153.300000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9180.300000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 9180.90000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 10030,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 11934.100000023842,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 11934.5,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 11959.700000017881,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 11959.90000000596,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 12900.40000000596,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1488.5999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1488.9000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1510.9000000059605,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 1511.199999988079,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2232.5999999940395,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2038.5,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2039.300000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2066.2000000178814,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2066.800000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 2999.300000011921,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 6629.600000023842,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 3030.2000000178814,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 3030.5999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 3049.7000000178814,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 3050,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 4060.5999999940395,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 6245.300000011921,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 16835,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 16835.5,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 16841.09999999404,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 16841.30000001192,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 17482.80000001192,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5640.5999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5641.0999999940395,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5663.800000011921,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 5664,
+      "canvas": "viewport-canvas",
+      "requested": "webgl2",
+      "result": null,
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 6887.300000011921,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 10054.300000011921,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 12569,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    },
+    {
+      "realm": "document",
+      "api": "HTMLCanvasElement",
+      "timeMs": 15146.200000017881,
+      "canvas": "viewport-canvas viewport-canvas--terrain",
+      "requested": "webgpu",
+      "result": "GPUCanvasContext",
+      "denied": false
+    }
+  ],
+  "inventory": [
+    {
+      "name": "Camera",
+      "id": "1fe0984c-c604-4da1-ae54-56481808197f",
+      "triangles": 0,
+      "segments": 10,
+      "hitPixel": [
+        182,
+        241
+      ],
+      "hitLocal": [
+        0,
+        0.47634559672905924,
+        -1.15
+      ],
+      "previewBounds": {
+        "isBox3": true,
+        "min": {
+          "x": -3.405708927052307,
+          "y": 1.5236544013023376,
+          "z": 1.850000023841858
+        },
+        "max": {
+          "x": -2.024306672947693,
+          "y": 2.4763455986976624,
+          "z": 3
+        }
+      },
+      "restoredBounds": {
+        "isBox3": true,
+        "min": {
+          "x": -3.690701127052307,
+          "y": 1.5236544013023376,
+          "z": 1.850000023841858
+        },
+        "max": {
+          "x": -2.309298872947693,
+          "y": 2.4763455986976624,
+          "z": 3
+        }
+      }
+    },
+    {
+      "name": "Camera.001",
+      "id": "4c417723-80f1-4a30-9673-e4ff3453942a",
+      "triangles": 0,
+      "segments": 10,
+      "hitPixel": [
+        397,
+        174
+      ],
+      "hitLocal": [
+        0,
+        0.47634559672905924,
+        -1.15
+      ],
+      "previewBounds": {
+        "isBox3": true,
+        "min": {
+          "x": -0.2404469870523071,
+          "y": 1.5236544013023376,
+          "z": -5.149999976158142
+        },
+        "max": {
+          "x": 1.140955267052307,
+          "y": 2.4763455986976624,
+          "z": -4
+        }
+      },
+      "restoredBounds": {
+        "isBox3": true,
+        "min": {
+          "x": -0.6907011270523071,
+          "y": 1.5236544013023376,
+          "z": -5.149999976158142
+        },
+        "max": {
+          "x": 0.6907011270523071,
+          "y": 2.4763455986976624,
+          "z": -4
+        }
+      }
+    },
+    {
+      "name": "Sun",
+      "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+      "triangles": 126,
+      "segments": 1,
+      "hitPixel": [
+        476,
+        237
+      ],
+      "hitLocal": [
+        0,
+        0,
+        -1
+      ],
+      "previewBounds": {
+        "isBox3": true,
+        "min": {
+          "x": 1.3273585091762863,
+          "y": 1.9099999964237213,
+          "z": -1.2256711272542875
+        },
+        "max": {
+          "x": 2.4811631457909766,
+          "y": 2.0900000035762787,
+          "z": 0.1250663179431398
+        }
+      },
+      "restoredBounds": {
+        "isBox3": true,
+        "min": {
+          "x": 0.9715398091762864,
+          "y": 1.9099999964237213,
+          "z": -1.2256711272542875
+        },
+        "max": {
+          "x": 2.1253444457909767,
+          "y": 2.0900000035762787,
+          "z": 0.1250663179431398
+        }
+      }
+    },
+    {
+      "name": "Sun.001",
+      "id": "d8f549bf-4469-4dc6-b51d-9154b3574956",
+      "triangles": 126,
+      "segments": 1,
+      "hitPixel": [
+        594,
+        237
+      ],
+      "hitLocal": [
+        0,
+        0,
+        -1
+      ],
+      "previewBounds": {
+        "isBox3": true,
+        "min": {
+          "x": 3.3273585091762867,
+          "y": 1.9099999964237213,
+          "z": -1.2256711272542875
+        },
+        "max": {
+          "x": 4.481163145790977,
+          "y": 2.0900000035762787,
+          "z": 0.1250663179431398
+        }
+      },
+      "restoredBounds": {
+        "isBox3": true,
+        "min": {
+          "x": 2.9715398091762864,
+          "y": 1.9099999964237213,
+          "z": -1.2256711272542875
+        },
+        "max": {
+          "x": 4.125344445790977,
+          "y": 2.0900000035762787,
+          "z": 0.1250663179431398
+        }
+      }
+    },
+    {
+      "name": "Cube",
+      "id": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276",
+      "triangles": 6,
+      "segments": 0,
+      "hitPixel": [
+        219,
+        363
+      ],
+      "hitLocal": [
+        0,
+        0,
+        0
+      ],
+      "previewBounds": {
+        "isBox3": true,
+        "min": {
+          "x": -3.6273177,
+          "y": -1,
+          "z": -1
+        },
+        "max": {
+          "x": -1.6273176999999999,
+          "y": 1,
+          "z": 1
+        }
+      },
+      "restoredBounds": {
+        "isBox3": true,
+        "min": {
+          "x": -4,
+          "y": -1,
+          "z": -1
+        },
+        "max": {
+          "x": -2,
+          "y": 1,
+          "z": 1
+        }
+      }
+    },
+    {
+      "name": "Sphere",
+      "id": "0f86e68e-c400-4d75-b65f-7928d3fa7845",
+      "triangles": 684,
+      "segments": 0,
+      "hitPixel": [
+        397,
+        363
+      ],
+      "hitLocal": [
+        0,
+        0,
+        0
+      ],
+      "previewBounds": {
+        "isBox3": true,
+        "min": {
+          "x": -0.62731773,
+          "y": -1,
+          "z": -1
+        },
+        "max": {
+          "x": 1.3726822699999999,
+          "y": 1,
+          "z": 1
+        }
+      },
+      "restoredBounds": {
+        "isBox3": true,
+        "min": {
+          "x": -1,
+          "y": -1,
+          "z": -1
+        },
+        "max": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      }
+    },
+    {
+      "name": "Plane",
+      "id": "3659d4f3-ba3b-4c9e-8245-852519b11341",
+      "triangles": 2,
+      "segments": 0,
+      "hitPixel": [
+        574,
+        363
+      ],
+      "hitLocal": [
+        0,
+        0,
+        0
+      ],
+      "previewBounds": {
+        "isBox3": true,
+        "min": {
+          "x": 2.3726823,
+          "y": -6.123234262925839e-17,
+          "z": -1
+        },
+        "max": {
+          "x": 4.3726823,
+          "y": 6.123234262925839e-17,
+          "z": 1
+        }
+      },
+      "restoredBounds": {
+        "isBox3": true,
+        "min": {
+          "x": 2,
+          "y": -6.123234262925839e-17,
+          "z": -1
+        },
+        "max": {
+          "x": 4,
+          "y": 6.123234262925839e-17,
+          "z": 1
+        }
+      }
+    },
+    {
+      "name": "Legacy point light",
+      "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+      "segments": 8,
+      "triangles": 126,
+      "hitPixel": [
+        532,
+        244
+      ],
+      "bulbPixel": [
+        520,
+        247
+      ]
+    }
+  ],
+  "planes": [
+    {
+      "role": "studio",
+      "side": "above",
+      "eye": [
+        0,
+        6,
+        13
+      ],
+      "width": 794,
+      "height": 727,
+      "dpr": 1,
+      "file": "studio-above.png",
+      "pixel": [
+        580,
+        363
+      ],
+      "shown": [
+        7,
+        8,
+        9,
+        255
+      ],
+      "hidden": [
+        14,
+        17,
+        19,
+        255
+      ],
+      "id": "3659d4f3-ba3b-4c9e-8245-852519b11341"
+    },
+    {
+      "role": "studio",
+      "side": "below",
+      "eye": [
+        0,
+        -6,
+        13
+      ],
+      "width": 794,
+      "height": 727,
+      "dpr": 1,
+      "file": "studio-below.png",
+      "pixel": [
+        580,
+        363
+      ],
+      "shown": [
+        7,
+        8,
+        9,
+        255
+      ],
+      "hidden": [
+        14,
+        17,
+        19,
+        255
+      ],
+      "id": "3659d4f3-ba3b-4c9e-8245-852519b11341"
+    },
+    {
+      "role": "field",
+      "side": "above",
+      "eye": [
+        0,
+        6,
+        13
+      ],
+      "width": 794,
+      "height": 727,
+      "dpr": 1,
+      "file": "field-above.png",
+      "pixel": [
+        580,
+        363
+      ],
+      "shown": [
+        71,
+        71,
+        68,
+        255
+      ],
+      "hidden": [
+        14,
+        17,
+        19,
+        255
+      ],
+      "id": "3659d4f3-ba3b-4c9e-8245-852519b11341"
+    },
+    {
+      "role": "field",
+      "side": "below",
+      "eye": [
+        0,
+        -6,
+        13
+      ],
+      "width": 794,
+      "height": 727,
+      "dpr": 1,
+      "file": "field-below.png",
+      "pixel": [
+        580,
+        363
+      ],
+      "shown": [
+        176,
+        183,
+        195,
+        255
+      ],
+      "hidden": [
+        14,
+        17,
+        19,
+        255
+      ],
+      "id": "3659d4f3-ba3b-4c9e-8245-852519b11341"
+    }
+  ],
+  "sourceSha256": {
+    "src/viewport/Viewport3D.tsx": "741d49be7b8a1ca3a0efa1e250cb75791cb2b6ed7a58a2f90335f93ae43f1d30",
+    "src/viewport/viewportState.ts": "c9d95dcb9b24f41457153e3cbc37bc8d97714a1e10f0106b904babb219cecffb",
+    "src/viewport/viewportPicking.ts": "b8b112f06a0096459b325984354a97600f4db74c677446143016c6980bb8ffe2",
+    "src/viewport/forge3dWebViewport.ts": "aa9744fe78a21acd7d828f1b9e80224198b7b88ef0482241ad60bd974b102c8f",
+    "src/viewport/forge3dWebMapping.ts": "8462356ab9e52e60c1da1edb686c5f951ecba9642926d1ec2060a1d076878dcd",
+    "src/viewport/viewportGeometry.ts": "d7994cd89a34eccecc339645fff5719020da022af26be01b3e48ba4f83365508",
+    "src/viewport/viewportObjects.ts": "2ab5231c1c841498783b2d9ab67d5441c4c187a6bd3177fb8a4f2042a6058536",
+    "src/viewport/materialHelpers.ts": "1ce628438eff0ec6f230f81aca050fd9935695bb5d906adb9e4d6a624273a570",
+    "src/viewport/materialHelpers.wgsl": "88708159c0b33b4f1c98442af554c9e7b99ba993f256463a899148878b25c9e4",
+    "src/viewport/lighting.ts": "c601599ff4182070058fad6feb72585d7d505b3407b39348188315c5bd26b165",
+    "src/viewport/transformRig.ts": "f5b08af84db9e6633acb30a5b259820e03521dd55e60539c81c15265e1beb0d7",
+    "scripts/vp12.mjs": "e2188f7ed38b956e359f7dff8135aba1e0868cde1ea8a129ddd2b5512fb23d68",
+    "scripts/vp12-cases.mjs": "c9b37c77c50f5367324860b0f38d0173144feaa535c1fab9d4f28bcbb3937a8b"
+  },
+  "candidateShell": {
+    "sha256": "913910d7d645f904e1c0522fd91f5ed4351898d26c2cd3f96d743e6a34adc33c",
+    "flags": [
+      "--remote-debugging-address=127.0.0.1",
+      "--remote-debugging-port=59856",
+      "--force-device-scale-factor=1",
+      "--disable-webgl"
+    ],
+    "pid": 31820
+  },
+  "inspectorBounds": [
+    {
+      "id": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276",
+      "axis": "x",
+      "delta": -3,
+      "before": {
+        "isBox3": true,
+        "min": {
+          "x": -1,
+          "y": -1,
+          "z": -1
+        },
+        "max": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      },
+      "after": {
+        "isBox3": true,
+        "min": {
+          "x": -4,
+          "y": -1,
+          "z": -1
+        },
+        "max": {
+          "x": -2,
+          "y": 1,
+          "z": 1
+        }
+      }
+    },
+    {
+      "id": "3659d4f3-ba3b-4c9e-8245-852519b11341",
+      "axis": "x",
+      "delta": 3,
+      "before": {
+        "isBox3": true,
+        "min": {
+          "x": -1,
+          "y": -6.123234262925839e-17,
+          "z": -1
+        },
+        "max": {
+          "x": 1,
+          "y": 6.123234262925839e-17,
+          "z": 1
+        }
+      },
+      "after": {
+        "isBox3": true,
+        "min": {
+          "x": 2,
+          "y": -6.123234262925839e-17,
+          "z": -1
+        },
+        "max": {
+          "x": 4,
+          "y": 6.123234262925839e-17,
+          "z": 1
+        }
+      }
+    },
+    {
+      "id": "4c417723-80f1-4a30-9673-e4ff3453942a",
+      "axis": "x",
+      "delta": 3,
+      "before": {
+        "isBox3": true,
+        "min": {
+          "x": -3.690701127052307,
+          "y": 1.5236544013023376,
+          "z": 1.850000023841858
+        },
+        "max": {
+          "x": -2.309298872947693,
+          "y": 2.4763455986976624,
+          "z": 3
+        }
+      },
+      "after": {
+        "isBox3": true,
+        "min": {
+          "x": -0.6907011270523071,
+          "y": 1.5236544013023376,
+          "z": 1.850000023841858
+        },
+        "max": {
+          "x": 0.6907011270523071,
+          "y": 2.4763455986976624,
+          "z": 3
+        }
+      }
+    },
+    {
+      "id": "4c417723-80f1-4a30-9673-e4ff3453942a",
+      "axis": "z",
+      "delta": -7,
+      "before": {
+        "isBox3": true,
+        "min": {
+          "x": -0.6907011270523071,
+          "y": 1.5236544013023376,
+          "z": 1.850000023841858
+        },
+        "max": {
+          "x": 0.6907011270523071,
+          "y": 2.4763455986976624,
+          "z": 3
+        }
+      },
+      "after": {
+        "isBox3": true,
+        "min": {
+          "x": -0.6907011270523071,
+          "y": 1.5236544013023376,
+          "z": -5.149999976158142
+        },
+        "max": {
+          "x": 0.6907011270523071,
+          "y": 2.4763455986976624,
+          "z": -4
+        }
+      }
+    },
+    {
+      "id": "d8f549bf-4469-4dc6-b51d-9154b3574956",
+      "axis": "x",
+      "delta": 2,
+      "before": {
+        "isBox3": true,
+        "min": {
+          "x": 0.9715398091762864,
+          "y": 1.9099999964237213,
+          "z": -1.2256711272542875
+        },
+        "max": {
+          "x": 2.1253444457909767,
+          "y": 2.0900000035762787,
+          "z": 0.1250663179431398
+        }
+      },
+      "after": {
+        "isBox3": true,
+        "min": {
+          "x": 2.9715398091762864,
+          "y": 1.9099999964237213,
+          "z": -1.2256711272542875
+        },
+        "max": {
+          "x": 4.125344445790977,
+          "y": 2.0900000035762787,
+          "z": 0.1250663179431398
+        }
+      }
+    }
+  ],
+  "projectSha256": "630b5b34ae51a9f34b0c43db34e6e132764f5fadf92762c980f6e9dac5235f5d",
+  "solidLightStrokes": {
+    "candidate": [
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "directional",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 0.5,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          104,
+          65,
+          46
+        ],
+        "off": [
+          14,
+          17,
+          19
+        ],
+        "bulb": [
+          180,
+          104,
+          69
+        ],
+        "alpha": 0.5411764705882353,
+        "changed": 93,
+        "maxDiff": 90,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "directional",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 8,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          144,
+          140,
+          135
+        ],
+        "off": [
+          14,
+          17,
+          19
+        ],
+        "bulb": [
+          255,
+          243,
+          232
+        ],
+        "alpha": 0.5411764705882353,
+        "changed": 93,
+        "maxDiff": 130,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "point",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 0.5,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          84,
+          54,
+          40
+        ],
+        "off": [
+          14,
+          17,
+          19
+        ],
+        "bulb": [
+          180,
+          104,
+          69
+        ],
+        "alpha": 0.4235294117647059,
+        "changed": 93,
+        "maxDiff": 70,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "point",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 8,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          116,
+          113,
+          110
+        ],
+        "off": [
+          14,
+          17,
+          19
+        ],
+        "bulb": [
+          255,
+          243,
+          232
+        ],
+        "alpha": 0.4235294117647059,
+        "changed": 93,
+        "maxDiff": 102,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "point",
+        "color": [
+          0.004391442037410293,
+          0.005605391624202723,
+          0.006512090792594475
+        ],
+        "exposure": 8,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          24,
+          29,
+          33
+        ],
+        "off": [
+          14,
+          17,
+          19
+        ],
+        "bulb": [
+          37,
+          45,
+          51
+        ],
+        "alpha": 0.4235294117647059,
+        "changed": 93,
+        "maxDiff": 14,
+        "pixels": 341
+      }
+    ],
+    "field": [
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "directional",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 0.5,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          138,
+          82,
+          56
+        ],
+        "off": [
+          14,
+          17,
+          19
+        ],
+        "bulb": [
+          180,
+          104,
+          69
+        ],
+        "alpha": 0.75,
+        "changed": 62,
+        "maxDiff": 124,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "directional",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 8,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          195,
+          186,
+          179
+        ],
+        "off": [
+          14,
+          17,
+          19
+        ],
+        "bulb": [
+          255,
+          243,
+          232
+        ],
+        "alpha": 0.75,
+        "changed": 62,
+        "maxDiff": 181,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "point",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 0.5,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          114,
+          69,
+          49
+        ],
+        "off": [
+          14,
+          17,
+          19
+        ],
+        "bulb": [
+          180,
+          104,
+          69
+        ],
+        "alpha": 0.6,
+        "changed": 62,
+        "maxDiff": 100,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "point",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 8,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          159,
+          153,
+          147
+        ],
+        "off": [
+          14,
+          17,
+          19
+        ],
+        "bulb": [
+          255,
+          243,
+          232
+        ],
+        "alpha": 0.6,
+        "changed": 62,
+        "maxDiff": 145,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "point",
+        "color": [
+          0.004391442037410293,
+          0.005605391624202723,
+          0.006512090792594475
+        ],
+        "exposure": 8,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          28,
+          34,
+          38
+        ],
+        "off": [
+          14,
+          17,
+          19
+        ],
+        "bulb": [
+          37,
+          45,
+          51
+        ],
+        "alpha": 0.6,
+        "changed": 62,
+        "maxDiff": 19,
+        "pixels": 341
+      }
+    ]
+  },
+  "cameraStrokes": {
+    "solid": {
+      "candidate": [
+        {
+          "backing": "sky",
+          "exposure": 0.5,
+          "id": "109497ab-031d-4290-b704-834f4f824b98",
+          "stroke": [
+            98,
+            102,
+            104,
+            255
+          ],
+          "background": [
+            14,
+            17,
+            19,
+            255
+          ],
+          "selected": [
+            204,
+            138,
+            35,
+            255
+          ],
+          "alpha": 0.8431372549019608,
+          "strokeAlpha": 0.5686274509803921,
+          "undecoratedHit": []
+        },
+        {
+          "backing": "sky",
+          "exposure": 8,
+          "id": "109497ab-031d-4290-b704-834f4f824b98",
+          "stroke": [
+            149,
+            150,
+            151,
+            255
+          ],
+          "background": [
+            14,
+            17,
+            19,
+            255
+          ],
+          "selected": [
+            204,
+            138,
+            35,
+            255
+          ],
+          "alpha": 0.8431372549019608,
+          "strokeAlpha": 0.5686274509803921,
+          "undecoratedHit": []
+        },
+        {
+          "backing": "mesh",
+          "exposure": 0.5,
+          "id": "02383262-8ff5-41fb-a740-9e71a8133536",
+          "stroke": [
+            98,
+            102,
+            103,
+            255
+          ],
+          "background": [
+            14,
+            16,
+            17,
+            255
+          ],
+          "selected": [
+            204,
+            138,
+            35,
+            255
+          ],
+          "alpha": 0.8431372549019608
+        },
+        {
+          "backing": "mesh",
+          "exposure": 8,
+          "id": "02383262-8ff5-41fb-a740-9e71a8133536",
+          "stroke": [
+            239,
+            253,
+            253,
+            255
+          ],
+          "background": [
+            224,
+            255,
+            255,
+            255
+          ],
+          "selected": [
+            237,
+            175,
+            72,
+            255
+          ],
+          "alpha": 0.8431372549019608
+        },
+        {
+          "backing": "occluded",
+          "exposure": 0.5,
+          "id": "c51c59ff-a15e-4b4d-8a12-33ff0e5b85dc",
+          "stroke": [
+            14,
+            16,
+            17,
+            255
+          ],
+          "background": [
+            14,
+            16,
+            17,
+            255
+          ],
+          "selected": [
+            14,
+            16,
+            17,
+            255
+          ],
+          "hit": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+        },
+        {
+          "backing": "occluded",
+          "exposure": 8,
+          "id": "c51c59ff-a15e-4b4d-8a12-33ff0e5b85dc",
+          "stroke": [
+            223,
+            255,
+            255,
+            255
+          ],
+          "background": [
+            224,
+            255,
+            255,
+            255
+          ],
+          "selected": [
+            224,
+            255,
+            255,
+            255
+          ],
+          "hit": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+        }
+      ],
+      "field": [
+        {
+          "backing": "sky",
+          "exposure": 0.5,
+          "id": "109497ab-031d-4290-b704-834f4f824b98",
+          "stroke": [
+            124,
+            129,
+            131,
+            255
+          ],
+          "background": [
+            14,
+            17,
+            19,
+            255
+          ],
+          "selected": [
+            183,
+            124,
+            33,
+            255
+          ],
+          "alpha": 0.75,
+          "strokeAlpha": 0.75,
+          "undecoratedHit": [
+            "109497ab-031d-4290-b704-834f4f824b98"
+          ]
+        },
+        {
+          "backing": "sky",
+          "exposure": 8,
+          "id": "109497ab-031d-4290-b704-834f4f824b98",
+          "stroke": [
+            191,
+            192,
+            193,
+            255
+          ],
+          "background": [
+            14,
+            17,
+            19,
+            255
+          ],
+          "selected": [
+            183,
+            124,
+            33,
+            255
+          ],
+          "alpha": 0.75,
+          "strokeAlpha": 0.75,
+          "undecoratedHit": [
+            "109497ab-031d-4290-b704-834f4f824b98"
+          ]
+        },
+        {
+          "backing": "mesh",
+          "exposure": 0.5,
+          "id": "02383262-8ff5-41fb-a740-9e71a8133536",
+          "stroke": [
+            147,
+            152,
+            155,
+            255
+          ],
+          "background": [
+            104,
+            110,
+            113,
+            255
+          ],
+          "selected": [
+            205,
+            147,
+            57,
+            255
+          ],
+          "alpha": 0.75
+        },
+        {
+          "backing": "mesh",
+          "exposure": 8,
+          "id": "02383262-8ff5-41fb-a740-9e71a8133536",
+          "stroke": [
+            248,
+            249,
+            249,
+            255
+          ],
+          "background": [
+            243,
+            244,
+            244,
+            255
+          ],
+          "selected": [
+            240,
+            181,
+            89,
+            255
+          ],
+          "alpha": 0.75
+        },
+        {
+          "backing": "occluded",
+          "exposure": 0.5,
+          "id": "c51c59ff-a15e-4b4d-8a12-33ff0e5b85dc",
+          "stroke": [
+            104,
+            110,
+            113,
+            255
+          ],
+          "background": [
+            104,
+            110,
+            113,
+            255
+          ],
+          "selected": [
+            104,
+            110,
+            113,
+            255
+          ],
+          "hit": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+        },
+        {
+          "backing": "occluded",
+          "exposure": 8,
+          "id": "c51c59ff-a15e-4b4d-8a12-33ff0e5b85dc",
+          "stroke": [
+            243,
+            244,
+            244,
+            255
+          ],
+          "background": [
+            243,
+            244,
+            244,
+            255
+          ],
+          "selected": [
+            243,
+            244,
+            244,
+            255
+          ],
+          "hit": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+        }
+      ]
+    },
+    "material": {
+      "candidate": [
+        {
+          "backing": "sky",
+          "exposure": 0.5,
+          "id": "31fb4bd5-4e52-4bde-9b7d-d24524191880",
+          "stroke": [
+            101,
+            105,
+            108,
+            255
+          ],
+          "background": [
+            20,
+            24,
+            27,
+            255
+          ],
+          "selected": [
+            205,
+            139,
+            36,
+            255
+          ],
+          "alpha": 0.8431372549019608,
+          "strokeAlpha": 0.5686274509803921,
+          "undecoratedHit": []
+        },
+        {
+          "backing": "sky",
+          "exposure": 8,
+          "id": "31fb4bd5-4e52-4bde-9b7d-d24524191880",
+          "stroke": [
+            152,
+            153,
+            155,
+            255
+          ],
+          "background": [
+            20,
+            24,
+            27,
+            255
+          ],
+          "selected": [
+            205,
+            139,
+            36,
+            255
+          ],
+          "alpha": 0.8431372549019608,
+          "strokeAlpha": 0.5686274509803921,
+          "undecoratedHit": []
+        },
+        {
+          "backing": "mesh",
+          "exposure": 0.5,
+          "id": "7f29d795-d9f9-428d-9c02-687fbf942bf3",
+          "stroke": [
+            162,
+            167,
+            109,
+            255
+          ],
+          "background": [
+            163,
+            167,
+            34,
+            255
+          ],
+          "selected": [
+            228,
+            161,
+            37,
+            255
+          ],
+          "alpha": 0.8431372549019608
+        },
+        {
+          "backing": "mesh",
+          "exposure": 8,
+          "id": "7f29d795-d9f9-428d-9c02-687fbf942bf3",
+          "stroke": [
+            252,
+            252,
+            225,
+            255
+          ],
+          "background": [
+            252,
+            252,
+            196,
+            255
+          ],
+          "selected": [
+            242,
+            175,
+            63,
+            255
+          ],
+          "alpha": 0.8431372549019608
+        },
+        {
+          "backing": "occluded",
+          "exposure": 0.5,
+          "id": "ad39d0d5-ecb9-404d-b8d2-b07b66a69571",
+          "stroke": [
+            162,
+            166,
+            30,
+            255
+          ],
+          "background": [
+            163,
+            167,
+            34,
+            255
+          ],
+          "selected": [
+            163,
+            167,
+            34,
+            255
+          ],
+          "hit": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+        },
+        {
+          "backing": "occluded",
+          "exposure": 8,
+          "id": "ad39d0d5-ecb9-404d-b8d2-b07b66a69571",
+          "stroke": [
+            252,
+            252,
+            190,
+            255
+          ],
+          "background": [
+            252,
+            252,
+            196,
+            255
+          ],
+          "selected": [
+            252,
+            252,
+            196,
+            255
+          ],
+          "hit": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+        }
+      ],
+      "field": [
+        {
+          "backing": "sky",
+          "exposure": 0.5,
+          "id": "31fb4bd5-4e52-4bde-9b7d-d24524191880",
+          "stroke": [
+            126,
+            130,
+            133,
+            255
+          ],
+          "background": [
+            20,
+            24,
+            27,
+            255
+          ],
+          "selected": [
+            184,
+            126,
+            35,
+            255
+          ],
+          "alpha": 0.75,
+          "strokeAlpha": 0.75,
+          "undecoratedHit": [
+            "31fb4bd5-4e52-4bde-9b7d-d24524191880"
+          ]
+        },
+        {
+          "backing": "sky",
+          "exposure": 8,
+          "id": "31fb4bd5-4e52-4bde-9b7d-d24524191880",
+          "stroke": [
+            192,
+            194,
+            195,
+            255
+          ],
+          "background": [
+            20,
+            24,
+            27,
+            255
+          ],
+          "selected": [
+            184,
+            126,
+            35,
+            255
+          ],
+          "alpha": 0.75,
+          "strokeAlpha": 0.75,
+          "undecoratedHit": [
+            "31fb4bd5-4e52-4bde-9b7d-d24524191880"
+          ]
+        },
+        {
+          "backing": "mesh",
+          "exposure": 0.5,
+          "id": "7f29d795-d9f9-428d-9c02-687fbf942bf3",
+          "stroke": [
+            161,
+            165,
+            138,
+            255
+          ],
+          "background": [
+            163,
+            163,
+            47,
+            255
+          ],
+          "selected": [
+            220,
+            161,
+            40,
+            255
+          ],
+          "alpha": 0.75
+        },
+        {
+          "backing": "mesh",
+          "exposure": 8,
+          "id": "7f29d795-d9f9-428d-9c02-687fbf942bf3",
+          "stroke": [
+            250,
+            251,
+            245,
+            255
+          ],
+          "background": [
+            252,
+            251,
+            227,
+            255
+          ],
+          "selected": [
+            242,
+            183,
+            85,
+            255
+          ],
+          "alpha": 0.75
+        },
+        {
+          "backing": "occluded",
+          "exposure": 0.5,
+          "id": "ad39d0d5-ecb9-404d-b8d2-b07b66a69571",
+          "stroke": [
+            163,
+            163,
+            47,
+            255
+          ],
+          "background": [
+            163,
+            163,
+            47,
+            255
+          ],
+          "selected": [
+            163,
+            163,
+            47,
+            255
+          ],
+          "hit": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+        },
+        {
+          "backing": "occluded",
+          "exposure": 8,
+          "id": "ad39d0d5-ecb9-404d-b8d2-b07b66a69571",
+          "stroke": [
+            252,
+            251,
+            227,
+            255
+          ],
+          "background": [
+            252,
+            251,
+            227,
+            255
+          ],
+          "selected": [
+            252,
+            251,
+            227,
+            255
+          ],
+          "hit": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+        }
+      ]
+    }
+  },
+  "materialLightStrokes": {
+    "candidate": [
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "directional",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 0.5,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          112,
+          70,
+          50
+        ],
+        "off": [
+          20,
+          24,
+          27
+        ],
+        "bulb": [
+          180,
+          104,
+          69
+        ],
+        "alpha": 0.5725490196078431,
+        "changed": 93,
+        "maxDiff": 92,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "directional",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 8,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          155,
+          150,
+          144
+        ],
+        "off": [
+          20,
+          24,
+          27
+        ],
+        "bulb": [
+          255,
+          243,
+          232
+        ],
+        "alpha": 0.5725490196078431,
+        "changed": 93,
+        "maxDiff": 135,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "point",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 0.5,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          94,
+          61,
+          47
+        ],
+        "off": [
+          20,
+          24,
+          27
+        ],
+        "bulb": [
+          180,
+          104,
+          69
+        ],
+        "alpha": 0.4588235294117647,
+        "changed": 93,
+        "maxDiff": 74,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "point",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 8,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          128,
+          125,
+          122
+        ],
+        "off": [
+          20,
+          24,
+          27
+        ],
+        "bulb": [
+          255,
+          243,
+          232
+        ],
+        "alpha": 0.4588235294117647,
+        "changed": 93,
+        "maxDiff": 108,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "point",
+        "color": [
+          0.0018,
+          0,
+          0
+        ],
+        "exposure": 8,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          16,
+          13,
+          15
+        ],
+        "off": [
+          20,
+          24,
+          27
+        ],
+        "bulb": [
+          10,
+          0,
+          0
+        ],
+        "alpha": 0.4588235294117647,
+        "changed": 93,
+        "maxDiff": 12,
+        "pixels": 341
+      }
+    ],
+    "field": [
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "directional",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 0.5,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          140,
+          84,
+          58
+        ],
+        "off": [
+          20,
+          24,
+          27
+        ],
+        "bulb": [
+          180,
+          104,
+          69
+        ],
+        "alpha": 0.75,
+        "changed": 62,
+        "maxDiff": 120,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "directional",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 8,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          196,
+          188,
+          181
+        ],
+        "off": [
+          20,
+          24,
+          27
+        ],
+        "bulb": [
+          255,
+          243,
+          232
+        ],
+        "alpha": 0.75,
+        "changed": 62,
+        "maxDiff": 176,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "point",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 0.5,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          116,
+          72,
+          52
+        ],
+        "off": [
+          20,
+          24,
+          27
+        ],
+        "bulb": [
+          180,
+          104,
+          69
+        ],
+        "alpha": 0.6,
+        "changed": 62,
+        "maxDiff": 96,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "point",
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "exposure": 8,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          161,
+          155,
+          150
+        ],
+        "off": [
+          20,
+          24,
+          27
+        ],
+        "bulb": [
+          255,
+          243,
+          232
+        ],
+        "alpha": 0.6,
+        "changed": 62,
+        "maxDiff": 141,
+        "pixels": 341
+      },
+      {
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a",
+        "kind": "point",
+        "color": [
+          0.0018,
+          0,
+          0
+        ],
+        "exposure": 8,
+        "point": [
+          462,
+          290
+        ],
+        "on": [
+          14,
+          10,
+          11
+        ],
+        "off": [
+          20,
+          24,
+          27
+        ],
+        "bulb": [
+          10,
+          0,
+          0
+        ],
+        "alpha": 0.6,
+        "changed": 62,
+        "maxDiff": 16,
+        "pixels": 341
+      }
+    ]
+  },
+  "authoredColour": {
+    "candidate": {
+      "points": [
+        [
+          171,
+          363
+        ],
+        [
+          203,
+          363
+        ],
+        [
+          236,
+          363
+        ],
+        [
+          268,
+          363
+        ],
+        [
+          300,
+          363
+        ],
+        [
+          332,
+          363
+        ],
+        [
+          364,
+          363
+        ],
+        [
+          397,
+          363
+        ],
+        [
+          429,
+          363
+        ]
+      ],
+      "samples": [
+        {
+          "count": 256,
+          "colors": [
+            [
+              163,
+              156,
+              149,
+              255
+            ],
+            [
+              123,
+              115,
+              109,
+              255
+            ],
+            [
+              141,
+              121,
+              120,
+              255
+            ],
+            [
+              135,
+              128,
+              121,
+              255
+            ],
+            [
+              248,
+              253,
+              255,
+              255
+            ],
+            [
+              226,
+              230,
+              234,
+              255
+            ],
+            [
+              255,
+              255,
+              255,
+              255
+            ],
+            [
+              254,
+              255,
+              255,
+              255
+            ],
+            [
+              255,
+              252,
+              202,
+              255
+            ]
+          ]
+        },
+        {
+          "count": 257,
+          "colors": [
+            [
+              163,
+              156,
+              149,
+              255
+            ],
+            [
+              123,
+              115,
+              109,
+              255
+            ],
+            [
+              141,
+              121,
+              120,
+              255
+            ],
+            [
+              135,
+              128,
+              121,
+              255
+            ],
+            [
+              248,
+              253,
+              255,
+              255
+            ],
+            [
+              226,
+              230,
+              234,
+              255
+            ],
+            [
+              255,
+              255,
+              255,
+              255
+            ],
+            [
+              254,
+              255,
+              255,
+              255
+            ],
+            [
+              255,
+              252,
+              202,
+              255
+            ]
+          ]
+        },
+        {
+          "count": 256,
+          "colors": [
+            [
+              163,
+              156,
+              149,
+              255
+            ],
+            [
+              123,
+              115,
+              109,
+              255
+            ],
+            [
+              141,
+              121,
+              120,
+              255
+            ],
+            [
+              135,
+              128,
+              121,
+              255
+            ],
+            [
+              248,
+              253,
+              255,
+              255
+            ],
+            [
+              226,
+              230,
+              234,
+              255
+            ],
+            [
+              255,
+              255,
+              255,
+              255
+            ],
+            [
+              254,
+              255,
+              255,
+              255
+            ],
+            [
+              255,
+              252,
+              202,
+              255
+            ]
+          ]
+        }
+      ],
+      "floatControl": {
+        "packed": [
+          123,
+          115,
+          109,
+          255
+        ],
+        "uniform": [
+          123,
+          115,
+          109,
+          255
+        ]
+      },
+      "blackControl": [
+        109,
+        102,
+        96,
+        255
+      ],
+      "bulbPoints": [
+        [
+          213,
+          355
+        ],
+        [
+          405,
+          355
+        ],
+        [
+          596,
+          355
+        ]
+      ],
+      "bulbs": [
+        [
+          0,
+          0,
+          0,
+          255
+        ],
+        [
+          10,
+          0,
+          0,
+          255
+        ],
+        [
+          248,
+          8,
+          19,
+          255
+        ]
+      ],
+      "solidBulbs": [
+        {
+          "exposure": 1.35,
+          "colours": [
+            [
+              1,
+              0.75,
+              0.02
+            ],
+            [
+              0.75,
+              1,
+              0.02
+            ],
+            [
+              0.8,
+              0.8,
+              0.02
+            ]
+          ],
+          "points": [
+            [
+              213,
+              355
+            ],
+            [
+              405,
+              355
+            ],
+            [
+              596,
+              355
+            ]
+          ],
+          "pixels": [
+            [
+              238,
+              227,
+              123,
+              255
+            ],
+            [
+              231,
+              235,
+              136,
+              255
+            ],
+            [
+              232,
+              229,
+              123,
+              255
+            ]
+          ]
+        },
+        {
+          "exposure": 0.5,
+          "colours": [
+            [
+              1,
+              0.75,
+              0.02
+            ],
+            [
+              0.75,
+              1,
+              0.02
+            ],
+            [
+              0.8,
+              0.8,
+              0.02
+            ]
+          ],
+          "points": [
+            [
+              213,
+              355
+            ],
+            [
+              405,
+              355
+            ],
+            [
+              596,
+              355
+            ]
+          ],
+          "pixels": [
+            [
+              198,
+              180,
+              46,
+              255
+            ],
+            [
+              183,
+              196,
+              56,
+              255
+            ],
+            [
+              185,
+              183,
+              46,
+              255
+            ]
+          ]
+        },
+        {
+          "exposure": 8,
+          "colours": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0.0018,
+              0,
+              0
+            ],
+            [
+              0.12,
+              0,
+              0
+            ]
+          ],
+          "points": [
+            [
+              213,
+              355
+            ],
+            [
+              405,
+              355
+            ],
+            [
+              596,
+              355
+            ]
+          ],
+          "pixels": [
+            [
+              0,
+              0,
+              0,
+              255
+            ],
+            [
+              10,
+              0,
+              0,
+              255
+            ],
+            [
+              248,
+              8,
+              19,
+              255
+            ]
+          ]
+        }
+      ]
+    },
+    "field": {
+      "points": [
+        [
+          171,
+          363
+        ],
+        [
+          203,
+          363
+        ],
+        [
+          236,
+          363
+        ],
+        [
+          268,
+          363
+        ],
+        [
+          300,
+          363
+        ],
+        [
+          332,
+          363
+        ],
+        [
+          364,
+          363
+        ],
+        [
+          397,
+          363
+        ],
+        [
+          429,
+          363
+        ]
+      ],
+      "samples": [
+        {
+          "count": 256,
+          "colors": [
+            [
+              1,
+              1,
+              1,
+              255
+            ],
+            [
+              37,
+              34,
+              32,
+              255
+            ],
+            [
+              51,
+              16,
+              31,
+              255
+            ],
+            [
+              104,
+              98,
+              93,
+              255
+            ],
+            [
+              248,
+              251,
+              254,
+              255
+            ],
+            [
+              226,
+              229,
+              231,
+              255
+            ],
+            [
+              255,
+              255,
+              255,
+              255
+            ],
+            [
+              253,
+              254,
+              255,
+              255
+            ],
+            [
+              255,
+              251,
+              237,
+              255
+            ]
+          ]
+        },
+        {
+          "count": 257,
+          "colors": [
+            [
+              1,
+              1,
+              1,
+              255
+            ],
+            [
+              37,
+              34,
+              32,
+              255
+            ],
+            [
+              51,
+              16,
+              31,
+              255
+            ],
+            [
+              104,
+              98,
+              93,
+              255
+            ],
+            [
+              248,
+              251,
+              254,
+              255
+            ],
+            [
+              226,
+              229,
+              231,
+              255
+            ],
+            [
+              255,
+              255,
+              255,
+              255
+            ],
+            [
+              253,
+              254,
+              255,
+              255
+            ],
+            [
+              255,
+              251,
+              237,
+              255
+            ]
+          ]
+        },
+        {
+          "count": 256,
+          "colors": [
+            [
+              1,
+              1,
+              1,
+              255
+            ],
+            [
+              37,
+              34,
+              32,
+              255
+            ],
+            [
+              51,
+              16,
+              31,
+              255
+            ],
+            [
+              104,
+              98,
+              93,
+              255
+            ],
+            [
+              248,
+              251,
+              254,
+              255
+            ],
+            [
+              226,
+              229,
+              231,
+              255
+            ],
+            [
+              255,
+              255,
+              255,
+              255
+            ],
+            [
+              253,
+              254,
+              255,
+              255
+            ],
+            [
+              255,
+              251,
+              237,
+              255
+            ]
+          ]
+        }
+      ],
+      "blackControl": [
+        1,
+        1,
+        1,
+        255
+      ],
+      "bulbPoints": [
+        [
+          213,
+          355
+        ],
+        [
+          405,
+          355
+        ],
+        [
+          596,
+          355
+        ]
+      ],
+      "bulbs": [
+        [
+          0,
+          0,
+          0,
+          255
+        ],
+        [
+          10,
+          0,
+          0,
+          255
+        ],
+        [
+          248,
+          8,
+          19,
+          255
+        ]
+      ],
+      "solidBulbs": [
+        {
+          "exposure": 1.35,
+          "colours": [
+            [
+              1,
+              0.75,
+              0.02
+            ],
+            [
+              0.75,
+              1,
+              0.02
+            ],
+            [
+              0.8,
+              0.8,
+              0.02
+            ]
+          ],
+          "points": [
+            [
+              213,
+              355
+            ],
+            [
+              405,
+              355
+            ],
+            [
+              596,
+              355
+            ]
+          ],
+          "pixels": [
+            [
+              238,
+              227,
+              123,
+              255
+            ],
+            [
+              231,
+              235,
+              136,
+              255
+            ],
+            [
+              232,
+              229,
+              123,
+              255
+            ]
+          ]
+        },
+        {
+          "exposure": 0.5,
+          "colours": [
+            [
+              1,
+              0.75,
+              0.02
+            ],
+            [
+              0.75,
+              1,
+              0.02
+            ],
+            [
+              0.8,
+              0.8,
+              0.02
+            ]
+          ],
+          "points": [
+            [
+              213,
+              355
+            ],
+            [
+              405,
+              355
+            ],
+            [
+              596,
+              355
+            ]
+          ],
+          "pixels": [
+            [
+              198,
+              180,
+              46,
+              255
+            ],
+            [
+              183,
+              196,
+              56,
+              255
+            ],
+            [
+              185,
+              183,
+              46,
+              255
+            ]
+          ]
+        },
+        {
+          "exposure": 8,
+          "colours": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0.0018,
+              0,
+              0
+            ],
+            [
+              0.12,
+              0,
+              0
+            ]
+          ],
+          "points": [
+            [
+              213,
+              355
+            ],
+            [
+              405,
+              355
+            ],
+            [
+              596,
+              355
+            ]
+          ],
+          "pixels": [
+            [
+              0,
+              0,
+              0,
+              255
+            ],
+            [
+              10,
+              0,
+              0,
+              255
+            ],
+            [
+              248,
+              8,
+              19,
+              255
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  "boxOnlySky": [
+    339,
+    291
+  ],
+  "modeCycle": [
+    {
+      "mode": "Material preview",
+      "sample": [
+        227,
+        228,
+        89,
+        255
+      ],
+      "submitted": [
+        0.62,
+        0.66,
+        0.03,
+        1
+      ],
+      "roughness": 0.6,
+      "metallic": 0.04
+    },
+    {
+      "mode": "Solid mode",
+      "sample": [
+        73,
+        82,
+        85,
+        255
+      ],
+      "submitted": [
+        0.2541520943200296,
+        0.29613827078752575,
+        0.3231432091022285,
+        1
+      ],
+      "roughness": 0.62,
+      "metallic": 0
+    }
+  ],
+  "occludedFrustum": {
+    "pixel": [
+      397,
+      312
+    ],
+    "foreground": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276",
+    "stroke": "1fe0984c-c604-4da1-ae54-56481808197f",
+    "rgba": [
+      37,
+      43,
+      47,
+      255
+    ]
+  },
+  "edgeCases": {
+    "nearRay": [
+      {
+        "pt": [
+          477,
+          362
+        ],
+        "color": [
+          64,
+          64,
+          64,
+          70
+        ],
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a"
+      },
+      {
+        "pt": [
+          438,
+          362
+        ],
+        "color": [
+          39,
+          39,
+          39,
+          42
+        ],
+        "id": "a387dc42-26e5-49f4-999b-d7b26cf91a5a"
+      }
+    ],
+    "fallbackCamera": {
+      "id": "1fe0984c-c604-4da1-ae54-56481808197f",
+      "eye": [
+        8,
+        0,
+        1.8369701987210297e-16
+      ],
+      "forward": [
+        -1,
+        0,
+        -2.220446049250313e-16
+      ]
+    },
+    "cameraCapture": {
+      "eye": [
+        -2.7132104563065695e-7,
+        4.934187269878265e-8,
+        6.000000175634463
+      ],
+      "forward": [
+        -1.3511813865269365e-8,
+        -1.8124925549120617e-7,
+        -0.9999999999999835
+      ],
+      "up": [
+        3.412044735453079e-9,
+        0.9999999999999836,
+        -1.812492555373091e-7
+      ],
+      "local": {
+        "translation": {
+          "x": -3.741701,
+          "y": -0.22668211,
+          "z": -2.1298442
+        },
+        "rotationDeg": {
+          "x": -167.26378,
+          "y": 16.175653,
+          "z": 30.00035
+        },
+        "scale": {
+          "x": 1,
+          "y": -2,
+          "z": 1
+        }
+      }
+    },
+    "lightHierarchy": {
+      "before": {
+        "direction": [
+          -1,
+          0,
+          -6.123233995736766e-17
+        ],
+        "intensity": 3,
+        "color": [
+          1,
+          0,
+          0
+        ]
+      },
+      "after": {
+        "direction": [
+          -0.6427876096865394,
+          0,
+          -0.7660444431189782
+        ],
+        "intensity": 3,
+        "color": [
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    "bulbs": [
+      {
+        "color": [
+          0,
+          0,
+          0
+        ],
+        "intensity": 0,
+        "sample": [
+          0,
+          0,
+          0,
+          255
+        ]
+      },
+      {
+        "color": [
+          0,
+          0,
+          0
+        ],
+        "intensity": 1,
+        "sample": [
+          0,
+          0,
+          0,
+          255
+        ]
+      },
+      {
+        "color": [
+          0,
+          0,
+          0
+        ],
+        "intensity": 4,
+        "sample": [
+          0,
+          0,
+          0,
+          255
+        ]
+      },
+      {
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "intensity": 0,
+        "sample": [
+          234,
+          178,
+          137,
+          255
+        ]
+      },
+      {
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "intensity": 1,
+        "sample": [
+          234,
+          178,
+          137,
+          255
+        ]
+      },
+      {
+        "color": [
+          0.75,
+          0.25,
+          0.125
+        ],
+        "intensity": 4,
+        "sample": [
+          234,
+          178,
+          137,
+          255
+        ]
+      }
+    ],
+    "crowds": [
+      {
+        "count": 255,
+        "slots": 2,
+        "samples": [
+          {
+            "pt": [
+              392,
+              363
+            ],
+            "id": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+          },
+          {
+            "pt": [
+              397,
+              363
+            ],
+            "id": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+          }
+        ],
+        "reads": {
+          "readObjectMask": 1,
+          "readPixelDepth": 1
+        }
+      },
+      {
+        "count": 256,
+        "slots": 2,
+        "samples": [
+          {
+            "pt": [
+              392,
+              363
+            ],
+            "id": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+          },
+          {
+            "pt": [
+              397,
+              363
+            ],
+            "id": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+          }
+        ],
+        "reads": {
+          "readObjectMask": 1,
+          "readPixelDepth": 1
+        }
+      },
+      {
+        "count": 257,
+        "slots": 2,
+        "samples": [
+          {
+            "pt": [
+              392,
+              363
+            ],
+            "id": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+          },
+          {
+            "pt": [
+              397,
+              363
+            ],
+            "id": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+          }
+        ],
+        "reads": {
+          "readObjectMask": 1,
+          "readPixelDepth": 1
+        }
+      }
+    ],
+    "distinct": [
+      {
+        "count": 256,
+        "samples": [
+          {
+            "i": 0,
+            "pt": [
+              139,
+              588
+            ],
+            "color": [
+              33,
+              231,
+              126,
+              255
+            ],
+            "id": "b5e37718-a35a-4c17-bf28-036ba58f09ec"
+          },
+          {
+            "i": 128,
+            "pt": [
+              429,
+              363
+            ],
+            "color": [
+              208,
+              208,
+              127,
+              255
+            ],
+            "id": "1ff52005-88d8-4783-b979-cc78e82cfd1e"
+          },
+          {
+            "i": 255,
+            "pt": [
+              139,
+              106
+            ],
+            "color": [
+              234,
+              98,
+              156,
+              255
+            ],
+            "id": "2619386a-4822-488d-ab4c-ed57be3da3f6"
+          }
+        ],
+        "surfaces": 256,
+        "batches": 256,
+        "slots": 2
+      },
+      {
+        "count": 257,
+        "samples": [
+          {
+            "i": 0,
+            "pt": [
+              139,
+              588
+            ],
+            "color": [
+              20,
+              233,
+              123,
+              255
+            ],
+            "id": "10150dd7-9a77-494c-86bc-68efbdb306d9"
+          },
+          {
+            "i": 128,
+            "pt": [
+              429,
+              363
+            ],
+            "color": [
+              207,
+              206,
+              126,
+              255
+            ],
+            "id": "f671a54f-b4e1-42a5-9aaf-8575d7ab314e"
+          },
+          {
+            "i": 256,
+            "pt": [
+              171,
+              106
+            ],
+            "color": [
+              230,
+              94,
+              153,
+              255
+            ],
+            "id": "5c7bf9c4-234c-4ca0-add1-d857b5c73a7f"
+          }
+        ],
+        "surfaces": 257,
+        "batches": 1,
+        "slots": 2
+      }
+    ]
+  },
+  "coplanar": {
+    "candidate": [
+      {
+        "visible": false,
+        "color": [
+          225,
+          66,
+          73,
+          255
+        ],
+        "hit": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+      },
+      {
+        "visible": true,
+        "color": [
+          225,
+          66,
+          73,
+          255
+        ],
+        "hit": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+      },
+      {
+        "visible": false,
+        "color": [
+          225,
+          66,
+          73,
+          255
+        ],
+        "hit": "9be6d35b-00e2-41e5-a6aa-b4a95fb6a276"
+      }
+    ],
+    "field": [
+      {
+        "visible": false,
+        "color": [
+          247,
+          91,
+          85,
+          255
+        ]
+      },
+      {
+        "visible": true,
+        "color": [
+          247,
+          91,
+          85,
+          255
+        ]
+      },
+      {
+        "visible": false,
+        "color": [
+          247,
+          91,
+          85,
+          255
+        ]
+      }
+    ]
+  },
+  "fieldShell": {
+    "sha256": "d01a854f80f8847b6051aacfc2d79072c1023f365307aaac66bd652bbcb756f9",
+    "flags": [
+      "--remote-debugging-address=127.0.0.1",
+      "--remote-debugging-port=58934",
+      "--force-device-scale-factor=1"
+    ],
+    "pid": 12204
+  },
+  "editorShell": {
+    "sha256": "913910d7d645f904e1c0522fd91f5ed4351898d26c2cd3f96d743e6a34adc33c",
+    "flags": [
+      "--remote-debugging-address=127.0.0.1",
+      "--remote-debugging-port=55077",
+      "--force-device-scale-factor=1"
+    ],
+    "pid": 38240
+  },
+  "mixedHierarchy": {
+    "before": [
+      {
+        "editor": [
+          0,
+          0,
+          0
+        ],
+        "gpu": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "editor": [
+          3,
+          0,
+          0
+        ],
+        "gpu": [
+          3,
+          0,
+          0
+        ]
+      }
+    ],
+    "held": [
+      {
+        "editor": [
+          0.49332560734223463,
+          0,
+          0
+        ],
+        "gpu": [
+          0.49332560734223463,
+          0,
+          0
+        ]
+      },
+      {
+        "editor": [
+          3.4933256073422347,
+          0,
+          0
+        ],
+        "gpu": [
+          3.4933256073422347,
+          0,
+          0
+        ]
+      }
+    ],
+    "after": [
+      {
+        "editor": [
+          0.49332562,
+          0,
+          0
+        ],
+        "gpu": [
+          0.49332562,
+          0,
+          0
+        ]
+      },
+      {
+        "editor": [
+          3.4933256200000002,
+          0,
+          0
+        ],
+        "gpu": [
+          3.4933256200000002,
+          0,
+          0
+        ]
+      }
+    ],
+    "undone": [
+      {
+        "editor": [
+          0,
+          0,
+          0
+        ],
+        "gpu": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "editor": [
+          3,
+          0,
+          0
+        ],
+        "gpu": [
+          3,
+          0,
+          0
+        ]
+      }
+    ],
+    "history": [
+      {
+        "action": "Redo",
+        "displayed": [
+          {
+            "editor": [
+              0.49332562,
+              0,
+              0
+            ],
+            "gpu": [
+              0.49332562,
+              0,
+              0
+            ]
+          },
+          {
+            "editor": [
+              3.4933256200000002,
+              0,
+              0
+            ],
+            "gpu": [
+              3.4933256200000002,
+              0,
+              0
+            ]
+          }
+        ]
+      },
+      {
+        "action": "Undo",
+        "displayed": [
+          {
+            "editor": [
+              0,
+              0,
+              0
+            ],
+            "gpu": [
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "editor": [
+              3,
+              0,
+              0
+            ],
+            "gpu": [
+              3,
+              0,
+              0
+            ]
+          }
+        ]
+      },
+      {
+        "action": "Redo",
+        "displayed": [
+          {
+            "editor": [
+              0.49332562,
+              0,
+              0
+            ],
+            "gpu": [
+              0.49332562,
+              0,
+              0
+            ]
+          },
+          {
+            "editor": [
+              3.4933256200000002,
+              0,
+              0
+            ],
+            "gpu": [
+              3.4933256200000002,
+              0,
+              0
+            ]
+          }
+        ]
+      },
+      {
+        "action": "Undo",
+        "displayed": [
+          {
+            "editor": [
+              0,
+              0,
+              0
+            ],
+            "gpu": [
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "editor": [
+              3,
+              0,
+              0
+            ],
+            "gpu": [
+              3,
+              0,
+              0
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "successfulWebGL": 0,
+  "passed": true
+}

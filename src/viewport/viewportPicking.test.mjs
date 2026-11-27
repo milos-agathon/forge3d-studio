@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Camera, TerrainDataset } from "@forge3d/web";
 import { BoxGeometry, BufferGeometry, DoubleSide, Float32BufferAttribute, Group, InstancedMesh, Line, LineBasicMaterial, LineLoop, LineSegments, Matrix4, Mesh, MeshBasicMaterial, PerspectiveCamera, PlaneGeometry, Points, PointsMaterial, Raycaster, Vector2, Vector3 } from "three";
-import { cubeScatterGeometry, framebufferProjection, terrainInput } from "./forge3dWebMapping.ts";
-import { canvasPixel, measurePixelDepth, pickEditor, pickSurfaces, terrainRayMetres } from "./viewportPicking.ts";
+import * as forge from "@forge3d/web";
+import { Color } from "three";
+import { buildObjects, updateFaces } from "./viewportObjects.ts";
+import { framebufferProjection, terrainInput } from "./forge3dWebMapping.ts";
+import { strokeNearPixel, canvasPixel, measurePixelDepth, pickEditor, pickSurfaces, terrainRayMetres } from "./viewportPicking.ts";
 import { terrainHitElevation } from "./editorTrianglePicking.ts";
 import { ViewportModel } from "./viewportState.ts";
 import { readFileSync } from "node:fs";
@@ -172,7 +175,7 @@ test("cursor uses the admitted metre sample before Float32 mesh rounding", () =>
 });
 
 test("near and far planes clip individual faces, including oblique rays", () => {
-  const pick = (camera, pixel = center) => pickSurfaces(camera, viewport, pixel, placement, { cube }, 7).hit;
+  const pick = (camera, pixel = center) => pickSurfaces(camera, viewport, pixel, placement, { mesh: cube }, 7).hit;
   assert.equal(pick(facing).worldPosition[2], 1);
   assert.ok(Math.abs(pick(facing.with({ near: 5 })).worldPosition[2] + 1) < 1e-12);
   assert.equal(pick(facing.with({ far: 3.9 })), null);
@@ -184,11 +187,13 @@ test("near and far planes clip individual faces, including oblique rays", () => 
 
 test("flattened indexed cube shares the submitted camera origin at four billion units", () => {
   const origin = { translation: [4_000_000_000, 0, 0], scale: 1 };
-  const { geometry, transforms } = cubeScatterGeometry(2, {
-    rotationDeg: [0, 0, 0], scale: [1, 1, 0], translation: origin.translation,
-  }, origin);
-  geometry.applyMatrix4(new Matrix4().fromArray(transforms).transpose());
-  const hit = pickSurfaces(facing, viewport, center, origin, { cube: { id: "flat", geometry } }, 3).hit;
+  const object = { id:"flat",rotationDeg:[0,0,0],scale:[1,1,0],translation:origin.translation,
+    kind:{type:"mesh",source:{type:"primitive",primitive:{type:"cube",size:2}}} };
+  const scene = buildObjects(forge,[object],new Map([[object.id,object]]),origin,new Color(),{mode:"solid",exposure:1.35});
+  updateFaces(scene,facing.position);
+  const surface = scene.records.get(object.id).surface;
+  const result = pickSurfaces(facing, viewport, center, origin, { mesh:surface }, 3);
+  const hit = result.hit ?? result.mesh;
   assert.deepEqual(hit.worldPosition, origin.translation);
   assert.equal(hit.id, "flat");
   assert.equal(hit.distance, 5);
@@ -198,13 +203,13 @@ test("cube silhouette hits and misses defer to raster coverage and retain the cl
   const size = { width: 794, height: 727 };
   for (const [z, x, interior] of [[9.478847292072615, 500, 499], [9.478961982570125, 293, 294]]) {
     const camera = new Camera({ position:[0,0,z], target:[0,0,0], fovYDegrees:45, near:.05, far:2000 });
-    const pick = px => pickSurfaces(camera, size, [px,363], placement, {cube}, 17);
+    const pick = px => pickSurfaces(camera, size, [px,363], placement, {mesh: cube}, 17);
     const edge = pick(x);
     assert.equal(edge.terrain, null);
-    assert.equal(edge.cube.id, cube.id);
-    assert.equal(edge.cube.frameRevision, 17);
-    assert.ok(Math.abs(edge.cube.worldPosition[2] - 1) < 1e-7);
-    const screen = camera.worldToScreen(edge.cube.worldPosition, size);
+    assert.equal(edge.mesh.id, cube.id);
+    assert.equal(edge.mesh.frameRevision, 17);
+    assert.ok(Math.abs(edge.mesh.worldPosition[2] - 1) < 1e-7);
+    const screen = camera.worldToScreen(edge.mesh.worldPosition, size);
     assert.ok(Math.hypot(screen.x - x - .5, screen.y - 363.5) < 1e-7);
     assert.equal(pick(interior).hit.id, cube.id);
     assert.equal(pick(2*x - interior).hit, null);
@@ -214,11 +219,11 @@ test("cube silhouette hits and misses defer to raster coverage and retain the cl
 test("a grazing cube face measures fragment depth even inside its projected edges", () => {
   const size = { width: 794, height: 727 };
   const pick = height => pickSurfaces(new Camera({ position:[0,height,10], target:[0,1,0],
-    fovYDegrees:45, near:.05, far:2000 }), size, [397,363], placement, {cube}, 17);
+    fovYDegrees:45, near:.05, far:2000 }), size, [397,363], placement, {mesh: cube}, 17);
   const grazing = pick(1.1);
-  assert.equal(grazing.cube.id, cube.id);
-  assert.ok(grazing.cubeDepths.hints.length);
-  assert.ok(grazing.cubeDepths.minimum < grazing.cubeDepths.maximum);
+  assert.equal(grazing.mesh.id, cube.id);
+  assert.ok(grazing.meshDepths.hints.length);
+  assert.ok(grazing.meshDepths.minimum < grazing.meshDepths.maximum);
   assert.equal(pick(4).hit.id, cube.id);
 });
 
@@ -228,7 +233,7 @@ test("terrain silhouette defers both a mathematical hit and a raster-only hit to
   for (const [height, x] of [[50.8730837524357,500], [50.873771895420745,293]]) {
     const camera = new Camera({position:[0,height,0.00001], target:[0,0,0], up:[0,0,-1], fovYDegrees:45, near:.05, far:2000});
     const surface = pickSurfaces(camera, size, [x,363], placement, {terrain:{id:"terrain",grid}}, 17);
-    assert.equal(surface.cube, null);
+    assert.equal(surface.mesh, null);
     assert.equal(surface.terrain.id, "terrain");
     assert.equal(surface.terrain.frameRevision, 17);
     assert.ok(Math.abs(surface.terrain.worldPosition[1]) < 1e-6);
@@ -252,10 +257,10 @@ test("a foreground ridge missed by the centre ray still competes with a cube ahe
     heights:new Float32Array([0,0,0, 2,2,2, 0,0,0, 1,1,1, 0,0,0])});
   const camera = new Camera({position:[.15,1.000001,5],target:[.15,1.000001,0],near:.05,far:30});
   const geometry = new BoxGeometry(.2,.2,.2).translate(.15,1,.35);
-  const result = pickSurfaces(camera,viewport,center,placement,{terrain:{id:"DEM",grid},cube:{id:"cube",geometry}},7);
-  assert.equal(result.cube.id, "cube");
+  const result = pickSurfaces(camera,viewport,center,placement,{terrain:{id:"DEM",grid},mesh:{id:"cube",geometry}},7);
+  assert.equal(result.mesh.id, "cube");
   assert.equal(result.terrain.id, "DEM");
-  assert.ok(result.terrain.distance > result.cube.distance);
+  assert.ok(result.terrain.distance > result.mesh.distance);
   assert.ok(result.terrainDepths.hints.length >= 2);
   assert.ok(result.terrainDepths.minimum < result.terrainDepths.maximum);
 });
@@ -295,11 +300,11 @@ test("a possible depth tie preserves both ray hits for the GPU ID pass", () => {
   for (const [y, expected] of [[-.002,"tie"],[-2,"DEM"],[2,"box"]]) {
     const geometry = new BoxGeometry(2,2,2).scale(1,0,1).translate(0,y,0);
     const hit = pickSurfaces(camera, {width:794,height:727}, [397,363], placement,
-      {cube:{id:"box",geometry},terrain:{id:"DEM",grid}}, 11);
+      {mesh:{id:"box",geometry},terrain:{id:"DEM",grid}}, 11);
     if (expected === "tie") {
       assert.equal(hit.terrain.id, "DEM");
-      assert.equal(hit.cube.id, "box");
-      assert.ok(Math.abs(hit.cube.worldPosition[1] - y) < 1e-6);
+      assert.equal(hit.mesh.id, "box");
+      assert.ok(Math.abs(hit.mesh.worldPosition[1] - y) < 1e-6);
     } else assert.equal(hit.hit.id, expected);
   }
 });
@@ -640,4 +645,13 @@ test("a hidden Studio ancestor suppresses a visible grandchild regardless of sce
   light.visible = true;
   model.setProject(project, 1, false);
   assert.deepEqual(model.current.objects.map(o => o.visible), [true,true,true]);
+});
+
+test("a clipped directional ray retains both ends of its visible stroke", () => {
+  const camera = new Camera({ position:[0,0,0], target:[0,0,-1], fovYDegrees:45, near:.05, far:2000 });
+  const ray = [[0,0,-.03],[.20000000477477248,0,-1.7900000400732097]];
+  for (const segment of [ray, [...ray].reverse()]) {
+    for (const x of [438,477]) assert.ok(strokeNearPixel(camera,{width:794,height:727},segment,[x,362]));
+    assert.equal(strokeNearPixel(camera,{width:794,height:727},segment,[477,350]),false);
+  }
 });

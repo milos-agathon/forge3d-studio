@@ -116,7 +116,7 @@ export async function checkTiming({cdp,ev,wait,raf,report,file,pixel,toggle}) {
     await sequence("leave"); await sequence("hide");
     await toggle(TERRAIN_ID); await wait(`!!${S}?.terrain`);
     await ev(`document.querySelector('button[title^="Move (G)"]').click();document.querySelector('button[title^="World-aligned"]').click()`);
-    await wait(`!!${D}.terrainViewport.displayedCube(${D}.frame,"${CUBE_ID}") && document.querySelector(".world-x-grip").getBoundingClientRect().width>0`);
+    await wait(`!!${D}.terrainViewport.displayedObject(${D}.frame,"${CUBE_ID}") && document.querySelector(".world-x-grip").getBoundingClientRect().width>0`);
     await ev(raf); await sequence("capture");
     await sequence("project");
   } finally {await ev("hoverClock.restore()");}

@@ -56,8 +56,8 @@ function projectFromFixture(): Project {
     scene: {
       objects: [
         {
-          visible: true,
-          transform: { rotationDeg: { ...fixture.project.sunRotationDeg } },
+          id:"sun", visible:true, parent:null,
+          transform:{translation:{x:0,y:0,z:0},rotationDeg:{...fixture.project.sunRotationDeg},scale:{x:1,y:1,z:1}},
           kind: {
             type: "light",
             kind: "directional",
@@ -119,6 +119,19 @@ if (Object.keys(rig).includes("sky")) {
   failures += 1;
   console.error("FAIL rig: the preview rig must not carry sky settings (background-only)");
 }
+
+const parented = projectFromFixture();
+const red = parented.scene.objects[0];
+const parent = structuredClone(red), blue = structuredClone(red);
+parent.id = "mount"; parent.kind = {type:"camera",fovDeg:45,near:.05,far:1000};
+parent.transform.rotationDeg = {x:0,y:90,z:0};
+red.parent = parent.id; red.transform.rotationDeg = {x:0,y:0,z:0};
+blue.id = "second sun";
+if (blue.kind.type === "light") blue.kind.color = [0,0,1];
+parented.scene.objects = [red,blue,parent];
+near("parented ray X",lightingRig(parented).sun!.direction[0],-1);
+parent.visible = false;
+near("first effectively visible sun",lightingRig(parented).sun!.color[2],1);
 
 if (failures > 0) {
   throw new Error(`${failures} lighting-rig assertion(s) failed`);

@@ -13,7 +13,7 @@ type ControlState = TransformControls & {
   rotationAxis: Vector3;
 };
 
-export type DisplayedPose = NonNullable<ReturnType<ForgeTerrainViewport["displayedCube"]>>;
+export type DisplayedPose = NonNullable<ReturnType<ForgeTerrainViewport["displayedObject"]>>;
 export type TransformTool = Exclude<Tool, "select">;
 
 // Work in Studio units relative to the submitted pivot. Keeping the translation

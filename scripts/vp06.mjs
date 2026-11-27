@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decodePng } from "../node_modules/@forge3d/web/dist/png-decode.js";
-import { Camera } from "@forge3d/web";
+import { Camera, encodePng } from "@forge3d/web";
 import "./prepare-viewport-runtime.mjs";
 import { createFixture, CUBE_ID as C, TERRAIN_ID as T, verifyProvenance } from "./vp01/fixture.mjs";
 import { transformedTriangleFixture, triangleStrokeFixture } from "./vp06/triangle-stroke-fixture.mjs";
@@ -58,7 +58,7 @@ async function openBryce(cdp, file) {
 async function studio(cdp) {
   await openBryce(cdp, path);
   async function settle(mode, ids) {
-    await until(cdp, `(${S}?.visibleIds ?? []).sort().join() === ${json([...ids].sort().join())}
+    await until(cdp, `(${S}?.visibleIds ?? []).filter(id=>id===${json(C)} || id===${json(T)}).sort().join() === ${json([...ids].sort().join())}
       && ${D}.frame.settings.mode === ${json(mode)} && document.querySelector("[data-viewport-backend]").textContent.includes("WebGPU available")`);
     await cdp.evaluate(raf);
   }
@@ -334,6 +334,7 @@ async function studio(cdp) {
     if (mode === "material") await cdp.evaluate(`document.querySelector('button[title^="Material preview"]').click()`);
     await settle(mode, [C]);
     for (const [z, x, covered] of [[9.478847292072615, 500, false], [9.478961982570125, 293, true]]) {
+      await click("clear silhouette selection before edge samples", sky, null, []);
       const pixel = [x, 363];
       await cdp.evaluate(`${D}.setOrbitPose([0,0,${z}],[0,0,0])`);
       await until(cdp, `Math.abs(${S}?.camera.position[2] - ${z}) < 1e-6`);
@@ -358,6 +359,7 @@ async function studio(cdp) {
     // Reprojection alone also accepts a point a full unit behind that face.
     await cdp.evaluate(`${D}.setOrbitPose([0,1.0001,10],[0,1,0])`);
     await until(cdp, `Math.abs(${S}?.camera.position[1] - 1.0001) < 1e-7`);
+    await click("clear silhouette selection before grazing samples", sky, null, []);
     const pixels = [[397,363], [397,364], [397,362]];
     const shown = await colours(pixels);
     assert.notEqual(shown[0], "0,0,0,0");
@@ -501,7 +503,10 @@ function binaryGltf(document, binary) {
 }
 
 async function editorControl(cdp) {
-  // A second mesh leaves mesh rendering to three.js while WebGPU owns the DEM.
+  // Exercise the mixed renderer explicitly. The transparent cartographic layer
+  // keeps the meshes in the editor while WebGPU owns the relief depth.
+  const graticule = { type:"graticule", id:"1db12067-bdc6-4897-8047-f75986e6f080",
+    name:"Depth control", visible:true, intervalDeg:1, colour:[0,0,0,0], widthPx:1, labels:false };
   const file = join(dirname(path), "hybrid.studio3d");
   const scene = structuredClone(fixture);
   const sphere = structuredClone(scene.scene.objects.find(o => o.id === C));
@@ -510,6 +515,7 @@ async function editorControl(cdp) {
   sphere.kind.source.primitive = {type:"sphere",radius:1};
   sphere.transform.translation.x = 100;
   scene.scene.objects.push(sphere);
+  (scene.cartography ??= []).push(graticule);
   await writeFile(file, json(scene));
   await openBryce(cdp, file);
   await until(cdp, `${S}?.visibleIds.join() === "${T}" && ${S}.width === 794 && ${S}.height === 727 && !!${D}.runtime`);
@@ -675,6 +681,14 @@ async function editorControl(cdp) {
   const flat = JSON.parse(await readFile(join(dirname(path), "flat.studio3d")));
   flat.scene.objects.find(o=>o.id===C).transform.translation.y = .8;
   flat.scene.objects.push(sphere);
+  // Keep the same editor material in the combined and isolated colour reads,
+  // including when hiding the terrain makes its cartography inactive.
+  const textureId = "e9cc16ca-ab84-461f-9b49-e8da5c61fb5f";
+  const whitePath = join(dirname(path), "white.png");
+  const white = await encodePng(1, 1, new Uint8Array([255,255,255,255]));
+  await writeFile(whitePath, Buffer.from(await white.arrayBuffer()));
+  flat.assets.push({ id:textureId, kind:"orthophoto", name:"White", path:whitePath, byteSize:white.size });
+  flat.scene.objects.find(o=>o.id===C).kind.material.texture = textureId;
   for (const o of flat.scene.objects) if (o.kind.type === "camera" || o.kind.type === "light") o.visible = false;
   const flatFile = join(dirname(path), "editor-flat.studio3d");
   await writeFile(flatFile, json(flat));

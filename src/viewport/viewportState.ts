@@ -1,8 +1,9 @@
 import type { Asset, Project, SceneObject, TerrainPreview, ViewportMode } from "../bridge/types";
 import { topImagery, topRamp } from "../state/cartography.ts";
 import { isRemoteDemPath } from "../state/terrainLadder.ts";
-import { chooseViewportBackend, studioToRuntime, supportsTransform, terrainGroundSpan, terrainHeightOrigin, type BackendState, type RendererPreference, type Triple } from "./forge3dWebMapping.ts";
-import { lightingRig, type LightingSun } from "./lighting.ts";
+export { sceneObjectVisibility } from "./forge3dWebMapping.ts";
+import { sceneObjectVisibility, viewportPose, chooseViewportBackend, studioToRuntime, supportsTransform, terrainGroundSpan, terrainHeightOrigin, type BackendState, type RendererPreference, type Triple } from "./forge3dWebMapping.ts";
+import { sceneSun, type LightingSun } from "./lighting.ts";
 import { computeRenderView } from "./viewMath.ts";
 
 export interface ViewportObject {
@@ -79,9 +80,8 @@ interface ViewportProjectSettings {
   exposure: number;
 }
 
-function viewportProjectSettings(project: Project | null): ViewportProjectSettings {
+function viewportProjectSettings(project: Project | null, objects: ViewportObject[] = []): ViewportProjectSettings {
   const hasHdri = project?.render.environment != null;
-  const rig = project && lightingRig(project);
   return { mode: project?.viewport.mode ?? "solid", hasHdri, hillshade: project?.viewport.hillshade ?? true,
     sunShadows: project?.render.shadows ?? false, terrainSunShadows: project?.render.sunVisibility ?? false,
     imageryAsset: topImagery(project)?.asset ?? null,
@@ -89,7 +89,7 @@ function viewportProjectSettings(project: Project | null): ViewportProjectSettin
     drapedLayers: project?.cartography?.some(layer => layer.visible &&
       (layer.type === "vector" || layer.type === "polygon" || layer.type === "graticule" || layer.type === "labels")) ?? false,
     studioSkyIntensity: hasHdri ? 0 : project?.render.iblIntensity ?? 0,
-    sun: rig?.sun ?? null, exposure: rig?.exposure ?? 1.35 };
+    sun: sceneSun(objects), exposure: project?.render.exposure ?? 1.35 };
 }
 
 export function viewportTerrainBackend(frame: ViewportFrame, preference: RendererPreference,
@@ -104,22 +104,21 @@ export function viewportTerrainBackend(frame: ViewportFrame, preference: Rendere
     transformSupported: !object || supportsTransform(object.rotationDeg, object.scale),
     terrainShadows: terrainSunShadows || (sunShadows && !sunShadowsDisabled) });
   const meshes = frame.objects.filter(item => item.visible && item.kind.type === "mesh");
-  const mesh = meshes[0];
-  const kind = mesh?.kind;
   const terrainNeedsEditor = object && (frame.settings.drapedLayers ||
     (mode === "material" && (frame.settings.imageryAsset || frame.settings.elevationRamp)));
-  const cube = choice.backend === "forge3d-web" && !terrainNeedsEditor && meshes.length === 1 &&
-    kind?.type === "mesh" && kind.source.type === "primitive" && kind.source.primitive.type === "cube" &&
-    !(mode === "material" && kind.material.texture) && !(sunShadows && !sunShadowsDisabled)
-    ? { object: mesh, size: kind.source.primitive.size, material: kind.material } : undefined;
+  const primitives = choice.backend === "forge3d-web" && !terrainNeedsEditor && !(editorAvailable && sunShadows && !sunShadowsDisabled)
+    ? meshes.filter(({ kind }) => kind.type === "mesh" && kind.source.type === "primitive" &&
+        !(mode === "material" && kind.material.texture)) : [];
+  const helpers = choice.backend === "forge3d-web" && !editorAvailable
+    ? frame.objects.filter(o => o.visible && (o.kind.type === "camera" || o.kind.type === "light")) : [];
   if (choice.backend === "forge3d-web" && editorAvailable === false) {
-    const editorReason = meshes.length && !cube ? "Mesh objects"
+    const editorReason = meshes.length > primitives.length ? "Mesh objects"
       : object && frame.settings.drapedLayers ? "Cartographic layers"
       : object && mode === "material" && (frame.settings.imageryAsset || frame.settings.elevationRamp) ? "Terrain material layers"
       : null;
-    if (editorReason) return { backend: "three" as const, reason: editorReason + " require three.js", object, terrain, cube: undefined };
+    if (editorReason) return { backend: "three" as const, reason: editorReason + " require three.js", object, terrain, objects: [] as ViewportObject[] };
   }
-  return { ...choice, object, terrain, cube };
+  return { ...choice, object, terrain, objects: [...primitives, ...helpers] };
 }
 
 // The shell's local and COG samplers both clamp requests to this range.
@@ -182,24 +181,9 @@ export function sameCursorTerrain(a: ViewportFrame, b: ViewportFrame) {
   return true;
 }
 
-export function sceneObjectVisibility(objects: readonly SceneObject[] = []): ReadonlyMap<string, boolean> {
-  const scene = new Map(objects.map(object => [object.id, object]));
-  const inherited = new Map<string, boolean>();
-  const path: string[] = [];
-  for (const object of objects) {
-    let node: SceneObject | undefined = object;
-    while (node && !inherited.has(node.id)) {
-      // An unfinished path that reaches itself is a hidden cycle.
-      inherited.set(node.id, false);
-      path.push(node.id);
-      if (!node.visible) break;
-      node = node.parent ? scene.get(node.parent) : undefined;
-    }
-    const visible = !node || inherited.get(node.id) === true;
-    for (const id of path) inherited.set(id, visible);
-    path.length = 0;
-  }
-  return inherited;
+export function viewportCameraObject(scene?: Project["scene"]) {
+  return scene?.objects.find(o => o.id === scene.activeCamera && o.kind.type === "camera")
+    ?? scene?.objects.find(o => o.kind.type === "camera");
 }
 
 export function nativeRenderView(frame: ViewportFrame, preview?: TerrainPreview) {
@@ -257,14 +241,12 @@ export class ViewportModel {
     const projectId = project?.id ?? null;
     const assets = project?.assets ?? [];
     const byId = new Map(assets.map(asset => [asset.id, asset]));
+    const viewCamera = cameraView ? viewportCameraObject(project?.scene)?.id : undefined;
     const objects = project?.scene.objects.map((object): ViewportObject => {
-      const { translation, rotationDeg, scale } = object.transform;
       const asset = object.kind.type === "terrain" ? byId.get(object.kind.asset) : undefined;
       return { id: object.id, parent: object.parent, kind: object.kind,
-        visible: visibility.get(object.id) === true && !(cameraView && object.id === project?.scene.activeCamera),
-        translation: [translation.x, translation.y, translation.z],
-        rotationDeg: [rotationDeg.x, rotationDeg.y, rotationDeg.z],
-        scale: [scale.x, scale.y, scale.z],
+        visible: visibility.get(object.id) === true && object.id !== viewCamera,
+        ...viewportPose(object),
         terrainRevision: terrainSampleRevision(object, asset, asset && assetGenerations?.get(asset.id)) };
     }) ?? [];
     if (projectGeneration !== this.frame.projectGeneration || projectId !== this.frame.projectId) this.requests.clear();
@@ -276,7 +258,7 @@ export class ViewportModel {
       }
     }
     const terrains = new Map([...this.frame.terrains].filter(([id]) => this.requests.has(id)));
-    this.frame = { ...this.frame, projectId, projectGeneration, objects, assets, settings: viewportProjectSettings(project), terrains };
+    this.frame = { ...this.frame, projectId, projectGeneration, objects, assets, settings: viewportProjectSettings(project, objects), terrains };
   }
 
   setCamera(camera: ViewportCamera) {

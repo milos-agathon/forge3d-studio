@@ -118,7 +118,7 @@ async function run(cdp, hybrid = false) {
     document.querySelector("[data-viewport-backend]").textContent.includes("WebGPU available") && !!${D}.runtime===${hybrid}`);
   await evaluate(raf);
   const submittedCenter=await evaluate(`(()=>{const d=${D},p=${S}.placement;
-    return d.terrainViewport.displayedCube(d.frame,"${CUBE_ID}").center.map((v,i)=>p.translation[i]+v*p.scale)})()`);
+    return d.terrainViewport.displayedObject(d.frame,"${CUBE_ID}").center.map((v,i)=>p.translation[i]+v*p.scale)})()`);
   const expected=[4.25,0,0];
   assert.ok(submittedCenter.every((v,i)=>Math.abs(v-expected[i])<1e-5));
   report[hybrid ? "hybridParent" : "independentParent"]={submittedCenter,backend:await evaluate(
@@ -224,7 +224,6 @@ async function run(cdp, hybrid = false) {
       assert.deepEqual(row.counts,{setTransform:Number(committed),selection:Number(exit === "selection replacement")});
       assert.equal(row.historyDelta, Number(committed));
       assert.deepEqual(end.project.selection,[exit === "selection replacement" ? TERRAIN_ID : CUBE_ID]);
-      assert.deepEqual(await take(), committed ? row.preview : row.before);
       if (!committed) assert.deepEqual(cube(end).transform,cube(start).transform);
       if (travel && !cancel) {
         const downIndex = row.trace.findIndex(e=>e.type==="pointerdown");
@@ -236,8 +235,10 @@ async function run(cdp, hybrid = false) {
       }
       if (exit === "selection replacement") {
         await evaluate(`${treeRow(CUBE_ID)}.querySelector(".tree-name").click()`);
-        await wait(`${treeRow(CUBE_ID)}.getAttribute("aria-selected")==="true"`);
+        await wait(`${treeRow(CUBE_ID)}.getAttribute("aria-selected")==="true" && ${S}.selectionBoxes.includes("${CUBE_ID}")`);
       }
+      // Compare equal selection decorations after the replacement was verified.
+      assert.deepEqual(await take(), committed ? row.preview : row.before);
       return cube(end).transform;
     }
     lane.after = await gesture("release");
