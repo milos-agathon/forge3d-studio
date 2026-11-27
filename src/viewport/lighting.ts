@@ -20,7 +20,23 @@ import * as THREE from "three";
 
 import type { Project, ShadowTechnique } from "../bridge/types";
 
-const DEG = Math.PI / 180;
+import { localMatrix, objectParentWorld, sceneObjectVisibility, viewportPose } from "./forge3dWebMapping.ts";
+import type { ViewportObject } from "./viewportState";
+
+type LightNode = Omit<ViewportObject, "terrainRevision">;
+
+export function sceneSun(objects: readonly LightNode[], groups?: ReadonlyMap<string, THREE.Group>): LightingSun | null {
+  const light = objects.find(o => o.visible && o.kind.type === "light" && o.kind.kind === "directional");
+  if (light?.kind.type !== "light") return null;
+  const group = groups?.get(light.id);
+  group?.updateWorldMatrix(true, false);
+  const world = group?.matrixWorld ?? localMatrix(light);
+  if (!group && light.parent) world.premultiply(objectParentWorld(light.parent, new Map(objects.map(o => [o.id,o]))).matrix);
+  const direction = new THREE.Vector3(0,0,-1).transformDirection(world);
+  if (!direction.lengthSq()) return null;
+  return { direction: direction.toArray(),
+    intensity: Math.max(0,light.kind.intensity), color: [...light.kind.color] };
+}
 
 export interface LightingSun {
   /** Unit direction the light travels, viewport frame (Y up, north at -Z). */
@@ -52,30 +68,10 @@ export function lightingRig(project: Project): LightingRig {
       ? project.assets.find((asset) => asset.id === project.render.environment)?.path ?? null
       : null;
 
-  const light = project.scene.objects.find(
-    (object) =>
-      object.kind.type === "light" && object.kind.kind === "directional" && object.visible,
-  );
-
-  let sun: LightingSun | null = null;
-  if (light && light.kind.type === "light") {
-    // The light's local -Z is where it travels. three's Euler is the same
-    // convention the viewport used inline (Rz·Ry·Rx), so the fixture test
-    // compares one implementation against the engine, not two against each
-    // other.
-    const rotation = light.transform.rotationDeg;
-    const direction = new THREE.Vector3(0, 0, -1).applyEuler(
-      new THREE.Euler(rotation.x * DEG, rotation.y * DEG, rotation.z * DEG, "ZYX"),
-    );
-    sun = {
-      direction: [direction.x, direction.y, direction.z],
-      intensity: Math.max(0, light.kind.intensity),
-      color: [...light.kind.color] as [number, number, number],
-    };
-  }
-
+  const visibility = sceneObjectVisibility(project.scene.objects);
   return {
-    sun,
+    sun: sceneSun(project.scene.objects.map(o => ({ id:o.id, parent:o.parent, kind:o.kind,
+      visible:visibility.get(o.id) === true, ...viewportPose(o) }))),
     exposure: project.render.exposure,
     environment,
     shadows: {

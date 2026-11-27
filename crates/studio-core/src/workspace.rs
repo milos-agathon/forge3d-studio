@@ -661,19 +661,53 @@ pub fn sun_rotation(scene_direction: [f32; 3]) -> Vec3 {
     Transform::rotation_looking_along(Vec3::new(-toward_sun.x, -toward_sun.y, -toward_sun.z))
 }
 
+fn parent_linear(
+    scene: &crate::scene::Scene,
+    object: &crate::scene::SceneObject,
+) -> Option<glam::Mat3> {
+    let mut linear = glam::Mat3::IDENTITY;
+    let mut parent = object.parent.and_then(|id| scene.object(id));
+    let mut visited = std::collections::HashSet::new();
+    while let Some(node) = parent {
+        if !visited.insert(node.id) {
+            return None;
+        }
+        linear = glam::Mat3::from_quat(node.transform.rotation())
+            * glam::Mat3::from_diagonal(node.transform.scale.geometry())
+            * linear;
+        parent = node.parent.and_then(|id| scene.object(id));
+    }
+    Some(linear)
+}
+
+pub(crate) fn local_sun_rotation(
+    scene: &crate::scene::Scene,
+    object: &crate::scene::SceneObject,
+    scene_direction: [f32; 3],
+) -> Option<Vec3> {
+    let parent = parent_linear(scene, object)?;
+    if parent.determinant() == 0.0 || object.transform.scale.z == 0.0 {
+        return None;
+    }
+    let [east, up, north] = scene_direction;
+    let travel = glam::Vec3::new(-east, -up, north);
+    let local = (parent.inverse() * travel * object.transform.scale.z.signum()).try_normalize()?;
+    Some(Transform::rotation_looking_along(Vec3::from_geometry(
+        local,
+    )))
+}
+
 /// The scene's directional sun in viewer terms.
 pub fn sun_angles(project: &Project) -> Option<SunAngles> {
-    let light = project
-        .scene
-        .objects
-        .iter()
-        .find(|object| matches!(&object.kind, ObjectKind::Light(light) if light.kind == LightKind::Directional))?;
-    let ObjectKind::Light(light) = &light.kind else {
+    let object = project.scene.visible_objects().find(
+        |object| matches!(&object.kind, ObjectKind::Light(light) if light.kind == LightKind::Directional),
+    )?;
+    let ObjectKind::Light(light) = &object.kind else {
         return None;
     };
-    // The object's local -Z is where the light travels, so the sun sits the
-    // opposite way: rotation (-50°, 30°, 0°) puts it 50° above the horizon.
-    let forward = light_direction(project, light.kind);
+    let forward = (parent_linear(&project.scene, object)?
+        * (object.transform.forward().geometry() * object.transform.scale.z))
+        .try_normalize()?;
     let toward_sun = Vec3::new(-forward.x, -forward.y, -forward.z);
     let elevation_deg = toward_sun.y.clamp(-1.0, 1.0).asin().to_degrees();
     // The engine decodes `light_azimuth_deg` as
@@ -694,16 +728,6 @@ pub fn sun_angles(project: &Project) -> Option<SunAngles> {
         intensity: light.intensity,
         color: light.color,
     })
-}
-
-fn light_direction(project: &Project, kind: LightKind) -> Vec3 {
-    let object = project
-        .scene
-        .objects
-        .iter()
-        .find(|object| matches!(&object.kind, ObjectKind::Light(light) if light.kind == kind))
-        .expect("caller checked the light exists");
-    object.transform.forward()
 }
 
 /// Build the handoff for one revision of the project.
@@ -1499,6 +1523,15 @@ mod tests {
 
         let mut project = Project::new("Sun");
         let sun_id = sun_object_id(&project);
+        let parent = project.scene.active_camera.unwrap();
+        project.scene.object_mut(parent).unwrap().transform.scale = Vec3::new(2.0, 3.0, -1.0);
+        project
+            .scene
+            .object_mut(parent)
+            .unwrap()
+            .transform
+            .rotation_deg = Vec3::new(15.0, 90.0, 0.0);
+        project.scene.object_mut(sun_id).unwrap().parent = Some(parent);
         let before = project.scene.object(sun_id).unwrap().transform;
 
         let inverse = Command::SetSunAngles {

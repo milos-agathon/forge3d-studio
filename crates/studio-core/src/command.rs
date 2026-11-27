@@ -714,7 +714,13 @@ impl Command {
                 // The engine consumes its own scene frame (east, up, north):
                 // the viewer's +Z is south, so the north component flips.
                 let scene = [toward[0], toward[1], -toward[2]];
-                let rotation = crate::workspace::sun_rotation(scene);
+                let rotation = crate::workspace::local_sun_rotation(&project.scene, object, scene)
+                    .ok_or_else(|| {
+                        CommandError::invalid(
+                            "sun",
+                            "its parent transform or forward axis is singular",
+                        )
+                    })?;
                 if let Some(object) = project.scene.object_mut(*id) {
                     object.transform.rotation_deg = rotation;
                 }
@@ -748,8 +754,7 @@ impl Command {
                 let camera_transform = camera.transform;
                 let sun = project
                     .scene
-                    .objects
-                    .iter()
+                    .visible_objects()
                     .find(|object| {
                         matches!(&object.kind, crate::scene::ObjectKind::Light(light) if light.kind == crate::scene::LightKind::Directional)
                     })
@@ -766,9 +771,14 @@ impl Command {
                 .ok_or_else(|| {
                     CommandError::invalid("terrain", "the DEM has no measured footprint")
                 })?;
-                let sun_rotation = crate::workspace::sun_rotation(
+                let sun_rotation = crate::workspace::local_sun_rotation(
+                    &project.scene,
+                    sun,
                     crate::workspace::map_sun_direction(MAP_SUN_AZIMUTH_DEG, MAP_SUN_ELEVATION_DEG),
-                );
+                )
+                .ok_or_else(|| {
+                    CommandError::invalid("sun", "its parent transform or forward axis is singular")
+                })?;
                 let previous_z_scale = terrain.z_scale;
                 let previous_render = project.render.clone();
 

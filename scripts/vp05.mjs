@@ -13,7 +13,7 @@ import { observeContexts } from "./vp01/startup.mjs";
 import { sha256 } from "./vp03/identity.mjs";
 import { desktop, fieldCheckout, until } from "./viewport-desktop.mjs";
 import { inspect, readFrame } from "./vp05/page.mjs";
-import { checkTransforms } from "./vp05/transforms.mjs";
+import { checkTransforms, checkHelperTerrain } from "./vp05/transforms.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 process.env.PYTHONDONTWRITEBYTECODE = "1";
@@ -37,6 +37,7 @@ const report = { base: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, e
   field: FIELD_REVISION, runtime: (await verifyProvenance()).commit, modes: {} };
 report.sourceSha256 = {};
 for (const file of ["src/viewport/Viewport3D.tsx", "src/viewport/viewportState.ts", "src/viewport/forge3dWebViewport.ts", "src/viewport/forge3dWebMapping.ts",
+  "src/viewport/viewportObjects.ts", "src/viewport/materialHelpers.ts", "src/viewport/materialHelpers.wgsl",
   "scripts/viewport-desktop.mjs", "scripts/vp05.mjs", "scripts/vp05/page.mjs", "scripts/vp05/transforms.mjs"]) {
   report.sourceSha256[file] = sha256(await readFile(join(root, file)));
 }
@@ -88,9 +89,9 @@ async function editAndDelete(cdp, state, fieldMask) {
   await cdp.evaluate(raf);
   const moved = await read();
   await cdp.evaluate(`document.querySelector('button[title^="Delete ("]').click()`);
-  await until(cdp, `!${node} && ${state}.stats?.totalInstances === 0`);
+  await until(cdp, `!${node} && ${state}.cubeBatches === 0`);
   const stats = (await cdp.evaluate(state)).stats;
-  assert.equal(stats.effectiveDraws, 0);
+  assert.equal((await cdp.evaluate(state)).cubeBatches, 0);
   return { editedBluePixels: changeMask.reduce((a,b) => a+b, 0), materialEditIou, deleted: stats, moved };
 }
 
@@ -119,7 +120,7 @@ async function captureRole(role) {
     const state = `(${inspect})(${isField}, "${CUBE_ID}", "${TERRAIN_ID}")`;
     const settle = async (mode, cube, ground) => {
       await until(cdp, `(s => s?.ready && s.mode === "${mode}" && s.cube === ${cube} && s.terrain === ${ground}
-        && (${isField} || s.stats?.visibleInstances === ${Number(cube)}))(${state})`);
+        && (${isField} || s.cubeBatches === ${Number(cube)}))(${state})`);
       await cdp.evaluate(raf);
     };
     await settle("solid", true, true);
@@ -154,8 +155,7 @@ async function captureRole(role) {
         }
         expectedPose.flat().forEach((v, i) => assert.ok(Math.abs(s.camera.flat()[i] - v) < 1e-7, "VP-01 camera " + JSON.stringify(s.camera)));
         if (!isField) {
-          assert.equal(s.stats.effectiveDraws, Number(cube));
-          assert.equal(s.stats.totalInstances, Number(cube));
+          assert.equal(s.cubeBatches, Number(cube));
         }
         const rgba = Buffer.from(await cdp.evaluate(`(${readFrame})(${isField})`), "base64");
         assert.equal(rgba.length, n*4);
@@ -194,6 +194,10 @@ async function captureRole(role) {
       await capture("replay", true, true);
       await toggle("VP-01 cube");
       await capture("terrainControl", false, true);
+      if (!isField) for (const key of ["effectiveDraws","visibleInstances","totalInstances"]) {
+        assert.equal(lane.frames.both.stats[key] - lane.frames.noCube.stats[key], 1, "Bryce cube " + key);
+        assert.equal(lane.frames.noTerrain.stats[key] - lane.frames.empty.stats[key], 1, "isolated cube " + key);
+      }
       const masks = {};
       const at = (point, channel) => 4 * (point[1]*width + point[0]) + channel;
       const diff = (a, b, i) => Math.max(...[0,1,2,3].map(k => Math.abs(a[i+k] - b[i+k])));
@@ -274,6 +278,7 @@ async function captureRole(role) {
     }
     if (!isField) {
       report.transforms = await checkTransforms(cdp, { path, fixture, eye, state, settle, toggle, terrainName: terrain.name });
+      report.helperTerrain = await checkHelperTerrain(cdp,{path,fixture,settle,toggle});
       assert.ok(report.contexts.length);
       report.successfulWebGL = report.contexts.filter(c => c.result).length;
       assert.equal(report.successfulWebGL, 0);
@@ -283,7 +288,7 @@ async function captureRole(role) {
 try {
   await captureRole("field");
   await captureRole("candidate");
-  await desktop({ root, field, out, values, role: "editor", report }, async cdp => {
+  await desktop({ root, field, out, values, role: "editor", port: values.port ? Number(values.port) : undefined, report }, async cdp => {
     await cdp.evaluate(`__TAURI_INTERNALS__.invoke("open_project", {path:${JSON.stringify(path)}})`);
     await cdp.send("Page.reload", { ignoreCache: true });
     await until(cdp, `window.forge3dViewportDiagnostics?.().runtime?.objects.has("${CUBE_ID}") &&

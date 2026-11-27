@@ -35,7 +35,7 @@ const report = {suite:sequencesOnly?"consecutive gestures":"VP-10",base:execFile
   fixture:{name:"relief-only Bryce",id:CUBE_ID,transform:object(fixture).transform,eye,aim,width:794,height:727,dpr:1},cases:[]};
 const json = JSON.stringify;
 const D = "forge3dViewportDiagnostics()", S = D+".terrainViewport.diagnosticSubmission";
-const pose = D+'.terrainViewport.displayedCube('+D+'.frame,"'+CUBE_ID+'")';
+const pose = D+'.terrainViewport.displayedObject('+D+'.frame,"'+CUBE_ID+'")';
 const handles = 'document.querySelector(".transform-handles")';
 const state = '__TAURI_INTERNALS__.invoke("project_state")';
 const raf = "new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))";

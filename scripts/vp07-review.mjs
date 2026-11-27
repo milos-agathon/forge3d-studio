@@ -160,7 +160,7 @@ export async function reviewCases({cdp, evaluate, wait, read, mouse, hasCapture,
   });
   await wait(visible);
   const center = () => evaluate(`(()=>{const d=${D}, p=${S}.placement;
-    return d.terrainViewport.displayedCube(d.frame,"${CUBE_ID}").center.map((v,i)=>p.translation[i]+p.scale*v);
+    return d.terrainViewport.displayedObject(d.frame,"${CUBE_ID}").center.map((v,i)=>p.translation[i]+p.scale*v);
   })()`);
   const initial = await image(), startCenter = await center(), parentStart = await translation(), n = await count();
   assert.ok(startCenter.every((v,i)=>Math.abs(v-[0,.85,0][i])<1e-5));

@@ -1,14 +1,17 @@
+import { sceneSun } from "./lighting";
+import { buildObjects, submitObjectBatches, objectMaskBatches, helperVectors, updateFaces } from "./viewportObjects";
+import { MaterialHelpers } from "./materialHelpers";
 import * as THREE from "three";
-import type { Camera, CameraInput, Forge3DRuntime, LightCollection, LightingSnapshot, MaterialCollectionSnapshot, MeshLayer, TerrainDataset, TerrainMaterialImage, IblSnapshot, RgbeImage } from "@forge3d/web";
-import { cameraInput, framebufferProjection, worldXAxis, cubeParentWorld, cubeScatterGeometry, imageryMipLevel, imageryOverlays, queryTerrainDataset, runtimeToStudio, terrainInput, terrainTransform,
+import type { Camera, CameraInput, Forge3DRuntime, LightCollection, LightingSnapshot, TerrainDataset, TerrainMaterialImage, IblSnapshot, RgbeImage } from "@forge3d/web";
+import { cameraInput, framebufferProjection, studioToRuntime, imageryMipLevel, imageryOverlays, queryTerrainDataset, runtimeToStudio, terrainInput, terrainTransform,
   type RendererPreference, type TerrainTransform } from "./forge3dWebMapping";
-import { measurePixelDepth, pickSurfaces, terrainRayMetres, projectCubeFaces, type PickSurfaces, type Pixel, type StudioHit, type PixelDepthHints } from "./viewportPicking";
+import { depthTieWindow, measurePixelDepth, pickSurfaces, strokeNearPixel, terrainRayMetres, projectMeshFaces, type PickSurfaces, type Pixel, type StudioHit, type PixelDepthHints } from "./viewportPicking";
 import { hillshadePixels } from "./hillshade";
 import { cameraTarget, validateTerrainPreview, viewportTerrainBackend,
   type ViewportDimensions, type ViewportFrame, type ViewportObject, type ViewportTerrain } from "./viewportState";
 
 export type TerrainMesh = THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhysicalMaterial>;
-export type TerrainPresentation = { submitted: false } | { submitted: true; terrain?: TerrainMesh; cubeId?: string };
+export type TerrainPresentation = { submitted: false } | { submitted: true; terrain?: TerrainMesh; objectIds: string[] };
 interface DrapeLevel { image?: TerrainMaterialImage; error?: string }
 interface PresentedAppearance {
   skyIntensity: number;
@@ -23,6 +26,7 @@ interface View {
   clay: THREE.Color;
   projectionCamera: THREE.PerspectiveCamera;
   frame: ViewportFrame;
+  selection: readonly string[];
   objectPreview?: Pick<ViewportObject, "id" | "translation" | "rotationDeg" | "scale">;
   sampling: { terrainResolution: number; remoteRung: number };
   editor?: {
@@ -40,6 +44,7 @@ interface UploadedTerrain {
   ramp?: boolean;
   hillshade: boolean;
   dataset: TerrainDataset;
+  heightRange: [number,number];
 }
 
 interface SubmittedFrame {
@@ -47,11 +52,10 @@ interface SubmittedFrame {
   source: ViewportFrame;
   camera: Camera;
   placement: typeof emptyTransform;
-  surfaces: PickSurfaces;
-  pose?: { parent: THREE.Matrix4; object: ViewportObject; axis: ReturnType<typeof worldXAxis> };
-  cubeFaces?: ReturnType<typeof projectCubeFaces>;
-  objectMask?: Uint8Array | Promise<Uint8Array>;
-  coverageMask?: Uint8Array | Promise<Uint8Array>;
+  ground?: PickSurfaces["terrain"];
+  scene: ReturnType<typeof buildObjects>;
+  projected: Map<string, ReturnType<typeof projectMeshFaces>>;
+  masks: Map<string, Promise<Uint8Array>>;
   pixelDepths?: Map<number, Promise<number>>;
   visibleIds: string[];
   projectId: string | null;
@@ -84,9 +88,11 @@ function visibleSource(frame: ViewportFrame, terrain: ViewportTerrain): Viewport
 // The desktop retained-dataset control exercises the same query as the viewport.
 export { queryTerrainDataset };
 
-function depthMarker(module: WebModule, slot: string, materials = new module.MaterialCollection()) {
-  materials.set(slot, { id: slot, baseColor: [0, 0, 0, 1], textures: { emissive: {
-    width: 1, height: 1, format: "rgba8unorm", colorSpace: "linear", data: new Uint8Array([255, 0, 0, 255]),
+function pickMaterials(module: WebModule) {
+  const materials = new module.MaterialCollection();
+  materials.set("default", { id:"background", baseColor:[0,0,0,1] });
+  materials.set("marker", { id:"marker", baseColor:[0,0,0,1], textures:{ emissive:{
+    width:1, height:1, format:"rgba8unorm", colorSpace:"linear", data:new Uint8Array([255,0,0,255]),
   } } });
   return materials.snapshot();
 }
@@ -98,7 +104,8 @@ class ViewportReadback {
   #idle?: Promise<void>;
   get idle() { return this.#idle; }
 
-  constructor(web: Forge3DRuntime) { this.#web = web; }
+  overlay?: MaterialHelpers;
+  constructor(web: Forge3DRuntime, private encodePng: WebModule["encodePng"]) { this.#web = web; }
   get width() { return this.#web.width; }
   get height() { return this.#web.height; }
   get disposed() { return this.#web.disposed; }
@@ -117,27 +124,63 @@ class ViewportReadback {
     return result;
   }
 
-  readObjectMask(module: WebModule, cubeId: string, materials: MaterialCollectionSnapshot, lights: LightingSnapshot) {
+  vectorHit(pixel: Pixel, icons: ReturnType<typeof helperVectors>, display: ReturnType<typeof helperVectors>) {
     return this.track(async () => {
-      // Reuse the display depth attachment in one offscreen RGBA8 draw.
-      // At zero light exposure Studio terrain is black. Cube emission is
-      // added after exposure, so the red channel identifies its fragments.
+      const web = this.#web;
+      const region = { x: pixel[0], y: pixel[1], width: 1, height: 1 };
+      // Material paints its decorations after tone mapping. Ask the pin for
+      // their owner against the original scene depth, without presenting them.
+      if (this.overlay) {
+        try {
+          web.setVectorLayers(icons.vectors);
+          const map = await web.readVectorPickMap(region);
+          const id = icons.owners.get(map.ids[0]);
+          return id && {id, depth: map.depth[0]};
+        } finally { if (!web.disposed) web.setVectorLayers(null); }
+      }
+      let map = await web.readVectorPickMap(region);
+      // Box features have IDs but no owner. Only a box-covered sample
+      // needs a second pass to find a frustum or ray underneath.
+      if (map.ids[0] && !display.owners.has(map.ids[0])) {
+        try {
+          web.setVectorLayers(icons.vectors);
+          map = await web.readVectorPickMap(region);
+        } finally {
+          if (!web.disposed) {
+            web.setVectorLayers(display.vectors);
+            web.render();
+          }
+        }
+      }
+      const id = icons.owners.get(map.ids[0]);
+      return id && { id, depth: map.depth[0] };
+    });
+  }
+
+  readObjectMask(module: WebModule, id: string, submitted: SubmittedFrame, lights: LightingSnapshot,
+    display: ReturnType<typeof helperVectors>) {
+    return this.track(async () => {
       const web = this.#web;
       const dark = new module.LightCollection();
       dark.setExposure(0);
+      const ground = id === submitted.ground?.id;
       try {
+        if (!this.overlay && display.vectors) web.setVectorLayers(null);
         web.setLighting(dark.snapshot());
-        web.setMaterials(depthMarker(module, cubeId));
-        const rgba = await web.readRgba();
-        const mask = new Uint8Array(rgba.length / 4);
+        web.setMaterials(pickMaterials(module));
+        web.setScatterBatches(objectMaskBatches(module,submitted.scene,objectId => ground || objectId === id));
+        const rgba = await web.readRgba(), mask = new Uint8Array(rgba.length / 4);
         for (let i = 0; i < mask.length; i++) {
           const p = i * 4;
-          mask[i] = rgba[p] > rgba[p + 1] ? 2 : rgba[p + 3] ? 1 : 0;
+          const marked = rgba[p] > rgba[p+1];
+          mask[i] = Number(id === submitted.ground?.id ? !marked && !!rgba[p+3] : marked);
         }
         return mask;
       } finally {
         if (!web.disposed) {
-          web.setMaterials(materials);
+          if (!this.overlay && display.vectors) web.setVectorLayers(display.vectors);
+          web.setMaterials(submitted.scene.materials);
+          web.setScatterBatches(submitted.scene.batches);
           web.setLighting(lights);
         }
       }
@@ -148,21 +191,20 @@ class ViewportReadback {
   // Preserving their geometry, transforms and order includes the face the
   // GPU actually rasterized, even if the centre ray hits a different face.
   readPixelDepth(module: WebModule, submitted: SubmittedFrame, pixel: Pixel, depths: PixelDepthHints,
-    cube: { layer: MeshLayer; materials: MaterialCollectionSnapshot; surface: { id: string } } | undefined, lights: LightingSnapshot) {
+    display: ReturnType<typeof helperVectors>, lights: LightingSnapshot) {
     return this.track(async () => {
       const web = this.#web, { camera } = submitted;
       const dark = new module.LightCollection();
       dark.setExposure(0);
-      const materials = cube?.materials ?? new module.MaterialCollection().snapshot();
-      const unlit = module.MaterialCollection.from(materials);
-      if (cube) unlit.set(cube.surface.id, { id: cube.surface.id, baseColor: [0, 0, 0, 1] });
-      const marker = depthMarker(module, "pick-depth", unlit);
-      const materialIndex = marker.materials.find(m => m.slot === "pick-depth")!.index;
-      const batches = cube ? [cube.layer.toBatch()] : [];
+      const materials = submitted.scene.materials;
+      const marker = pickMaterials(module);
+      const materialIndex = 1;
+      const batches = objectMaskBatches(module,submitted.scene,() => false);
       const [x, y] = pixel;
       const offset = 4 * (y * submitted.width + x);
       try {
         web.setLighting(dark.snapshot());
+        if (!this.overlay && display.vectors) web.setVectorLayers(null);
         web.setMaterials(marker);
         // The marker spans the entire sample. Its plane moves by one 24-bit
         // depth increment in the last comparison and never reaches the canvas.
@@ -180,24 +222,23 @@ class ViewportReadback {
         });
       } finally {
         if (!web.disposed) {
+          if (!this.overlay && display.vectors) web.setVectorLayers(display.vectors);
           web.setMaterials(materials);
-          web.setScatterBatches(batches);
+          web.setScatterBatches(submitted.scene.batches);
           web.setLighting(lights);
         }
       }
     });
   }
 
-  async readCoverageMask() {
-    const rgba = await this.readRgba();
-    const mask = new Uint8Array(rgba.length / 4);
-    for (let i = 0; i < mask.length; i++) mask[i] = rgba[i * 4 + 3];
-    return mask;
+  private async pixels() {
+    const rgba = await this.#web.readRgba();
+    return this.overlay ? this.overlay.compositeReadback(rgba) : rgba;
   }
-
-  readRgba() { return this.track(() => this.#web.readRgba()); }
+  readRgba() { return this.track(() => this.pixels()); }
   readTerrainHeights() { return this.track(() => this.#web.readTerrainHeights()); }
-  screenshot() { return this.track(() => this.#web.screenshot()); }
+  screenshot() { return this.track(() => this.overlay
+    ? this.pixels().then(pixels => this.encodePng(this.width, this.height, pixels)) : this.#web.screenshot()); }
 }
 
 function drawInputs({ frame, sampling }: View) {
@@ -222,12 +263,21 @@ export class ForgeTerrainViewport {
   private failure?: { reason: string; inputs?: string };
   private scope?: { id: string | null; generation: number; preference: RendererPreference };
   private uploaded?: UploadedTerrain;
-  private cube?: { key: string; layer: MeshLayer; materials: MaterialCollectionSnapshot;
-    pose: NonNullable<SubmittedFrame["pose"]>; surface: NonNullable<PickSurfaces["cube"]> };
+  private objects?: ReturnType<typeof buildObjects>;
+  private objectsKey?: string;
+  private lastEye?: THREE.Vector3Tuple;
+  private paletteSun?: string;
+  private batchProjection?: string;
+  private icons?: ReturnType<typeof helperVectors>;
+  private display?: ReturnType<typeof helperVectors>;
+  private materialHelpers?: MaterialHelpers;
+  private boxKey?: string;
+  private lastSelection?: readonly string[];
+  private boxes = new Map<string, THREE.Box3>();
   private module?: WebModule;
   private sky?: { snapshot?: IblSnapshot; error?: string };
   private appliedSkyIntensity = 0;
-  private materialDisplay = false;
+  private toneMapExposure?: number;
   private background?: THREE.Color;
   private drapes = new WeakMap<THREE.Texture, Map<number, DrapeLevel>>();
   private uploadedImage?: TerrainMaterialImage;
@@ -283,6 +333,8 @@ export class ForgeTerrainViewport {
     this.hide();
     const web = this.#web;
     this.#web = undefined;
+    this.materialHelpers?.dispose();
+    this.materialHelpers = undefined;
     this.readback = undefined;
     web?.dispose();
     this.signalRelease?.();
@@ -290,14 +342,15 @@ export class ForgeTerrainViewport {
     this.lights = undefined;
     this.maxDimension = undefined;
     this.uploaded = undefined;
-    this.cube?.layer.dispose();
-    this.cube = undefined;
+    this.objects = this.icons = this.display = undefined;
+    this.objectsKey = this.boxKey = undefined;
+    this.boxes.clear();
     this.uploadedImage = undefined;
     this.presentedAppearance = undefined;
     this.verifyUpload = false;
     this.admittedRead = undefined;
     this.appliedSkyIntensity = 0;
-    this.materialDisplay = false;
+    this.toneMapExposure = undefined;
     this.lightKey = "";
     this.shadowFar = undefined;
   }
@@ -326,7 +379,9 @@ export class ForgeTerrainViewport {
       if (!current()) return;
       const web = await module.Forge3DRuntime.create(this.canvas, {
         width, height, devicePixelRatio: 1, powerPreference: "high-performance",
-        clearColor: [0, 0, 0, 0], alphaMode: "premultiplied",
+        // W12 allocates full-size vector depth, colour and pick attachments.
+        // A 3840 x 2160 Solid frame requires about 680 MiB before readback.
+        memoryBudgetBytes: 1024 ** 3, clearColor: [0, 0, 0, 0], alphaMode: "premultiplied",
       });
       try {
         if (!current()) return;
@@ -334,7 +389,7 @@ export class ForgeTerrainViewport {
         this.lights = new module.LightCollection();
         this.maxDimension = caps.maxTextureDimension2D;
         this.module = module;
-        const readback = new ViewportReadback(web);
+        const readback = new ViewportReadback(web, module.encodePng);
         const released = new Promise<void>(resolve => { this.signalRelease = resolve; });
         this.#web = web;
         this.readback = readback;
@@ -531,56 +586,94 @@ export class ForgeTerrainViewport {
     return false;
   }
 
-  private submitCube(web: Forge3DRuntime, cube: ReturnType<typeof viewportTerrainBackend>["cube"],
-    placement: typeof emptyTransform, view: View) {
-    if (!cube) {
-      if (this.cube) {
-        web.setScatterBatches([]);
-        this.cube.layer.dispose();
-        this.cube = undefined;
+  private submitObjects(web: Forge3DRuntime, objects: ViewportObject[], placement: typeof emptyTransform, view: View, camera: Camera, sun: THREE.Vector3Tuple) {
+    const preview = view.objectPreview;
+    const list = view.frame.objects.map(o => o.id === preview?.id ? { ...o, ...preview } : o);
+    const hierarchy = new Map(list.map(o => [o.id,o]));
+    const eye = studioToRuntime(view.frame.camera!.eye, placement);
+    const key = JSON.stringify([view.frame.projectId, view.frame.projectGeneration, objects.map(o => o.id), list, placement.translation, placement.scale,
+      view.frame.settings.mode, view.frame.settings.exposure, objects.map(o => {
+        const group = view.editor?.objects.get(o.id);
+        group?.updateWorldMatrix(true,false);
+        return group?.matrixWorld.elements;
+      })]);
+    const changed = key !== this.objectsKey;
+    if (changed) {
+      const scene = buildObjects(this.module!, objects.map(o => hierarchy.get(o.id)!), hierarchy, placement,
+        view.clay, view.frame.settings, view.editor?.objects);
+      this.objects = scene;
+      this.objectsKey = key;
+      this.icons = helperVectors(this.module!, scene.records, new Map());
+      this.boxKey = undefined;
+    }
+    const scene = this.objects!;
+    const moved = !this.lastEye?.every((v,i) => v === eye[i]);
+    const facesChanged = (changed || moved) && updateFaces(scene, eye);
+    this.lastEye = eye;
+    const projection = camera.viewProjectionMatrix(web.width/web.height);
+    const projectionKey = [...projection,...sun].join(",");
+    if (changed || facesChanged || this.batchProjection !== projectionKey) {
+      const frustum = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().fromArray(projection),THREE.WebGPUCoordinateSystem);
+      const records = [...scene.records.values()].filter(r => r.surface?.geometry.index?.count && frustum.intersectsBox(r.bounds));
+      if (changed || facesChanged || records.length !== scene.drawn.length || records.some((r,i) => r !== scene.drawn[i])
+          || this.paletteSun !== sun.join(",")) {
+        submitObjectBatches(this.module!, scene, records, sun);
+        web.setMaterials(scene.materials);
+        web.setScatterBatches(scene.batches);
+        this.paletteSun = sun.join(",");
       }
-      return;
+      this.batchProjection = projectionKey;
     }
-    const { material, size } = cube;
-    let object = cube.object;
-    if (!view.editor && view.objectPreview?.id === object.id) {
-      object = { ...object, ...view.objectPreview };
-    }
-    const group = view.editor?.objects.get(object.id);
-    group?.updateWorldMatrix(true, false);
-    const parent = object.parent
-      ? cubeParentWorld(object.parent, new Map(view.frame.objects.map(o => [o.id, o])))
-      : undefined;
-    const solid = view.frame.settings.mode === "solid";
-    const baseColor = solid ? view.clay.toArray() : material.baseColor;
-    const roughness = solid ? 0.62 : material.roughness, metallic = solid ? 0 : material.metallic;
-    const key = JSON.stringify([object.id, size, group?.matrixWorld.elements ?? [object.translation, object.rotationDeg, object.scale],
-      parent?.matrix.elements, parent?.singular, placement.translation, placement.scale, baseColor, roughness, metallic]);
-    if (this.cube?.key === key) return;
+  }
 
-    const module = this.module!;
-    const { geometry, transforms } = cubeScatterGeometry(size, object, placement, group?.matrixWorld, parent);
-    const materials = new module.MaterialCollection();
-    materials.set(object.id, { id: object.id, baseColor: [baseColor[0], baseColor[1], baseColor[2], 1], roughness, metallic });
-    const slots = materials.snapshot();
-    const layer = new module.MeshLayer({
-      positions: new Float32Array(geometry.attributes.position.array),
-      normals: new Float32Array(geometry.attributes.normal.array),
-      indices: new Uint32Array(geometry.index!.array),
-    }, { name: object.id, materialIndex: slots.materials.find(slot => slot.slot === object.id)!.index,
-      color: [1, 1, 1, 1], transforms });
-    web.setMaterials(slots);
-    web.setScatterBatches([layer.toBatch()]);
-    this.cube?.layer.dispose();
-    // Bake the exact packed instance matrix after the mesh upload has copied its vertices.
-    geometry.applyMatrix4(new THREE.Matrix4().fromArray(transforms).transpose());
-    const axis = parent?.singular ? undefined : worldXAxis(parent?.matrix ?? new THREE.Matrix4());
-    this.cube = { key, layer, materials: slots, pose: { axis, object, parent: parent?.matrix ?? new THREE.Matrix4() }, surface: { id: object.id, geometry } };
+  private setBoxes(selection: readonly string[], ground?: SubmittedFrame["terrain"]) {
+    this.lastSelection = selection;
+    const boxes = new Map<string, THREE.Box3>();
+    for (const id of selection) {
+      const bounds = this.objects!.records.get(id)?.bounds;
+      if (bounds) boxes.set(id,bounds);
+      else if (ground?.upload.terrain.request.objectId === id) {
+        const [x,z] = ground.transform.gridHalfSpanXz;
+        const grid = ground.upload.dataset;
+        const y = (h: number) => (h - grid.domain[0]) * grid.exaggeration;
+        boxes.set(id, new THREE.Box3(new THREE.Vector3(-x,y(grid.statistics.min),-z),new THREE.Vector3(x,y(grid.statistics.max),z)));
+      }
+    }
+    const key = JSON.stringify([...boxes]);
+    if (this.boxKey === key) return false;
+    this.boxKey = key;
+    this.boxes = boxes;
+    this.display = boxes.size ? helperVectors(this.module!, this.objects!.records, boxes) : this.icons!;
+    this.#web!.setVectorLayers(this.objects!.solid ? this.display.vectors : null);
+    return true;
+  }
+
+  // Selection acknowledgements can arrive during another click. Repaint only
+  // decorations, preserving the scene revision that owns the in-flight pick.
+  refreshSelection(selection: readonly string[]) {
+    if (selection === this.lastSelection || !this.submitted || this.readback?.idle || this.canvas.hidden) return;
+    if (this.setBoxes(selection, this.submitted.terrain)) this.render(this.submitted.camera, this.submitted.terrain);
+  }
+
+  private render(camera: Camera, ground?: SubmittedFrame["terrain"]) {
+    const web = this.#web!;
+    if (!web.render()) return false;
+    const scene = this.objects!, display = this.display!;
+    if (!scene.solid && (display.features.length || scene.drawn.some(record => record.surface!.kind === "light"))) {
+      this.materialHelpers ??= new MaterialHelpers(this.canvas);
+      this.materialHelpers.draw(camera, web.width, web.height, scene, display, ground?.upload);
+      this.readback!.overlay = this.materialHelpers;
+    } else {
+      this.readback!.overlay = undefined;
+      this.materialHelpers?.dispose();
+      this.materialHelpers = undefined;
+    }
+    return true;
   }
 
   draw(view: View, previewError?: string): TerrainPresentation | undefined {
     const { frame, editor } = view;
-    const { backend, reason, terrain, object, cube } = this.backend(view);
+    const { backend, reason, terrain, object, objects } = this.backend(view);
     if (backend === "native") {
       this.report("Viewport native · Rendered mode");
       return;
@@ -616,7 +709,7 @@ export class ForgeTerrainViewport {
     const drape: THREE.Texture<HTMLImageElement> | undefined = material ? mesh?.userData.drape : undefined;
     const level = drape && editor && mesh ? this.drapeLevel(view.projectionCamera, dimensions, mesh, drape.image) : 0;
     const decoded = drape ? this.drapes.get(drape)?.get(level) : undefined;
-    const skyIntensity = material && (terrain || cube) && (editor?.skyEnabled ?? true) ? settings.studioSkyIntensity : 0;
+    const skyIntensity = material && (terrain || objects.some(o => o.kind.type === "mesh")) && (editor?.skyEnabled ?? true) ? settings.studioSkyIntensity : 0;
     try {
       const appearanceError = decoded?.error ?? (skyIntensity ? this.sky?.error : undefined);
       if (appearanceError) throw new Error(appearanceError);
@@ -647,16 +740,16 @@ export class ForgeTerrainViewport {
         web.setIbl(appliedSky && this.sky?.snapshot ? { ...this.sky.snapshot, intensity: appliedSky } : null);
         this.appliedSkyIntensity = appliedSky;
       }
-      if (material !== this.materialDisplay) {
-        // Calibrated on the same Bryce imagery with the Studio sky. The two
-        // ACES implementations use different exposure conventions.
-        web.setPostFx(material ? [{ kind: "tonemap", operator: "aces", exposure: -0.75 }] : null);
-        this.materialDisplay = material;
+      // Apply the project's Material exposure after combining reflected and
+      // emitted light. Emission textures then retain the authored linear range.
+      const toneMapExposure = material ? Math.log2(settings.exposure) - .75 : undefined;
+      if (toneMapExposure !== this.toneMapExposure) {
+        web.setPostFx(toneMapExposure === undefined ? null : [{ kind:"tonemap", operator:"aces", exposure:toneMapExposure }]);
+        this.toneMapExposure = toneMapExposure;
       }
-      // A cube-only frame has Studio units. Keep its origin near the camera
-      // before packing either into floats. Snap so orbiting rarely reuploads the mesh.
+      // Rebase object-only frames near the camera before packing float transforms.
       const target = cameraTarget(camera);
-      let transform = cube && !terrain ? { scale: 1,
+      let transform = objects.length && !terrain ? { scale: 1,
         translation: target.map(v => Math.round(v / 1024) * 1024) as typeof camera.eye } : emptyTransform;
       let presentedTerrain: SubmittedFrame["terrain"];
       if (terrain && !waiting && !previewError) {
@@ -675,7 +768,7 @@ export class ForgeTerrainViewport {
           web.setTerrain(input);
           this.admittedRead = undefined;
           const dataset = this.module!.TerrainDataset.fromArray(input);
-          this.uploaded = { terrain, mesh, map, ramp, hillshade, dataset };
+          this.uploaded = { terrain, mesh, map, ramp, hillshade, dataset, heightRange: input.material!.clamp!.heightRange! };
           this.verifyUpload = true;
         } else if (image && image !== this.uploadedImage) {
           web.setTerrainOverlays(imageryOverlays(image));
@@ -691,13 +784,16 @@ export class ForgeTerrainViewport {
         presentedTerrain = { upload: this.uploaded!, transform: placement };
       }
 
-      const sun = settings.sun ?? defaultSun;
-      const key = [...sun.direction, ...sun.color, sun.intensity, settings.exposure].join(",");
+      const preview = view.objectPreview;
+      const sun = (preview || view.editor ? sceneSun(view.frame.objects.map(o =>
+        o.id === preview?.id ? { ...o, ...preview } : o), view.editor?.objects) : settings.sun) ?? defaultSun;
+      const lightExposure = material ? 1 : settings.exposure;
+      const key = [...sun.direction, ...sun.color, sun.intensity, lightExposure].join(",");
       if (key !== this.lightKey) {
         const lights = this.lights!;
         lights.clear();
         lights.add({ type: "directional", ...sun });
-        lights.setExposure(settings.exposure);
+        lights.setExposure(lightExposure);
         web.setLighting(lights.snapshot());
         this.lightKey = key;
       }
@@ -705,8 +801,10 @@ export class ForgeTerrainViewport {
       const input = cameraInput(camera.eye, target, camera.up, fovYDegrees,
         camera.near, camera.far, transform.translation, transform.scale);
       this.setCamera(web, input);
-      this.submitCube(web, cube, transform, view);
-      if (!web.render()) {
+      const frameCamera = new this.module!.Camera(input);
+      this.submitObjects(web, objects, transform, view, frameCamera, sun.direction);
+      this.setBoxes(view.editor ? [] : view.selection, presentedTerrain);
+      if (!this.render(frameCamera, presentedTerrain)) {
         this.hide();
         this.report("Viewport forge3d-web · Waiting for WebGPU frame", previewError);
         this.invalidate();
@@ -724,8 +822,7 @@ export class ForgeTerrainViewport {
         }
         this.verifyUpload = false;
       }
-      const surfaces = { cube: this.cube?.surface,
-        terrain: presentedTerrain && { id: object.id, grid: presentedTerrain.upload.dataset } };
+      const ground = presentedTerrain && { id: object.id, grid: presentedTerrain.upload.dataset };
       this.canvas.style.transform = stretchX === 1 && stretchY === 1 ? "" : `scale(${stretchX}, ${stretchY})`;
       if (presentedTerrain) {
         const lens = view.projectionCamera;
@@ -733,14 +830,15 @@ export class ForgeTerrainViewport {
         this.clipToCamera.copy(lens.projectionMatrixInverse);
       }
       this.submitted = { sequence: ++this.submissions, projectId: frame.projectId,
-        projectGeneration: frame.projectGeneration, width, height, source: frame, camera: new this.module!.Camera(input),
-        placement: transform, pose: this.cube?.pose, visibleIds: Object.values(surfaces).flatMap(surface => surface ? [surface.id] : []),
-        surfaces, terrain: presentedTerrain };
+        projectGeneration: frame.projectGeneration, width, height, source: frame, camera: frameCamera,
+        placement: transform, scene: this.objects!, projected: new Map(), masks: new Map(),
+        visibleIds: [...this.objects!.records.keys(), ...(ground ? [ground.id] : [])],
+        ground, terrain: presentedTerrain };
       this.canvas.hidden = false;
       this.presentedAppearance = { skyIntensity: this.appliedSkyIntensity,
         drape: image && { width: image.width, height: image.height, level, settled: image === decoded?.image } };
       this.report(status, previewError);
-      return { submitted: true, terrain: presentedTerrain && mesh, cubeId: cube?.object.id };
+      return { submitted: true, terrain: presentedTerrain && mesh, objectIds: objects.map(o => o.id) };
     } catch (error) {
       const reason = viewportErrorReason(error);
       const deviceFailure = error && typeof error === "object" && "code" in error &&
@@ -753,17 +851,14 @@ export class ForgeTerrainViewport {
     }
   }
 
-  displayedCube(frame: ViewportFrame, id: string, allowPreviousFrame = false) {
+  displayedObject(frame: ViewportFrame, id: string, allowPreviousFrame = false) {
     const submitted = this.submitted;
-    const cube = submitted?.surfaces.cube;
-    const pose = submitted?.pose;
+    const record = submitted?.scene.records.get(id);
     if (!submitted || (!allowPreviousFrame && submitted.source !== frame) ||
         submitted.projectGeneration !== frame.projectGeneration || submitted.projectId !== frame.projectId ||
-        !cube || cube.id !== id || !pose || this.canvas.hidden) return;
-    const geometry = cube.geometry;
-    if (!geometry.boundingSphere) geometry.computeBoundingSphere();
-    if (!geometry.boundingBox) geometry.computeBoundingBox();
-    return { ...pose, camera: submitted.camera, center: geometry.boundingSphere!.center.toArray(), bounds: geometry.boundingBox!, localAxis: pose.axis?.local,
+        !record || this.canvas.hidden) return;
+    const { parent, object, axis, center, bounds, world } = record;
+    return { parent, object, axis, center, bounds, world, camera: submitted.camera, localAxis: axis?.local,
       width: submitted.width, height: submitted.height, scale: submitted.placement.scale };
   }
 
@@ -811,10 +906,10 @@ export class ForgeTerrainViewport {
     return queryTerrainDataset(terrain.upload.dataset, terrain.upload.terrain, terrain.transform, x, z);
   }
 
-  pick(frame: ViewportFrame, pixel: Pixel) {
+  async pick(frame: ViewportFrame, pixel: Pixel) {
     const submitted = this.submitted;
     if (!submitted || frame !== submitted.source) return;
-    const { camera, placement, surfaces, sequence, visibleIds, terrain } = submitted;
+    const { camera, placement, scene, sequence, visibleIds, terrain } = submitted;
     const result = (hit: StudioHit | null) => {
       if (this.submitted !== submitted) return;
       if (hit?.kind === "terrain" && terrain) {
@@ -826,46 +921,74 @@ export class ForgeTerrainViewport {
       }
       return { hit, visibleIds, revision: sequence };
     };
-    const faces = submitted.cubeFaces ??= surfaces.cube ? projectCubeFaces(camera, submitted, surfaces.cube.geometry) : [];
-    const surface = pickSurfaces(camera, submitted, pixel, placement, surfaces, sequence, faces);
-    if ("hit" in surface) return result(surface.hit);
-
-    // With only one candidate at this pixel, display alpha gives its
-    // coverage directly. Mark object IDs only when the surfaces can overlap.
-    const both = surface.cube && surface.terrain;
-    const key = both ? "objectMask" : "coverageMask";
-    const resolve = (mask: Uint8Array) => {
-      if (this.submitted !== submitted) return;
-      const index = pixel[1] * submitted.width + pixel[0], sample = mask[index];
-      const hit = both ? (sample === 2 ? surface.cube : sample === 1 ? surface.terrain : null)
-        : sample ? surface.terrain ?? surface.cube : null;
-      const hints = hit?.kind === "cube" ? surface.cubeDepths : surface.terrainDepths;
-      if (!hit || !hints) return result(hit);
-      const depths = submitted.pixelDepths ??= new Map<number, Promise<number>>();
-      let depth = depths.get(index);
-      if (!depth) {
-        depth = this.readback!.readPixelDepth(this.module!, submitted, pixel, hints, this.cube, this.lights!.snapshot());
-        depths.set(index, depth);
+    const candidates: { hit: StudioHit; hints?: PixelDepthHints }[] = [];
+    const collect = (surfaces: PickSurfaces, faces: ReturnType<typeof projectMeshFaces>) => {
+      const pick = pickSurfaces(camera, submitted, pixel, placement, surfaces, sequence, faces);
+      if ("hit" in pick) {
+        if (pick.hit) candidates.push({ hit: pick.hit });
+      } else {
+        if (pick.mesh) candidates.push({ hit: pick.mesh, hints: pick.meshDepths });
+        if (pick.terrain) candidates.push({ hit: pick.terrain, hints: pick.terrainDepths });
       }
-      return depth.then(z => {
-        const position = camera.screenToWorld(pixel[0] + .5, pixel[1] + .5, z, submitted);
-        const distance = new THREE.Vector3(...position).distanceTo(new THREE.Vector3(...camera.position)) * placement.scale;
-        return result({ ...hit, worldPosition: runtimeToStudio(position, placement), distance });
-      }, error => {
-        depths.delete(index);
-        if (this.submitted === submitted) console.warn("Could not resolve viewport depth", error);
-        return undefined;
-      });
     };
-    const mask = submitted[key] ??= (both
-      ? this.readback!.readObjectMask(this.module!, surface.cube!.id, this.cube!.materials, this.lights!.snapshot())
-      : this.readback!.readCoverageMask()).then(mask => submitted[key] = mask);
-    if (mask instanceof Uint8Array) return resolve(mask);
-    return mask.then(resolve, error => {
-      submitted[key] = undefined;
-      if (this.submitted === submitted) console.warn("Could not read viewport object coverage", error);
-      return undefined;
-    });
+    if (submitted.ground) collect({ terrain: submitted.ground }, []);
+    for (const record of scene.drawn) {
+      const surface = record.surface!, id = record.object.id;
+      let faces = submitted.projected.get(id);
+      if (!faces) {
+        faces = projectMeshFaces(camera, submitted, surface.geometry);
+        submitted.projected.set(id,faces);
+      }
+      collect({ mesh: surface }, faces);
+    }
+    candidates.sort((a,b) => a.hit.distance - b.hit.distance);
+    const depthOf = (hit: StudioHit) => camera.worldToScreen(studioToRuntime(hit.worldPosition,placement),submitted)!.depth;
+    const ambiguous = candidates.some(c => c.hints) || (candidates.length > 1 &&
+      Math.abs(depthOf(candidates[0].hit) - depthOf(candidates[1].hit)) <= depthTieWindow(24));
+    const index = pixel[1] * submitted.width + pixel[0];
+    const display = this.display!, readback = this.readback!, lights = this.lights!.snapshot();
+    let nearest: StudioHit | null = null;
+    try {
+      for (const { hit, hints } of candidates) {
+        if (this.submitted !== submitted) return;
+        if (ambiguous) {
+          let mask = submitted.masks.get(hit.id);
+          if (!mask) {
+            mask = readback.readObjectMask(this.module!, hit.id, submitted, lights, display);
+            submitted.masks.set(hit.id, mask);
+          }
+          if (!(await mask)[index]) continue;
+        }
+        nearest = hit;
+        if (hints) {
+          const depths = submitted.pixelDepths ??= new Map();
+          let depth = depths.get(index);
+          if (!depth) {
+            depth = readback.readPixelDepth(this.module!, submitted, pixel, hints, display, lights);
+            depths.set(index,depth);
+          }
+          const pos = camera.screenToWorld(pixel[0]+.5, pixel[1]+.5, await depth, submitted);
+          nearest = { ...hit, worldPosition: runtimeToStudio(pos,placement),
+            distance: new THREE.Vector3(...pos).distanceTo(new THREE.Vector3(...camera.position)) * placement.scale };
+        }
+        break;
+      }
+      if (this.submitted !== submitted) return;
+      if ([...scene.records.values()].some(o => o.segments.some(s => strokeNearPixel(camera, submitted, s, pixel)))) {
+        const stroke = await readback.vectorHit(pixel, this.icons!, display);
+        if (stroke) {
+          const pos = camera.screenToWorld(pixel[0]+.5,pixel[1]+.5,stroke.depth,submitted);
+          const distance = new THREE.Vector3(...pos).distanceTo(new THREE.Vector3(...camera.position)) * placement.scale;
+          if (!nearest || distance <= nearest.distance) nearest = { id: stroke.id,
+            kind: scene.records.get(stroke.id)!.object.kind.type, distance, worldPosition: runtimeToStudio(pos,placement), frameRevision: sequence };
+        }
+      }
+      return result(nearest);
+    } catch (error) {
+      submitted.masks.clear();
+      submitted.pixelDepths?.delete(index);
+      if (this.submitted === submitted) console.warn("Could not resolve viewport pick", error);
+    }
   }
 
   // Exposed by the development viewport's verification hook.
@@ -874,7 +997,16 @@ export class ForgeTerrainViewport {
   get diagnosticSubmission() {
     if (!this.submitted) return;
     const { sequence, projectId, projectGeneration, width, height, visibleIds, terrain, camera, placement } = this.submitted;
-    return { sequence, projectId, projectGeneration, width, height, visibleIds, camera: camera.toInput(), placement,
+    const slots = new Map(this.submitted.scene.materials.materials.map(m => [m.index,m.material]));
+    const objects = [...this.submitted.scene.records.values()].map(o => {
+      const material = o.scatter?.material;
+      return { id: o.object.id, kind: o.object.kind.type, triangles: (o.surface?.geometry.index?.count ?? 0) / 3,
+        segments: o.segments.length, bounds: o.bounds, material: material?.baseColor,
+        roughness: material?.roughness, metallic: material?.metallic };
+    });
+    return { sequence, projectId, projectGeneration, width, height, visibleIds, objects,
+      surfaceCount: this.submitted.scene.drawn.length, scatterBatches: this.submitted.scene.batches.length,
+      materialSlots: slots.size, selectionBoxes: [...this.boxes.keys()], camera: camera.toInput(), placement,
       terrain: terrain?.upload.terrain.request ?? null,
       requestedTerrainResolution: terrain?.upload.terrain.admission?.requestedResolution };
   }
