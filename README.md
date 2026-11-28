@@ -257,6 +257,23 @@ cargo test -p forge3d-studio-shell --lib   # 23 shell tests: engine probe, candi
 npx tsc --noEmit               # UI types
 ```
 
+The Python suites live in `tests/` and cover the render service directly:
+
+```bash
+python3 -m venv .venv
+GIT_LFS_SKIP_SMUDGE=1 .venv/bin/pip install \
+  'forge3d @ git+https://github.com/milos-agathon/forge3d.git@9804091086364a1824ea8bb0e7f9f2a172fddf45' \
+  pytest pillow rasterio pyproj
+.venv/bin/python -m pytest tests/ -q
+```
+
+They check the sky HDR is a valid Radiance file, the denoise colour-space
+helpers, the remote-DEM range-read previews, the `RenderSettings` payload
+contract against the shell, and — end to end — that imported glTF meshes land
+in the Rendered still at the viewport camera's aim. Tests that need a
+terrain-safe GPU skip when no hardware adapter is present. CI runs the same
+command against the pinned engine above.
+
 ## Viewport controls
 
 | Input | Action |
@@ -521,8 +538,10 @@ consumed is gone.
   references external `.bin`/texture files fails with an explicit message,
   because the webview cannot read neighbouring files.
 - **Imported meshes are transform-editable, relinkable, and node-selectable.**
-  Solid draws them as clay; the Material preview draws their glTF materials.
-  Meshes do not reach Rendered at all yet (see Primitives below).
+  Solid draws them as clay; the Material preview draws their glTF materials,
+  and Rendered composites them at their own scene transforms, not at the
+  camera aim. Built-in primitives still do not reach Forge3D (see Primitives
+  below).
 - **No shadows or PBR environment** in the Solid viewport; it is a modelling
   view, not the Forge3D render. The Material preview is where HDRI lighting and
   soft shadows live (Phase 4).
@@ -534,9 +553,10 @@ consumed is gone.
 - **Primitives still do not reach Forge3D.** The Phase 4 default scene is terrain
   precisely because that path is complete; exporting primitive meshes as glTF is
   the remaining piece of Rendered mode.
-- **Object animation (Phases 6) is evaluated in the model and exported per frame,
-  but the engine cannot draw those objects**, so only camera animation shows up
-  in Rendered frames.
+- **Object animation (Phase 6) is evaluated in the model and exported per
+  frame.** Whole imported meshes reach Rendered at their evaluated scene
+  transforms, including keyed transforms during export; node-scoped imports
+  are reported as skipped and built-in primitives have no render geometry.
 - **Rendered shows one still frame at a time.** Playback animates the Solid and
   Material viewports live; Rendered re-renders on edits, orbit/zoom, and camera
   changes (throttled), not per playback frame. Use **Export frames…** for the
@@ -611,10 +631,12 @@ v4; older builds reject a v4 file rather than silently dropping its tracks).
 - A camera animation reaches Forge3D through `workspace::camera_render_view`:
   the exported frame uses the evaluated camera's eye, rotation, distance, and
   FOV — matching a camera-view still — rather than the terrain's canned framing.
-- **Only camera animation is Forge3D-native.** The engine draws terrain, so a
-  mesh's animation is visible in the Studio viewport and evaluated for export,
-  but it does not appear in Rendered frames (the same geometry-export gap as
-  primitives). The UI does not claim otherwise.
+- **Imported meshes and camera animation are Forge3D-native.** Whole imported
+  glTF/GLB meshes reach Rendered at their scene transforms, and
+  `render_animation_frame()` evaluates the timeline before collecting those
+  transforms, so keyed object motion appears in exported frames too. A
+  node-scoped import is reported as skipped rather than silently rendered as a
+  whole asset; built-in primitives still have no render geometry.
 
 ## Asset integrity
 
@@ -707,7 +729,7 @@ by the dependency-free `node` tests `npm test` runs.
 
 ## Not yet implemented (deliberately)
 
-- Geometry export for primitives — Rendered still draws terrain only
+- Geometry export for built-in primitives — imported glTF/GLB meshes do reach Rendered, primitives do not
 - Shared material library — **Phase 5** (environment/IBL controls, capability badges, the Material-preview albedo drape, and glTF node selection shipped)
 Relinking, the material inspector (terrain albedo, mesh base colour and
 texture), the render settings UI, the Phase 6 timeline, and the Phase 7 queue,

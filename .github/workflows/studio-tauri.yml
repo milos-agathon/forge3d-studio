@@ -50,6 +50,81 @@ jobs:
       - name: Shell unit tests (render payload, view override)
         run: cargo test -p forge3d-studio-shell --lib
 
+  studio-python:
+    name: Python suites — render service, mesh composite, surface audit
+    # These suites were left in the engine repo at the split. They are the only
+    # end-to-end check that imported meshes reach the Rendered still, so they
+    # gate PRs rather than waiting for a release.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true # the still tests read the real DEMs, not LFS pointer files
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned engine and test deps
+        env:
+          GIT_LFS_SKIP_SMUDGE: "1" # the wheel excludes the engine's LFS sample data
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan-dev pkg-config
+          python -m venv "$HOME/studio-venv"
+          "$HOME/studio-venv/bin/python" -m pip install --upgrade pip
+          "$HOME/studio-venv/bin/python" -m pip install \
+            'forge3d @ git+https://github.com/milos-agathon/forge3d.git@9804091086364a1824ea8bb0e7f9f2a172fddf45' \
+            pytest pillow rasterio pyproj
+
+      - name: pytest
+        run: |
+          "$HOME/studio-venv/bin/python" -m pytest tests/ -q
+
+  studio-python-gpu:
+    name: Trusted GPU — Python render suites (NVIDIA Vulkan)
+    # Hosted runners skip the terrain-safe tests. This lane runs the complete
+    # Python suite and fails when the adapter is missing, so render-path
+    # regressions cannot merge behind a green hosted job.
+    # Never execute fork PR code on a persistent runner. Same-repo PRs and
+    # main pushes are trusted; fork authors can still use the hosted checks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Windows, X64, forge3d-gpu, gpu-nvidia]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned engine and test deps
+        env:
+          GIT_LFS_SKIP_SMUDGE: "1"
+        shell: pwsh
+        run: |
+          # Fresh per-job environment: a self-hosted runner must not reuse a venv.
+          $venv = Join-Path $env:RUNNER_TEMP "studio-gpu-venv"
+          if (Test-Path -LiteralPath $venv) { Remove-Item -Recurse -Force -LiteralPath $venv }
+          python -m venv $venv
+          & "$venv\Scripts\python.exe" -m pip install --upgrade pip
+          & "$venv\Scripts\python.exe" -m pip install `
+            'forge3d @ git+https://github.com/milos-agathon/forge3d.git@9804091086364a1824ea8bb0e7f9f2a172fddf45' `
+            pytest pillow rasterio pyproj
+
+      - name: pytest on the physical adapter
+        shell: pwsh
+        env:
+          FORGE3D_TESSELLA_REQUIRED_GPU: '1'
+          FORGE3D_ALLOW_HOSTED_WINDOWS_TERRAIN: '1'
+          WGPU_BACKEND: vulkan
+          WGPU_BACKENDS: vulkan
+        run: |
+          $venv = Join-Path $env:RUNNER_TEMP "studio-gpu-venv"
+          & "$venv\Scripts\python.exe" -m pytest tests/ -v --tb=short
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   deb-audit:
     name: deb audit — engine probe in both interpreter scenarios
     # Gate on PRs and main pushes: the deb's stranger-readable discovery path

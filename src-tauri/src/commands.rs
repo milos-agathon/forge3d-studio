@@ -2082,4 +2082,52 @@ mod tests {
             "the label layer must name the vector layer above it"
         );
     }
+
+    #[test]
+    fn a_visible_imported_mesh_reaches_the_serialized_request() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let state = AppState::new(PathBuf::new());
+        let snapshot = lock(&state)
+            .unwrap()
+            .open_project(&root.join("samples/bryce-terrain.studio3d"))
+            .unwrap();
+        let mut project = snapshot.project;
+
+        let asset = studio_core::Asset {
+            id: studio_core::ids::new_id(),
+            name: "campus.glb".to_owned(),
+            path: "assets/models/campus.glb".to_owned(),
+            kind: AssetKind::Glb,
+            byte_size: 1024,
+        };
+        let object = studio_core::SceneObject {
+            id: studio_core::ids::new_id(),
+            name: "Imported".to_owned(),
+            parent: None,
+            // A deliberately visible, off-centre transform; the Python gate
+            // renders exactly these serialized values.
+            transform: studio_core::Transform {
+                translation: studio_core::Vec3::new(0.0, 0.0, -7.0),
+                rotation_deg: studio_core::Vec3::ZERO,
+                scale: studio_core::Vec3::new(6.0, 6.0, 6.0),
+            },
+            visible: true,
+            locked: false,
+            kind: ObjectKind::Mesh(studio_core::MeshObject::gltf(asset.id, None)),
+        };
+        project.assets.push(asset);
+        project.scene.objects.push(object);
+
+        let meshes = scene_meshes(&project);
+        assert_eq!(meshes.len(), 1, "a visible import must reach the handoff");
+        let handoff = studio_core::workspace::handoff(&project, 1, Workspace::Forge3d);
+        let request = build_request(&handoff, &project.render, 256, 256, None, meshes).unwrap();
+        let payload = request.to_payload("final", None);
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/mesh-handoff.json")).unwrap();
+        assert_eq!(
+            payload["meshes"], fixture,
+            "the serialized handoff must match the fixture Python renders"
+        );
+    }
 }
