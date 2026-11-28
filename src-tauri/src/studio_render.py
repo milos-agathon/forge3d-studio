@@ -611,6 +611,7 @@ class StudioRenderer:
             # still is in metres. Share the terrain's own clip range.
             "near": float(clip[0]),
             "far": float(clip[1]),
+            "fov_deg": float(camera.get("fovDeg", 45.0)),
         }
         out = rgb.copy()
         rendered = 0

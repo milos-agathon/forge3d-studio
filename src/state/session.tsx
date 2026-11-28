@@ -373,7 +373,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const buffer = base64ToArrayBuffer(payload.base64);
       // Parse before registering: a corrupt file must not reach the project.
       const { meshes } = await inspectGltf(buffer, payload.name);
-      putAssetBytes(payload.path, buffer);
 
       const applied = await applyCommand({
         type: "importGltf",
@@ -384,7 +383,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         node: null,
       });
       const id = applied?.affected[0];
-      if (id) await select([id]);
+      if (!id) return; // stale/rejected session: do not cache or report success
+      putAssetBytes(payload.path, buffer);
+      await select([id]);
       flash(`Imported ${payload.name} (${meshes} mesh${meshes === 1 ? "" : "es"})`);
     } catch (cause) {
       fail(cause);

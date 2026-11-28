@@ -10,7 +10,9 @@
 import type { Group, Material, Object3D } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
+const MAX_PENDING_ASSET_BYTES = 128 * 1024 * 1024;
 const bytesByPath = new Map<string, ArrayBuffer>();
+let pendingAssetBytes = 0;
 const scenesByPath = new Map<string, Promise<Group>>();
 const nodesByPath = new Map<string, Promise<string[]>>();
 
@@ -23,11 +25,17 @@ export function base64ToArrayBuffer(base64: string): ArrayBuffer {
 }
 
 export function putAssetBytes(path: string, buffer: ArrayBuffer): void {
+  const previous = bytesByPath.get(path);
+  if (previous) pendingAssetBytes -= previous.byteLength;
   bytesByPath.set(path, buffer);
-  // Bounded: relinking many assets must not keep every file's bytes alive.
-  while (bytesByPath.size > 64) {
+  pendingAssetBytes += buffer.byteLength;
+  // Bound raw bytes even if the viewport never consumes them (failed/stale
+  // imports, WebGL init failure). One 128 MiB file fits; two do not.
+  while (pendingAssetBytes > MAX_PENDING_ASSET_BYTES) {
     const oldest = bytesByPath.keys().next();
     if (oldest.done) break;
+    const evicted = bytesByPath.get(oldest.value);
+    if (evicted) pendingAssetBytes -= evicted.byteLength;
     bytesByPath.delete(oldest.value);
   }
   scenesByPath.delete(path);
@@ -38,6 +46,7 @@ export function putAssetBytes(path: string, buffer: ArrayBuffer): void {
  *  disposed by the viewport, and these maps would otherwise keep them alive. */
 export function clearAssetCaches(): void {
   bytesByPath.clear();
+  pendingAssetBytes = 0;
   scenesByPath.clear();
   nodesByPath.clear();
 }
@@ -122,6 +131,11 @@ function loadSceneGroup(
   let pending = scenesByPath.get(path);
   if (!pending) {
     const bytes = bytesByPath.get(path);
+    if (bytes) {
+      pendingAssetBytes -= bytes.byteLength;
+      bytesByPath.delete(path);
+    }
+    // Raw bytes are a handoff, not a cache: the parsed scene is the cache.
     pending = bytes ? parseGltf(bytes, path) : read(path).then((buffer) => parseGltf(buffer, path));
     scenesByPath.set(path, pending);
     pending.catch(() => scenesByPath.delete(path));

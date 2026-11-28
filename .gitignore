@@ -3,6 +3,11 @@ public/forge3d-web/
 node_modules/
 dist/
 *.log
+*.pyc
+
+# Local engine environment
+.venv/
+__pycache__/
 
 # Rust
 target/
