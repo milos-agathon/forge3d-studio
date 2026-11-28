@@ -151,7 +151,7 @@ export interface StudioBridge {
     view?: RenderView,
   ): Promise<RenderFrame>;
   /** Render a full-resolution still; without a path it goes to renders/. */
-  renderStill(path?: string | null, view?: RenderView): Promise<RenderFrame>;
+  renderStill(path: string | null, view: RenderView | null | undefined, sessionId: number): Promise<RenderFrame>;
   renderStatus(): Promise<RenderStatus>;
   renderStop(): Promise<RenderStatus>;
 }

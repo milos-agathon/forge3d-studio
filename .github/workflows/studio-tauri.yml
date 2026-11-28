@@ -51,7 +51,7 @@ jobs:
         run: cargo test -p forge3d-studio-shell --lib
 
   deb-audit:
-    name: deb audit — engine probe in both interpreter scenarios
+    name: deb audit — engine probe and dependency honesty
     # Gate on PRs and main pushes: the deb's stranger-readable discovery path
     # is a contract, not a hope. The GPU is not required for this job — the
     # gate is the probe, never a render.
@@ -88,7 +88,8 @@ jobs:
           python -m venv "$HOME/stranger-venv"
           "$HOME/stranger-venv/bin/python" -m pip install --upgrade pip
           "$HOME/stranger-venv/bin/python" -m pip install \
-            'forge3d @ git+https://github.com/milos-agathon/forge3d.git@9804091086364a1824ea8bb0e7f9f2a172fddf45'
+            'forge3d @ git+https://github.com/milos-agathon/forge3d.git@9804091086364a1824ea8bb0e7f9f2a172fddf45' \
+            rasterio pillow
 
       - name: Build the deb
         run: |
@@ -107,14 +108,27 @@ jobs:
         run: |
           # No .venv anywhere above the checkout root and no engine in
           # ubuntu-latest's stock python3: this is the stranger's case.
-          ! forge3d-studio-shell --engine-check > out.txt
+          status=0
+          forge3d-studio-shell --engine-check > out.txt || status=$?
+          test "$status" -eq 1
           cat out.txt
-          EXPECTED="pip install --user forge3d"
-          grep -q "$EXPECTED" out.txt || (echo "missing remedy line in --engine-check output"; exit 1)
+          EXPECTED='python3 -m venv "$HOME/forge3d-studio-venv"'
+          grep -qF "$EXPECTED" out.txt || (echo "missing venv remedy line in --engine-check output"; exit 1)
 
       - name: --engine-check succeeds with the engine in a fresh venv
         run: |
           FORGE3D_STUDIO_PYTHON="$HOME/stranger-venv/bin/python" forge3d-studio-shell --engine-check
+
+      - name: --engine-check rejects an incomplete renderer environment
+        run: |
+          mkdir -p "$RUNNER_TEMP/missing-pillow"
+          printf '%s\n' 'raise ImportError("Pillow intentionally unavailable")' > "$RUNNER_TEMP/missing-pillow/PIL.py"
+          status=0
+          PYTHONPATH="$RUNNER_TEMP/missing-pillow" FORGE3D_STUDIO_PYTHON="$HOME/stranger-venv/bin/python" \
+            forge3d-studio-shell --engine-check > missing-pillow.txt || status=$?
+          test "$status" -eq 1
+          cat missing-pillow.txt
+          grep -q "Studio requires rasterio and Pillow" missing-pillow.txt
 
       - name: Validate the desktop entry
         run: |

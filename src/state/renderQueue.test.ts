@@ -16,6 +16,7 @@ import {
   newRenderJob,
   nextQueuedJob,
   patchJob,
+  renderJobFailure,
   queueSummary,
 } from "./renderQueue.ts";
 
@@ -36,12 +37,14 @@ function near(name: string, actual: number, expected: number): void {
 }
 
 // --- construction ---------------------------------------------------
-const still = newRenderJob({ kind: "still", label: "Still", total: 1, output: "/r/a.png" });
+const still = newRenderJob({ sessionId: 1, kind: "still", label: "Still", total: 1, output: "/r/a.png" });
 equal("a still starts queued", still.status, "queued");
 equal("a still has one frame", still.total, 1);
 equal("a still starts at zero", still.done, 0);
+equal("a job keeps its originating session", still.sessionId, 1);
 
 const sequence = newRenderJob({
+  sessionId: 1,
   kind: "sequence",
   label: "Sequence",
   total: 97,
@@ -49,9 +52,9 @@ const sequence = newRenderJob({
 });
 equal("a sequence keeps its frame count", sequence.total, 97);
 
-const odd = newRenderJob({ kind: "sequence", label: "Odd", total: 0, output: "" });
+const odd = newRenderJob({ sessionId: 1, kind: "sequence", label: "Odd", total: 0, output: "" });
 equal("a zero total clamps to one frame", odd.total, 1);
-const fractional = newRenderJob({ kind: "sequence", label: "Frac", total: 4.8, output: "" });
+const fractional = newRenderJob({ sessionId: 1, kind: "sequence", label: "Frac", total: 4.8, output: "" });
 equal("a fractional total floors", fractional.total, 4);
 
 // --- ordering -------------------------------------------------------
@@ -90,13 +93,26 @@ check(
 check("a done job has nothing to cancel", !canCancelJob({ ...sequence, status: "done" }));
 check("a failed job has nothing to cancel", !canCancelJob({ ...sequence, status: "failed" }));
 
+// A native session rejection is authoritative even when React has not yet
+// published project B. Both reply orders are cancellations, never failures.
+const mismatch = new Error("studio.session_mismatch: the project changed before the command could be applied");
+const afterSwitch = renderJobFailure({ ...still, status: "running" }, 2, false, mismatch);
+equal("mismatch after React switched is cancelled", afterSwitch.status, "cancelled");
+equal("mismatch after React switched has no error", afterSwitch.error, "Project changed before render");
+const beforeSwitch = renderJobFailure({ ...still, status: "running" }, 1, false, mismatch);
+equal("mismatch before React switched is cancelled", beforeSwitch.status, "cancelled");
+equal("mismatch before React switched has no error", beforeSwitch.error, "Project changed before render");
+const ordinary = renderJobFailure({ ...still, status: "running" }, 1, false, new Error("renderer crashed"));
+equal("ordinary failure stays failed", ordinary.status, "failed");
+equal("ordinary failure keeps its message", ordinary.error, "renderer crashed");
+
 // --- summary and clearing -------------------------------------------
 const mixed = [
   still,
   { ...sequence, status: "running" as const, done: 12 },
-  { ...newRenderJob({ kind: "sequence", label: "queued", total: 2, output: "" }) },
-  { ...newRenderJob({ kind: "sequence", label: "failed", total: 2, output: "" }), status: "failed" as const },
-  { ...newRenderJob({ kind: "still", label: "done", total: 1, output: "" }), status: "done" as const },
+  { ...newRenderJob({ sessionId: 1, kind: "sequence", label: "queued", total: 2, output: "" }) },
+  { ...newRenderJob({ sessionId: 1, kind: "sequence", label: "failed", total: 2, output: "" }), status: "failed" as const },
+  { ...newRenderJob({ sessionId: 1, kind: "still", label: "done", total: 1, output: "" }), status: "done" as const },
 ];
 const summary = queueSummary(mixed);
 equal("summary: queued", summary.queued, 2);

@@ -418,6 +418,7 @@ export interface DatasetInfo {
 
 /** One frame of an offline sequence export. */
 export interface AnimationFrameRequest {
+  sessionId: number;
   frame: number;
   width: number;
   height: number;

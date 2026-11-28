@@ -70,6 +70,7 @@ export const tauriBridge: StudioBridge = {
 
   renderAnimationFrame: (request) =>
     invoke<WrittenFrame>("render_animation_frame", {
+      sessionId: request.sessionId,
       frame: request.frame,
       width: request.width,
       height: request.height,
@@ -160,8 +161,8 @@ export const tauriBridge: StudioBridge = {
       view: view ?? null,
     }),
 
-  renderStill: (path, view) =>
-    invoke<RenderFrame>("render_still", { path: path ?? null, view: view ?? null }),
+  renderStill: (path, view, sessionId) =>
+    invoke<RenderFrame>("render_still", { path, view: view ?? null, sessionId }),
 
   renderStatus: () => invoke<RenderStatus>("render_status"),
 

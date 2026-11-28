@@ -17,6 +17,8 @@ export type RenderJobStatus = "queued" | "running" | "done" | "failed" | "cancel
 
 export interface RenderJob {
   id: string;
+  /** Project session this job was queued against; never retarget it. */
+  sessionId: number;
   kind: RenderJobKind;
   label: string;
   /** Frames to render; 1 for a still. */
@@ -30,6 +32,7 @@ export interface RenderJob {
 }
 
 export interface RenderJobInput {
+  sessionId: number;
   kind: RenderJobKind;
   label: string;
   total: number;
@@ -42,6 +45,7 @@ export function newRenderJob(input: RenderJobInput): RenderJob {
     Number.isFinite(input.total) && input.total > 0 ? Math.floor(input.total) : 1;
   return {
     id: crypto.randomUUID(),
+    sessionId: input.sessionId,
     kind: input.kind,
     label: input.label,
     total,
@@ -89,6 +93,29 @@ export function jobProgress(job: RenderJob): number {
 export function canCancelJob(job: RenderJob): boolean {
   if (job.status === "queued") return true;
   return job.status === "running" && job.kind === "sequence";
+}
+
+export interface RenderJobFailure {
+  status: "cancelled" | "failed";
+  error: string | null;
+}
+
+/** Classify an IPC failure without depending on React's publication order. */
+export function renderJobFailure(
+  job: RenderJob,
+  currentSessionId: number | undefined,
+  explicitlyCancelled: boolean,
+  cause: unknown,
+): RenderJobFailure {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const stale = job.sessionId !== currentSessionId || message.includes("studio.session_mismatch");
+  if (explicitlyCancelled || stale) {
+    return {
+      status: "cancelled",
+      error: stale ? "Project changed before render" : null,
+    };
+  }
+  return { status: "failed", error: message };
 }
 
 /** Counts for the queue header. */

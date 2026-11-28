@@ -69,6 +69,8 @@ struct Session {
     dem: String,
     z_scale: f64,
     half_relief: Option<f64>,
+    python: String,
+    python_path: Option<String>,
 }
 
 type ReadyReply = (u64, Result<Option<[f64; 2]>, String>);
@@ -153,7 +155,7 @@ impl RenderState {
     /// and hand the body to the runtime), never on the UI thread.
     pub fn render(
         &self,
-        python: &str,
+        engine: &crate::forge3d::EngineStatus,
         dem: &str,
         payload: &mut serde_json::Value,
         timeout: Duration,
@@ -168,7 +170,7 @@ impl RenderState {
             .and_then(|value| value.as_f64())
             .unwrap_or(1.0)
             .clamp(0.1, 50.0);
-        self.ensure_session(python, dem, z_scale)?;
+        self.ensure_session(engine, dem, z_scale)?;
         let generation = self.generation.load(Ordering::SeqCst);
 
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -266,11 +268,20 @@ impl RenderState {
         push_log(&self.shared, "renderer stopped".to_owned());
     }
 
-    fn ensure_session(&self, python: &str, dem: &str, z_scale: f64) -> Result<(), String> {
+    fn ensure_session(
+        &self,
+        engine: &crate::forge3d::EngineStatus,
+        dem: &str,
+        z_scale: f64,
+    ) -> Result<(), String> {
         {
             let guard = self.session.lock().map_err(lock_error)?;
             if let Some(session) = guard.as_ref() {
-                if session.dem == dem && session.z_scale == z_scale {
+                if session.dem == dem
+                    && session.z_scale == z_scale
+                    && session.python == engine.python
+                    && session.python_path == engine.python_path
+                {
                     return Ok(());
                 }
             }
@@ -293,14 +304,17 @@ impl RenderState {
             .map_err(|error| format!("could not write {}: {error}", cog_script.display()))?;
 
         push_log(&self.shared, format!("starting renderer for {dem}"));
-        let mut child = Command::new(python)
+        let mut command = Command::new(&engine.python);
+        command
             .arg("-u")
             .arg(&script)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        crate::forge3d::configure_python_command(&mut command, engine.python_path.as_deref());
+        let mut child = command
             .spawn()
-            .map_err(|error| format!("could not start {python}: {error}"))?;
+            .map_err(|error| format!("could not start {}: {error}", engine.python))?;
 
         let mut stdin = child
             .stdin
@@ -327,6 +341,8 @@ impl RenderState {
                 half_relief: None,
                 dem: dem.to_owned(),
                 z_scale,
+                python: engine.python.clone(),
+                python_path: engine.python_path.clone(),
             });
         }
 
@@ -340,7 +356,14 @@ impl RenderState {
         loop {
             if let Some((tag, result)) = ready.take() {
                 if tag == generation {
-                    let range = result?;
+                    let range = match result {
+                        Ok(range) => range,
+                        Err(error) => {
+                            drop(ready);
+                            self.stop();
+                            return Err(error);
+                        }
+                    };
                     drop(ready);
                     let mut guard = self.session.lock().map_err(lock_error)?;
                     let session = guard
@@ -901,6 +924,14 @@ impl RenderRequest {
 mod tests {
     use super::*;
 
+    fn engine(python: &std::path::Path) -> crate::forge3d::EngineStatus {
+        crate::forge3d::engine_status_from_probe(
+            python.to_str().expect("utf-8 python path"),
+            None,
+            &serde_json::json!({"ok": true, "detail": "test engine"}),
+        )
+    }
+
     fn request() -> RenderRequest {
         RenderRequest {
             width: 960,
@@ -1280,7 +1311,7 @@ mod tests {
         });
         let frame = state
             .render(
-                python.to_str().expect("utf-8 python path"),
+                &engine(&python),
                 dem.to_str().expect("utf-8 dem path"),
                 &mut payload,
                 FRAME_TIMEOUT,
@@ -1325,7 +1356,7 @@ mod tests {
             });
             state
                 .render(
-                    python.to_str().expect("utf-8 python path"),
+                    &engine(&python),
                     dem.to_str().expect("utf-8 dem path"),
                     &mut payload,
                     FRAME_TIMEOUT,
@@ -1408,7 +1439,7 @@ mod tests {
             });
             state
                 .render(
-                    python.to_str().expect("utf-8 python path"),
+                    &engine(&python),
                     dem.to_str().expect("utf-8 dem path"),
                     &mut payload,
                     FRAME_TIMEOUT,
@@ -1463,7 +1494,7 @@ mod tests {
             });
             state
                 .render(
-                    python.to_str().expect("utf-8 python path"),
+                    &engine(&python),
                     dem.to_str().expect("utf-8 dem path"),
                     &mut payload,
                     FRAME_TIMEOUT,
@@ -1537,7 +1568,7 @@ mod tests {
             });
             state
                 .render(
-                    python.to_str().expect("utf-8 python path"),
+                    &engine(&python),
                     dem.to_str().expect("utf-8 dem path"),
                     &mut payload,
                     FRAME_TIMEOUT,

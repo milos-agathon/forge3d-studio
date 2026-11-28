@@ -246,9 +246,13 @@ project zScale (render session keyed on (dem, zScale), heights multiplied
 at construction), so the relief recipes are real in the Rendered path too.
 
 **Phase 18 — the stranger-installable deb, with honest engine discovery.**
-The deb never requires the engine at install time: the postinst names the
-remedy (`pip install --user forge3d`, or set `FORGE3D_STUDIO_PYTHON`) — no
-pip, no sudo, nothing engine-side bundled. The shell validates each
+The deb never requires the engine at install time: the postinst names a venv
+install (`python3 -m venv "$HOME/forge3d-studio-venv"`, install `forge3d`
+plus `rasterio`/`pillow` with that venv's Python, then export
+`FORGE3D_STUDIO_PYTHON`) because Debian 12's system Python is externally
+managed — no pip, no sudo, nothing engine-side bundled. For desktop-menu
+launches the variable must also be set in the desktop session; the postinst
+cannot export it into the caller's shell. The shell validates each
 interpreter candidate by importing forge3d, in a fixed order:
 `FORGE3D_STUDIO_PYTHON` → ancestors' `.venv` → `PATH python3` → `PATH python`.
 `forge3d-studio-shell --engine-check` prints every candidate tried, one
